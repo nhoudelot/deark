@@ -2,28 +2,28 @@
 // Copyright (C) 2017 Jason Summers
 // See the file COPYING for terms of use.
 
-// MP3 audio
+// MP3 audio and friends
 
 #include <deark-config.h>
 #include <deark-private.h>
-DE_DECLARE_MODULE(de_module_mp3);
+DE_DECLARE_MODULE(de_module_mpegaudio);
 
 // **************************************************************************
 // ID3v2
 // **************************************************************************
 
 #define CODE_APIC 0x41504943U
-#define CODE_COM  0x434f4d00U
+#define CODE_COM  0x434f4dU
 #define CODE_COMM 0x434f4d4dU
-#define CODE_GEO  0x47454f00U
+#define CODE_GEO  0x47454fU
 #define CODE_GEOB 0x47454f42U
-#define CODE_PIC  0x50494300U
-#define CODE_POP  0x504f5000U
+#define CODE_PIC  0x504943U
+#define CODE_POP  0x504f50U
 #define CODE_POPM 0x504f504dU
 #define CODE_PRIV 0x50524956U
-#define CODE_TXX  0x54585800U
+#define CODE_TXX  0x545858U
 #define CODE_TXXX 0x54585858U
-#define CODE_WXX  0x57585800U
+#define CODE_WXX  0x575858U
 #define CODE_WXXX 0x57585858U
 
 #define ID3ENC_ISO_8859_1 0
@@ -64,13 +64,6 @@ typedef struct id3v2ctx_struct {
 
 	const char *approx_mark;
 } id3v2ctx;
-
-static de_int64 get_ui24be(dbuf *f, de_int64 pos)
-{
-	de_byte buf[3];
-	dbuf_read(f, buf, pos, 3);
-	return (buf[0]<<16)|(buf[1]<<8)|(buf[2]);
-}
 
 static de_int64 get_synchsafe_int(dbuf *f, de_int64 pos)
 {
@@ -813,45 +806,45 @@ static const char *get_id3v2_frame_name(id3v2ctx *d, de_uint32 id)
 	};
 	static const struct frame_list_entry frame_list[] = {
 		// This is a partial list, of some of the common frame types.
-		{0x54414c00U, 0x54414c42U, "Album/Movie/Show title"},
-		{CODE_PIC,    CODE_APIC,   "Attached picture"},
-		{0x54503200U, 0x54504532U, "Band/orchestra/accompaniment"},
-		{0x54425000U, 0x5442504dU, "Beats per minute"},
-		{CODE_COM,    CODE_COMM,   "Comments"},
-		{0x57434d00U, 0x57434f4dU, "Commercial information"},
-		{0x54434d00U, 0x54434f4dU, "Composer"},
-		{0x54503300U, 0x54504533U, "Conductor"},
-		{0x54434f00U, 0x54434f4eU, "Content type"},
-		{0x54435200U, 0x54434f50U, "Copyright message"},
-		{0x54444100U, 0x54444154U, "Date"},
-		{0x54454e00U, 0x54454e43U, "Encoded by"},
-		{CODE_GEO,    CODE_GEOB,   "General encapsulated object"},
-		{0x544b4500U, 0x544b4559U, "Initial key"},
-		{0x544c4100U, 0x544c414eU, "Language"},
-		{0x54503100U, 0,           "Lead artist/Performing group"},
-		{0,           0x54504531U, "Lead performer"},
-		{0x544c4500U, 0x544c454eU, "Length"},
-		{0x54585400U, 0x54455854U, "Lyricist"},
-		{0x4d434900U, 0x4d434449U, "Music CD identifier"},
-		{0x57415200U, 0x574f4152U, "Official artist/performer webpage"},
-		{0x57414600U, 0x574f4146U, "Official audio file webpage"},
-		{0x57415300U, 0x574f4153U, "Official audio source webpage"},
-		{0x544f5400U, 0x544f414cU, "Original album/movie/show title"},
-		{0x544f4100U, 0x544f5045U, "Original artist/performer"},
-		{0x544f4c00U, 0x544f4c59U, "Original lyricist"},
-		{CODE_POP,    CODE_POPM,   "Popularimeter"},
-		{0,           CODE_PRIV,   "Private frame"},
-		{0x54504200U, 0x54505542U, "Publisher"},
-		{0,           0x54445243U, "Recording time"},
-		{0x52564100U, 0x52564144U, "Relative volume adjustment"},
-		{0x54535300U, 0x54535345U, "Software/Hardware and settings used for encoding"},
-		{0x54494d00U, 0x54494d45U, "Time"},
-		{0x54543200U, 0x54495432U, "Title"},
-		{0x54524b00U, 0x5452434bU, "Track number"},
-		{0x554c5400U, 0x55534c54U, "Unsychronized lyric transcription"},
-		{CODE_TXX,    CODE_TXXX,   "User defined text information"},
-		{CODE_WXX,    CODE_WXXX,   "User defined URL link"},
-		{0x54594500U, 0x54594552U, "Year"}
+		{0x54414cU, 0x54414c42U, "Album/Movie/Show title"},
+		{CODE_PIC,  CODE_APIC,   "Attached picture"},
+		{0x545032U, 0x54504532U, "Band/orchestra/accompaniment"},
+		{0x544250U, 0x5442504dU, "Beats per minute"},
+		{CODE_COM,  CODE_COMM,   "Comments"},
+		{0x57434dU, 0x57434f4dU, "Commercial information"},
+		{0x54434dU, 0x54434f4dU, "Composer"},
+		{0x545033U, 0x54504533U, "Conductor"},
+		{0x54434fU, 0x54434f4eU, "Content type"},
+		{0x544352U, 0x54434f50U, "Copyright message"},
+		{0x544441U, 0x54444154U, "Date"},
+		{0x54454eU, 0x54454e43U, "Encoded by"},
+		{CODE_GEO,  CODE_GEOB,   "General encapsulated object"},
+		{0x544b45U, 0x544b4559U, "Initial key"},
+		{0x544c41U, 0x544c414eU, "Language"},
+		{0x545031U, 0,           "Lead artist/Performing group"},
+		{0,         0x54504531U, "Lead performer"},
+		{0x544c45U, 0x544c454eU, "Length"},
+		{0x545854U, 0x54455854U, "Lyricist"},
+		{0x4d4349U, 0x4d434449U, "Music CD identifier"},
+		{0x574152U, 0x574f4152U, "Official artist/performer webpage"},
+		{0x574146U, 0x574f4146U, "Official audio file webpage"},
+		{0x574153U, 0x574f4153U, "Official audio source webpage"},
+		{0x544f54U, 0x544f414cU, "Original album/movie/show title"},
+		{0x544f41U, 0x544f5045U, "Original artist/performer"},
+		{0x544f4cU, 0x544f4c59U, "Original lyricist"},
+		{CODE_POP,  CODE_POPM,   "Popularimeter"},
+		{0,         CODE_PRIV,   "Private frame"},
+		{0x545042U, 0x54505542U, "Publisher"},
+		{0,         0x54445243U, "Recording time"},
+		{0x525641U, 0x52564144U, "Relative volume adjustment"},
+		{0x545353U, 0x54535345U, "Software/Hardware and settings used for encoding"},
+		{0x54494dU, 0x54494d45U, "Time"},
+		{0x545432U, 0x54495432U, "Title"},
+		{0x54524bU, 0x5452434bU, "Track number"},
+		{0x554c54U, 0x55534c54U, "Unsychronized lyric transcription"},
+		{CODE_TXX,  CODE_TXXX,   "User defined text information"},
+		{CODE_WXX,  CODE_WXXX,   "User defined URL link"},
+		{0x545945U, 0x54594552U, "Year"}
 	};
 	size_t k;
 
@@ -911,23 +904,19 @@ static void do_id3v2_frames(deark *c, id3v2ctx *d,
 
 		if(d->version_code<=2) {
 			// Version 2.2.x uses a "THREECC".
-			dbuf_read(f, tag4cc.bytes, pos, 3);
-			tag4cc.id = (tag4cc.bytes[0]<<24)|(tag4cc.bytes[1]<<16)|(tag4cc.bytes[2]<<8);
-			de_bytes_to_printable_sz(tag4cc.bytes, 3,
-				tag4cc.id_printable, sizeof(tag4cc.id_printable),
-				0, DE_ENCODING_ASCII);
+			dbuf_read_fourcc(f, pos, &tag4cc, 3, 0x0);
 			pos += 3;
 		}
 		else {
-			dbuf_read_fourcc(f, pos, &tag4cc, 0);
+			dbuf_read_fourcc(f, pos, &tag4cc, 4, 0x0);
 			pos += 4;
 		}
 
-		de_dbg(c, "tag: '%s' (%s)", tag4cc.id_printable,
+		de_dbg(c, "tag: '%s' (%s)", tag4cc.id_dbgstr,
 			get_id3v2_frame_name(d, tag4cc.id));
 
 		if(d->version_code<=2) {
-			frame_dlen = get_ui24be(f, pos);
+			frame_dlen = dbuf_getint_ext(f, pos, 3, 0, 0); // read 24-bit BE uint
 			pos += 3;
 		}
 		else if(d->version_code==3) {
@@ -1057,6 +1046,7 @@ typedef struct mp3ctx_struct {
 	unsigned int mode_extension;
 	unsigned int copyright_flag, orig_media_flag;
 	unsigned int emphasis;
+	int frame_count;
 } mp3ctx;
 
 static const char *get_id3v1_genre_name(de_byte g)
@@ -1378,6 +1368,81 @@ static const char *get_mp3_channel_mode_name(unsigned int n)
 	return name;
 }
 
+// Returns a copy of the buf ptr
+static char *get_bitrate_name(char *buf, size_t buflen,
+	unsigned int bitrate_idx, unsigned int version_id, unsigned int layer_desc)
+{
+	static const de_uint16 tbl[5][16] = {
+		{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0},
+		{0, 32, 48, 56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 384, 0},
+		{0, 32, 40, 48,  56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 0},
+		{0, 32, 48, 56,  64,  80,  96, 112, 128, 144, 160, 176, 192, 224, 256, 0},
+		{0,  8, 16, 24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, 0}};
+	unsigned int tbl_to_use = 0;
+	unsigned int br = 0;
+
+	if(version_id==0x03) { // v1
+		if(layer_desc==0x03) tbl_to_use=0; // Layer 1
+		else if(layer_desc==0x02) tbl_to_use=1; // Layer 2
+		else if(layer_desc==0x01) tbl_to_use=2; // Layer 3
+		else goto done;
+	}
+	else if(version_id==0x02 || version_id==0x00) { // v2, v2.5
+		if(layer_desc==0x03) tbl_to_use=3; // Layer 1
+		else if(layer_desc==0x02 || layer_desc==0x01) tbl_to_use=4; // Layer 2,3
+		else goto done;
+	}
+	else {
+		goto done;
+	}
+
+	if(bitrate_idx>15) goto done;
+	br = (unsigned int)tbl[tbl_to_use][bitrate_idx];
+
+done:
+	if(br>0)
+		de_snprintf(buf, buflen, "%u kbps", br);
+	else
+		de_strlcpy(buf, "?", buflen);
+	return buf;
+}
+
+static char *get_sampling_rate_name(char *buf, size_t buflen,
+	unsigned int sr_idx, unsigned int version_id, unsigned int layer_desc)
+{
+	static const de_uint32 tbl[3][4] = {
+		{44100, 48000, 32000, 0},
+		{22050, 24000, 16000, 0},
+		{11025, 12000,  8000, 0}};
+	unsigned int tbl_to_use = 0;
+	unsigned int sr = 0;
+
+	if(layer_desc<1 || layer_desc>3) goto done;
+
+	if(version_id==0x03) { // v1
+		tbl_to_use = 0;
+	}
+	else if(version_id==0x02) { // v2
+		tbl_to_use = 1;
+	}
+	else if(version_id==0x00) { // v2.5
+		tbl_to_use = 2;
+	}
+	else {
+		goto done;
+	}
+
+	if(sr_idx>3) goto done;
+	sr = (unsigned int)tbl[tbl_to_use][sr_idx];
+
+done:
+	if(sr>0)
+		de_snprintf(buf, buflen, "%u Hz", sr);
+	else
+		de_strlcpy(buf, "?", buflen);
+	return buf;
+}
+
 static int find_mp3_frame_header(deark *c, mp3ctx *d, de_int64 pos1, de_int64 nbytes_avail,
 	de_int64 *skip_this_many_bytes)
 {
@@ -1411,22 +1476,24 @@ static void do_mp3_frame(deark *c, mp3ctx *d, de_int64 pos1, de_int64 len)
 	de_uint32 x;
 	de_int64 pos = pos1;
 	int saved_indent_level;
+	char buf[32];
 
 	de_dbg_indent_save(c, &saved_indent_level);
 	x = (de_uint32)de_getui32be(pos);
 	if((x & 0xffe00000U) != 0xffe00000U) {
 		int ret;
 		de_int64 num_bytes_to_skip = 0;
-		de_msg(c, "Note: MP3 frame header not found at %"INT64_FMT". Scanning for frame header.", pos);
+		de_msg(c, "Note: MP3/MPA frame header not found at %"INT64_FMT". Scanning for frame header.", pos);
 		ret = find_mp3_frame_header(c, d, pos1, len, &num_bytes_to_skip);
 		if(!ret) {
-			de_err(c, "MP3 frame header not found");
+			de_err(c, "MP3/MPA frame header not found");
 			goto done;
 		}
 		pos += num_bytes_to_skip;
 		de_msg(c, "Note: Possible MP3 frame header found at %"INT64_FMT".", pos);
 		x = (de_uint32)de_getui32be(pos);
 	}
+
 	de_dbg(c, "frame at %"INT64_FMT, pos);
 	de_dbg_indent(c, 1);
 	de_dbg(c, "frame header: 0x%08x", (unsigned int)x);
@@ -1435,12 +1502,25 @@ static void do_mp3_frame(deark *c, mp3ctx *d, de_int64 pos1, de_int64 len)
 	de_dbg(c, "audio version id: %u (%s)", d->version_id, get_mp3_ver_id_name(d->version_id));
 	d->layer_desc = (x&0x00060000U)>>17;
 	de_dbg(c, "layer description: %u (%s)", d->layer_desc, get_mp3_layer_desc_name(d->layer_desc));
+	if(d->frame_count==0) {
+		if(d->layer_desc==1) {
+			de_declare_fmt(c, "MP3");
+		}
+		else if(d->layer_desc==2) {
+			de_declare_fmt(c, "MP2 audio");
+		}
+		else if(d->layer_desc==3) {
+			de_declare_fmt(c, "MP1 audio");
+		}
+	}
 	d->has_crc = (x&0x00010000U)>>16;
 	de_dbg(c, "has crc: %u", d->has_crc);
 	d->bitrate_idx =  (x&0x0000f000U)>>12;
-	de_dbg(c, "bitrate id: %u", d->bitrate_idx); // TODO: Decode this
+	de_dbg(c, "bitrate id: %u (%s)", d->bitrate_idx,
+		get_bitrate_name(buf, sizeof(buf), d->bitrate_idx, d->version_id, d->layer_desc));
 	d->samprate_idx = (x&0x00000c00U)>>10;
-	de_dbg(c, "sampling rate frequency id: %u", d->samprate_idx); // TODO: Decode this
+	de_dbg(c, "sampling rate frequency id: %u (%s)", d->samprate_idx,
+		get_sampling_rate_name(buf, sizeof(buf), d->samprate_idx, d->version_id, d->layer_desc));
 	d->has_padding =  (x&0x00000200U)>>9;
 	de_dbg(c, "has padding: %u", d->has_padding);
 	d->channel_mode = (x&0x000000c0U)>>6;
@@ -1456,6 +1536,7 @@ static void do_mp3_frame(deark *c, mp3ctx *d, de_int64 pos1, de_int64 len)
 	d->emphasis = (x&0x00000003U);
 	de_dbg(c, "emphasis: %u", d->emphasis);
 	pos += 4;
+	d->frame_count++;
 
 done:
 	de_dbg_indent_restore(c, saved_indent_level);
@@ -1464,7 +1545,7 @@ done:
 static void do_mp3_data(deark *c, mp3ctx *d, de_int64 pos1, de_int64 len)
 {
 
-	de_dbg(c, "MP3 data at %"INT64_FMT", len=%"INT64_FMT, pos1, len);
+	de_dbg(c, "MP3/MPA data at %"INT64_FMT", len=%"INT64_FMT, pos1, len);
 	de_dbg_indent(c, 1);
 	do_mp3_frame(c, d, pos1, len);
 	// TODO: There are probably many frames. Should we look for more frames
@@ -1472,7 +1553,7 @@ static void do_mp3_data(deark *c, mp3ctx *d, de_int64 pos1, de_int64 len)
 	de_dbg_indent(c, -1);
 }
 
-static void de_run_mp3(deark *c, de_module_params *mparams)
+static void de_run_mpegaudio(deark *c, de_module_params *mparams)
 {
 	mp3ctx *d = NULL;
 	de_int64 id3v1pos;
@@ -1485,13 +1566,13 @@ static void de_run_mp3(deark *c, de_module_params *mparams)
 	pos = 0;
 	endpos = c->infile->len;
 
-	if(mparams && mparams->codes) {
-		if(de_strchr(mparams->codes, 'I')) { // raw ID3v2
+	if(mparams && mparams->in_params.codes) {
+		if(de_strchr(mparams->in_params.codes, 'I')) { // raw ID3v2
 			de_int64 bytes_consumed_id3v2 = 0;
 			do_id3v2(c, c->infile, 0, c->infile->len, &bytes_consumed_id3v2);
 			goto done;
 		}
-		if(de_strchr(mparams->codes, 'P')) { // Windows WM/Picture
+		if(de_strchr(mparams->in_params.codes, 'P')) { // Windows WM/Picture
 			do_wmpicture(c, c->infile, 0, c->infile->len);
 			goto done;
 		}
@@ -1535,37 +1616,65 @@ done:
 	de_free(c, d);
 }
 
-static int de_identify_mp3(deark *c)
+static int de_identify_mpegaudio(deark *c)
 {
 	de_byte b[4];
-	int has_ext;
 	unsigned int x;
+	unsigned int ver_id, lyr_id;
+	int has_mp1_ext = 0;
+	int has_mp2_ext = 0;
+	int has_mp3_ext = 0;
+	int has_any_ext;
 
-	has_ext = de_input_file_has_ext(c, "mp3");
+	if(de_input_file_has_ext(c, "mp3")) {
+		has_mp3_ext = 1;
+	}
+	if(de_input_file_has_ext(c, "mp2")) {
+		has_mp2_ext = 1;
+	}
+	if(de_input_file_has_ext(c, "mp1")) {
+		has_mp1_ext = 1;
+	}
+	else if(de_input_file_has_ext(c, "mpa")) {
+		has_mp1_ext = 1;
+		has_mp2_ext = 1;
+		has_mp3_ext = 1;
+	}
+	has_any_ext = has_mp3_ext || has_mp2_ext || has_mp1_ext;
 
 	de_read(b, 0, 4);
 	if(!de_memcmp(b, "ID3", 3)) {
-		if(has_ext) return 100;
+		if(has_any_ext) return 100;
 		else return 85;
 	}
 
 	// TODO: We could try harder to identify MP3.
-	if(!has_ext) return 0;
+	if(!has_any_ext) return 0;
 
 	x = (unsigned int)de_getui16be_direct(b);
-	if(((x&0xfffe) == 0xfffa) ||
-		((x&0xfffe) == 0xfff2) ||
-		((x&0xfffe) == 0xffe2))
-	{
-		return 100;
+	if((x&0xffe0) != 0xffe0) return 0;
+
+	ver_id = (x&0x0018)>>3;
+	lyr_id = (x&0x0006)>>1;
+
+	if(has_mp3_ext) {
+		if((lyr_id==1) && (ver_id!=1)) return 100;
 	}
+	if(has_mp2_ext) {
+		if((lyr_id==2) && (ver_id==2 || ver_id==3)) return 100;
+	}
+	if(has_mp1_ext) {
+		if((lyr_id==3) && (ver_id==2 || ver_id==3)) return 100;
+	}
+
 	return 0;
 }
 
-void de_module_mp3(deark *c, struct deark_module_info *mi)
+void de_module_mpegaudio(deark *c, struct deark_module_info *mi)
 {
-	mi->id = "mp3";
-	mi->desc = "MP3 audio";
-	mi->run_fn = de_run_mp3;
-	mi->identify_fn = de_identify_mp3;
+	mi->id = "mpegaudio";
+	mi->id_alias[0] = "mp3";
+	mi->desc = "MP3 / MPEG audio";
+	mi->run_fn = de_run_mpegaudio;
+	mi->identify_fn = de_identify_mpegaudio;
 }

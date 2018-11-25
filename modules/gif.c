@@ -6,6 +6,7 @@
 
 #include <deark-config.h>
 #include <deark-private.h>
+#include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_gif);
 
 #define DISPOSE_LEAVE     1
@@ -22,6 +23,7 @@ typedef struct localctx_struct {
 	int compose;
 	int bad_screen_flag;
 	int dump_screen;
+	int dump_plaintext_ext;
 
 	de_int64 screen_w, screen_h;
 	int has_global_color_table;
@@ -306,10 +308,25 @@ done:
 
 ////////////////////////////////////////////////////////
 
+static int do_read_header(deark *c, lctx *d, de_int64 pos)
+{
+	de_ucstring *ver = NULL;
+
+	de_dbg(c, "header at %d", (int)pos);
+	de_dbg_indent(c, 1);
+	ver = ucstring_create(c);
+	dbuf_read_to_ucstring(c->infile, pos+3, 3, ver, 0, DE_ENCODING_ASCII);
+	de_dbg(c, "version: \"%s\"", ucstring_getpsz(ver));
+	de_dbg_indent(c, -1);
+	ucstring_destroy(ver);
+	return 1;
+}
+
 static int do_read_screen_descriptor(deark *c, lctx *d, de_int64 pos)
 {
 	de_int64 bgcol_index;
 	de_byte packed_fields;
+	unsigned int n;
 	unsigned int global_color_table_size_code;
 
 	de_dbg(c, "screen descriptor at %d", (int)pos);
@@ -320,13 +337,28 @@ static int do_read_screen_descriptor(deark *c, lctx *d, de_int64 pos)
 	de_dbg(c, "screen dimensions: %d"DE_CHAR_TIMES"%d", (int)d->screen_w, (int)d->screen_h);
 
 	packed_fields = de_getbyte(pos+4);
+	de_dbg(c, "packed fields: 0x%02x", (unsigned int)packed_fields);
+	de_dbg_indent(c, 1);
 	d->has_global_color_table = (packed_fields&0x80)?1:0;
 	de_dbg(c, "global color table flag: %d", d->has_global_color_table);
+
+	n = (packed_fields&0x70)>>4;
+	de_dbg(c, "color resolution: %u (%u bit%s)", n, n+1U, n?"s":"");
+
+	if(d->has_global_color_table) {
+		unsigned int sf;
+		sf = (packed_fields&0x08)?1:0;
+		de_dbg(c, "global color table sorted: %u", sf);
+	}
+
 	if(d->has_global_color_table) {
 		global_color_table_size_code = (unsigned int)(packed_fields&0x07);
 		d->global_color_table_size = (de_int64)(1<<(global_color_table_size_code+1));
-		de_dbg(c, "global color table size: %d colors", (int)d->global_color_table_size);
+		de_dbg(c, "global color table size: %u (%d colors)",
+			global_color_table_size_code, (int)d->global_color_table_size);
 	}
+
+	de_dbg_indent(c, -1);
 
 	// We don't care about the background color, because we always assume the
 	// background is transparent.
@@ -350,7 +382,6 @@ static void do_read_color_table(deark *c, lctx *d, de_int64 pos, de_int64 ncolor
 
 static int do_read_global_color_table(deark *c, lctx *d, de_int64 pos, de_int64 *bytesused)
 {
-
 	if(!d->has_global_color_table) return 1;
 	de_dbg(c, "global color table at %d", (int)pos);
 
@@ -376,6 +407,32 @@ static void do_skip_subblocks(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesu
 	}
 	*bytesused = pos - pos1;
 	return;
+}
+
+static void do_copy_subblocks_to_dbuf(deark *c, lctx *d, dbuf *outf,
+	de_int64 pos1, int has_max, de_int64 maxlen)
+{
+	de_int64 pos = pos1;
+	de_int64 nbytes_copied = 0;
+
+	while(1) {
+		de_int64 n;
+		de_int64 nbytes_to_copy;
+
+		if(pos >= c->infile->len) break;
+		if(has_max && (nbytes_copied >= maxlen)) break;
+		n = (de_int64)de_getbyte_p(&pos);
+		if(n==0) break;
+		nbytes_to_copy = n;
+		if(has_max) {
+			if(nbytes_copied + nbytes_to_copy > maxlen) {
+				nbytes_to_copy = maxlen - nbytes_copied;
+			}
+		}
+		dbuf_copy(c->infile, pos, nbytes_to_copy, outf);
+		nbytes_copied += nbytes_to_copy;
+		pos += n;
+	}
 }
 
 static void discard_current_gce_data(deark *c, lctx *d)
@@ -407,6 +464,8 @@ static void do_graphic_control_extension(deark *c, lctx *d, de_int64 pos)
 	d->gce = de_malloc(c, sizeof(struct gceinfo));
 
 	packed_fields = de_getbyte(pos+1);
+	de_dbg(c, "packed fields: 0x%02x", (unsigned int)packed_fields);
+	de_dbg_indent(c, 1);
 	d->gce->trns_color_idx_valid = packed_fields&0x01;
 	de_dbg(c, "has transparency: %d", (int)d->gce->trns_color_idx_valid);
 
@@ -422,10 +481,11 @@ static void do_graphic_control_extension(deark *c, lctx *d, de_int64 pos)
 	default: name="?";
 	}
 	de_dbg(c, "disposal method: %d (%s)", (int)d->gce->disposal_method, name);
+	de_dbg_indent(c, -1);
 
 	delay_time_raw = de_getui16le(pos+2);
 	delay_time = ((double)delay_time_raw)/100.0;
-	de_dbg(c, "delay time: %.02f sec", delay_time);
+	de_dbg(c, "delay time: %d (%.02f sec)", (int)delay_time_raw, delay_time);
 
 	if(d->gce->trns_color_idx_valid) {
 		d->gce->trns_color_idx = de_getbyte(pos+4);
@@ -469,6 +529,69 @@ static void do_comment_extension(deark *c, lctx *d, de_int64 pos)
 	dbuf_close(f);
 }
 
+static void decode_text_color(deark *c, lctx *d, const char *name, de_byte clr_idx,
+	de_uint32 *pclr)
+{
+	de_uint32 clr;
+	const char *alphastr;
+	char csamp[32];
+
+	clr = d->global_ct[(unsigned int)clr_idx];
+	*pclr = clr;
+
+	if(d->gce && d->gce->trns_color_idx_valid && d->gce->trns_color_idx==clr_idx) {
+		alphastr = ",A=0";
+		*pclr = DE_SET_ALPHA(*pclr, 0);
+	}
+	else {
+		alphastr = "";
+	}
+	de_get_colorsample_code(c, clr, csamp, sizeof(csamp));
+	de_dbg(c, "%s color: idx=%3u (%3u,%3u,%3u%s)%s", name,
+		(unsigned int)clr_idx, (unsigned int)DE_COLOR_R(clr),
+		(unsigned int)DE_COLOR_G(clr), (unsigned int)DE_COLOR_B(clr),
+		alphastr, csamp);
+}
+
+static void render_plaintext_char(deark *c, lctx *d, de_byte ch,
+	de_int64 pos_x, de_int64 pos_y, de_int64 size_x, de_int64 size_y,
+	de_uint32 fgclr, de_uint32 bgclr)
+{
+	de_int64 i, j;
+	const de_byte *fontdata;
+	const de_byte *chardata;
+
+	fontdata = de_get_8x8ascii_font_ptr();
+
+	if(ch<32 || ch>127) ch=32;
+	chardata = &fontdata[8 * ((unsigned int)ch - 32)];
+
+	for(j=0; j<size_y; j++) {
+		for(i=0; i<size_x; i++) {
+			unsigned int x2, y2;
+			int isbg;
+			de_uint32 clr;
+
+			// TODO: Better character-rendering facilities.
+			// de_font_paint_character_idx() doesn't quite do what we need.
+
+			x2 = (unsigned int)(0.5+(((double)i)*(8.0/(double)size_x)));
+			y2 = (unsigned int)(0.5+(((double)j)*(8.0/(double)size_y)));
+
+			if(x2<8 && y2<8 && (chardata[y2]&(1<<(7-x2)))) {
+				isbg = 0;
+			}
+			else {
+				isbg = 1;
+			}
+			clr = isbg ? bgclr : fgclr;
+			if(DE_COLOR_A(clr)>0) {
+				de_bitmap_setpixel_rgb(d->screen_img, pos_x+i, pos_y+j, clr);
+			}
+		}
+	}
+}
+
 static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 {
 	dbuf *f = NULL;
@@ -476,23 +599,41 @@ static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 	de_int64 text_pos_x, text_pos_y; // In pixels
 	de_int64 text_size_x, text_size_y; // In pixels
 	de_int64 text_width_in_chars;
-	de_int64 char_width;
+	de_int64 char_width, char_height;
 	de_int64 char_count;
 	de_int64 k;
+	de_uint32 fgclr, bgclr;
+	de_byte fgclr_idx, bgclr_idx;
 	de_byte b;
+	unsigned char disposal_method = 0;
+	int ok_to_render = 1;
+	de_bitmap *prev_img = NULL;
 
 	// The first sub-block is the header
 	n = (de_int64)de_getbyte(pos++);
 	if(n<12) goto done;
+
+	if(d->gce) {
+		disposal_method = d->gce->disposal_method;
+	}
+
+	if(!d->compose) {
+		ok_to_render = 0;
+	}
 
 	text_pos_x = de_getui16le(pos);
 	text_pos_y = de_getui16le(pos+2);
 	text_size_x = de_getui16le(pos+4);
 	text_size_y = de_getui16le(pos+6);
 	char_width = (de_int64)de_getbyte(pos+8);
+	char_height = (de_int64)de_getbyte(pos+9);
 	de_dbg(c, "text-area pos: %d,%d pixels", (int)text_pos_x, (int)text_pos_y);
 	de_dbg(c, "text-area size: %d"DE_CHAR_TIMES"%d pixels", (int)text_size_x, (int)text_size_y);
-	de_dbg(c, "character width: %d pixels", (int)char_width);
+	de_dbg(c, "character size: %d"DE_CHAR_TIMES"%d pixels", (int)char_width, (int)char_height);
+
+	if(char_width<3 || char_height<3) {
+		ok_to_render = 0;
+	}
 
 	if(char_width>0) {
 		text_width_in_chars = text_size_x / char_width;
@@ -503,9 +644,29 @@ static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 	}
 	de_dbg(c, "calculated chars/line: %d", (int)text_width_in_chars);
 
+	fgclr_idx = de_getbyte(pos+10);
+	decode_text_color(c, d, "fg", fgclr_idx, &fgclr);
+	bgclr_idx = de_getbyte(pos+11);
+	decode_text_color(c, d, "bg", bgclr_idx, &bgclr);
+
 	pos += n;
 
-	f = dbuf_create_output_file(c, "plaintext.txt", NULL, 0);
+	if(d->dump_plaintext_ext) {
+		f = dbuf_create_output_file(c, "plaintext.txt", NULL, 0);
+	}
+
+	if(ok_to_render && (disposal_method==DISPOSE_PREVIOUS)) {
+		de_int64 tmpw, tmph;
+		// We need to save a copy of the pixels that may be overwritten.
+		tmpw = text_size_x;
+		if(tmpw>d->screen_w) tmpw = d->screen_w;
+		tmph = text_size_y;
+		if(tmph>d->screen_h) tmph = d->screen_h;
+		prev_img = de_bitmap_create(c, tmpw, tmph, 4);
+		de_bitmap_copy_rect(d->screen_img, prev_img,
+			text_pos_x, text_pos_y, text_size_x, text_size_y,
+			0, 0, 0);
+	}
 
 	char_count = 0;
 	while(1) {
@@ -515,30 +676,45 @@ static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 
 		for(k=0; k<n; k++) {
 			b = dbuf_getbyte(c->infile, pos+k);
-			dbuf_writebyte(f, b);
+			if(f) dbuf_writebyte(f, b);
+
+			if(ok_to_render) {
+				render_plaintext_char(c, d, b,
+					text_pos_x + (char_count%text_width_in_chars)*char_width,
+					text_pos_y + (char_count/text_width_in_chars)*char_height,
+					char_width, char_height, fgclr, bgclr);
+			}
+
 			char_count++;
+
 			// Insert newlines in appropriate places.
-			if(char_count%text_width_in_chars == 0) {
-				dbuf_writebyte(f, '\n');
+			if(f) {
+				if(char_count%text_width_in_chars == 0) {
+					dbuf_writebyte(f, '\n');
+				}
 			}
 		}
 		pos += n;
 	}
 
-	// We should try to handle disposal of a plain text extension, because this
-	// can affect the images that come after it.
-	// If the disposal method is restore-to-previous, we should do nothing,
-	// since we didn't do anything that we'd have to undo.
-	// We have no way to support leave-in-place at this time (maybe we should
-	// warn about this), and doing nothing is the best we can do.
-	// So, restore-to-background is the only time we'll to do something.
-	if(d->compose && d->gce && d->gce->disposal_method==DISPOSE_BKGD) {
-		de_bitmap_rect(d->screen_img, text_pos_x, text_pos_y, text_size_x, text_size_y,
-			DE_STOCKCOLOR_TRANSPARENT, 0);
+	if(d->compose) {
+		de_bitmap_write_to_file(d->screen_img, NULL, DE_CREATEFLAG_OPT_IMAGE);
+
+		// TODO: Too much code is duplicated with do_image().
+		if(disposal_method==DISPOSE_BKGD) {
+			de_bitmap_rect(d->screen_img, text_pos_x, text_pos_y, text_size_x, text_size_y,
+				DE_STOCKCOLOR_TRANSPARENT, 0);
+		}
+		else if(disposal_method==DISPOSE_PREVIOUS && prev_img) {
+			de_bitmap_copy_rect(prev_img, d->screen_img,
+				0, 0, text_size_x, text_size_y,
+				text_pos_x, text_pos_y, 0);
+		}
 	}
 
 done:
 	dbuf_close(f);
+	de_bitmap_destroy(prev_img);
 	discard_current_gce_data(c, d);
 }
 
@@ -582,6 +758,56 @@ static void do_xmp_extension(deark *c, lctx *d, de_int64 pos)
 	dbuf_create_file_from_slice(c->infile, pos, nbytes_payload, "xmp", NULL, DE_CREATEFLAG_IS_AUX);
 }
 
+static void do_iccprofile_extension(deark *c, lctx *d, de_int64 pos)
+{
+	dbuf *outf = NULL;
+
+	outf = dbuf_create_output_file(c, "icc", NULL, DE_CREATEFLAG_IS_AUX);
+	do_copy_subblocks_to_dbuf(c, d, outf, pos, 0, 0);
+	dbuf_close(outf);
+}
+
+static void do_imagemagick_extension(deark *c, lctx *d, de_int64 pos)
+{
+	de_int64 sub_block_len;
+	de_ucstring *s = NULL;
+
+	sub_block_len = (de_int64)de_getbyte_p(&pos);
+	if(sub_block_len<1) goto done;
+	s = ucstring_create(c);
+	dbuf_read_to_ucstring(c->infile, pos, sub_block_len, s, 0, DE_ENCODING_ASCII);
+	de_dbg(c, "ImageMagick extension data: \"%s\"", ucstring_getpsz_d(s));
+done:
+	ucstring_destroy(s);
+}
+
+static void do_mgk8bim_extension(deark *c, lctx *d, de_int64 pos)
+{
+	dbuf *tmpf = NULL;
+	tmpf = dbuf_create_membuf(c, 0, 0);
+	do_copy_subblocks_to_dbuf(c, d, tmpf, pos, 1, 4*1048576);
+	de_fmtutil_handle_photoshop_rsrc(c, tmpf, 0, tmpf->len);
+	dbuf_close(tmpf);
+}
+
+static void do_mgkiptc_extension(deark *c, lctx *d, de_int64 pos)
+{
+	dbuf *tmpf = NULL;
+	tmpf = dbuf_create_membuf(c, 0, 0);
+	do_copy_subblocks_to_dbuf(c, d, tmpf, pos, 1, 4*1048576);
+	de_fmtutil_handle_iptc(c, tmpf, 0, tmpf->len);
+	dbuf_close(tmpf);
+}
+
+static void do_unknown_extension(deark *c, lctx *d, de_int64 pos)
+{
+	dbuf *tmpf = NULL;
+	tmpf = dbuf_create_membuf(c, 0, 0);
+	do_copy_subblocks_to_dbuf(c, d, tmpf, pos, 1, 256);
+	de_dbg_hexdump(c, tmpf, 0, tmpf->len, 256, NULL, 0x1);
+	dbuf_close(tmpf);
+}
+
 static void do_application_extension(deark *c, lctx *d, de_int64 pos)
 {
 	de_ucstring *s = NULL;
@@ -606,6 +832,21 @@ static void do_application_extension(deark *c, lctx *d, de_int64 pos)
 	}
 	else if(!de_memcmp(app_id, "XMP DataXMP", 11)) {
 		do_xmp_extension(c, d, pos);
+	}
+	else if(!de_memcmp(app_id, "ICCRGBG1012", 11)) {
+		do_iccprofile_extension(c, d, pos);
+	}
+	else if(!de_memcmp(app_id, "ImageMagick", 11)) {
+		do_imagemagick_extension(c, d, pos);
+	}
+	else if(!de_memcmp(app_id, "MGK8BIM0000", 11)) {
+		do_mgk8bim_extension(c, d, pos);
+	}
+	else if(!de_memcmp(app_id, "MGKIPTC0000", 11)) {
+		do_mgkiptc_extension(c, d, pos);
+	}
+	else {
+		do_unknown_extension(c, d, pos);
 	}
 }
 
@@ -675,15 +916,27 @@ static void do_read_image_descriptor(deark *c, lctx *d, struct gif_image_data *g
 	de_dbg(c, "image dimensions: %d"DE_CHAR_TIMES"%d", (int)gi->width, (int)gi->height);
 
 	packed_fields = de_getbyte(pos+8);
+	de_dbg(c, "packed fields: 0x%02x", (unsigned int)packed_fields);
+	de_dbg_indent(c, 1);
 	gi->has_local_color_table = (packed_fields&0x80)?1:0;
 	de_dbg(c, "local color table flag: %d", (int)gi->has_local_color_table);
+
+	gi->interlaced = (packed_fields&0x40)?1:0;
+	de_dbg(c, "interlaced: %d", (int)gi->interlaced);
+
+	if(gi->has_local_color_table) {
+		unsigned int sf;
+		sf = (packed_fields&0x08)?1:0;
+		de_dbg(c, "local color table sorted: %u", sf);
+	}
+
 	if(gi->has_local_color_table) {
 		local_color_table_size_code = (unsigned int)(packed_fields&0x07);
 		gi->local_color_table_size = (de_int64)(1<<(local_color_table_size_code+1));
-		de_dbg(c, "local color table size: %d colors", (int)gi->local_color_table_size);
+		de_dbg(c, "local color table size: %u (%d colors)",
+			local_color_table_size_code, (int)gi->local_color_table_size);
 	}
-	gi->interlaced = (packed_fields&0x40)?1:0;
-	de_dbg(c, "interlaced: %d", (int)gi->interlaced);
+	de_dbg_indent(c, -1);
 
 	de_dbg_indent(c, -1);
 }
@@ -909,15 +1162,23 @@ static void de_run_gif(deark *c, de_module_params *mparams)
 
 	if(de_get_ext_option(c, "gif:raw")) {
 		d->compose = 0;
+		// TODO: It would be more consistent to extract an *image* of each
+		// plain text extension, but we don't support that, so extract them
+		// as text files instead.
+		d->dump_plaintext_ext = 1;
+	}
+	if(de_get_ext_option(c, "gif:dumpplaintext")) {
+		d->dump_plaintext_ext = 1;
 	}
 	if(de_get_ext_option(c, "gif:dumpscreen")) {
-		// This is a debugging feature, not intended to be documented.
-		// It lets us see what the screen looks like after the last
+		// This lets the user see what the screen looks like after the last
 		// "graphic rendering block" has been disposed of.
 		d->dump_screen = 1;
 	}
 
-	pos = 6;
+	pos = 0;
+	if(!do_read_header(c, d, pos)) goto done;
+	pos += 6;
 	if(!do_read_screen_descriptor(c, d, pos)) goto done;
 	pos += 7;
 	if(!do_read_global_color_table(c, d, pos, &bytesused)) goto done;
@@ -997,6 +1258,8 @@ static int de_identify_gif(deark *c)
 static void de_help_gif(deark *c)
 {
 	de_msg(c, "-opt gif:raw : Extract individual component images");
+	de_msg(c, "-opt gif:dumpplaintext : Also extract plain text extensions to text files");
+	de_msg(c, "-opt gif:dumpscreen : Also extact the final \"screen\" contents");
 }
 
 void de_module_gif(deark *c, struct deark_module_info *mi)

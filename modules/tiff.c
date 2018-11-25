@@ -48,6 +48,7 @@ DE_DECLARE_MODULE(de_module_tiff);
 #define IFDTYPE_EXIFINTEROP  3
 #define IFDTYPE_GPS          4
 #define IFDTYPE_GLOBALPARAMS 5 // TIFF-FX
+#define IFDTYPE_NIKONPREVIEW 6
 
 struct localctx_struct;
 typedef struct localctx_struct lctx;
@@ -126,6 +127,8 @@ struct localctx_struct {
 	int is_exif_submodule;
 	int host_is_le;
 	int can_decode_fltpt;
+	const char *errmsgprefix;
+
 	de_uint32 first_ifd_orientation; // Valid if != 0
 	de_uint32 exif_version_as_uint32; // Valid if != 0
 	de_byte has_exif_gps;
@@ -143,7 +146,50 @@ struct localctx_struct {
 	de_int64 ifditemsize;
 	de_int64 offsetoffset;
 	de_int64 offsetsize; // Number of bytes in a file offset
+
+	const struct de_module_in_params *in_params;
+
+	de_int64 mpf_min_file_size;
+	unsigned int mpf_main_image_count;
 };
+
+static void detiff_err(deark *c, lctx *d, const char *fmt, ...)
+	de_gnuc_attribute ((format (printf, 3, 4)));
+
+static void detiff_err(deark *c, lctx *d, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	if(d && d->errmsgprefix) {
+		char buf[256];
+		de_vsnprintf(buf, sizeof(buf), fmt, ap);
+		de_err(c, "%s%s", d->errmsgprefix, buf);
+	}
+	else {
+		de_verr(c, fmt, ap);
+	}
+	va_end(ap);
+}
+
+static void detiff_warn(deark *c, lctx *d, const char *fmt, ...)
+	de_gnuc_attribute ((format (printf, 3, 4)));
+
+static void detiff_warn(deark *c, lctx *d, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	if(d && d->errmsgprefix) {
+		char buf[256];
+		de_vsnprintf(buf, sizeof(buf), fmt, ap);
+		de_warn(c, "%s%s", d->errmsgprefix, buf);
+	}
+	else {
+		de_vwarn(c, fmt, ap);
+	}
+	va_end(ap);
+}
 
 // Returns 0 if stack is empty.
 static de_int64 pop_ifd(deark *c, lctx *d, int *ifdtype)
@@ -166,11 +212,11 @@ static void push_ifd(deark *c, lctx *d, de_int64 ifdpos, int ifdtype)
 		d->ifds_seen = de_inthashtable_create(c);
 	}
 	if(d->ifd_count >= MAX_IFDS) {
-		de_warn(c, "Too many TIFF IFDs");
+		detiff_warn(c, d, "Too many TIFF IFDs");
 		return;
 	}
-	if(!de_inthashtable_add_item(c, d->ifds_seen, ifdpos)) {
-		de_err(c, "IFD loop detected");
+	if(!de_inthashtable_add_item(c, d->ifds_seen, ifdpos, NULL)) {
+		detiff_err(c, d, "IFD loop detected");
 		return;
 	}
 	d->ifd_count++;
@@ -182,7 +228,7 @@ static void push_ifd(deark *c, lctx *d, de_int64 ifdpos, int ifdtype)
 		d->ifdstack_numused = 0;
 	}
 	if(d->ifdstack_numused >= d->ifdstack_capacity) {
-		de_warn(c, "Too many TIFF IFDs");
+		detiff_warn(c, d, "Too many TIFF IFDs");
 		return;
 	}
 	d->ifdstack[d->ifdstack_numused].offset = ifdpos;
@@ -447,10 +493,28 @@ static void do_oldjpeg(deark *c, lctx *d, de_int64 jpegoffset, de_int64 jpegleng
 		// of the file.
 		jpeglength = c->infile->len - jpegoffset;
 	}
+	if(jpeglength>DE_MAX_FILE_SIZE) {
+		return;
+	}
+
+	if(jpegoffset+jpeglength>c->infile->len) {
+		detiff_warn(c, d, "Invalid offset/length of embedded JPEG data (offset=%"INT64_FMT
+			", len=%"INT64_FMT")", jpegoffset, jpeglength);
+		return;
+	}
+
+	if(dbuf_memcmp(c->infile, jpegoffset, "\xff\xd8\xff", 3)) {
+		detiff_warn(c, d, "Expected JPEG data at %"INT64_FMT" not found", jpegoffset);
+		return;
+	}
 
 	// Found an embedded JPEG image or thumbnail that we can extract.
 	if(d->is_exif_submodule) {
 		extension = "exifthumb.jpg";
+		createflags = DE_CREATEFLAG_IS_AUX;
+	}
+	else if(d->fmt==DE_TIFFFMT_NIKONMN) {
+		extension = "nikonthumb.jpg";
 		createflags = DE_CREATEFLAG_IS_AUX;
 	}
 	else {
@@ -949,6 +1013,12 @@ static void handler_hexdump(deark *c, lctx *d, const struct taginfo *tg, const s
 	de_dbg_hexdump(c, c->infile, tg->val_offset, tg->total_size, 256, NULL, 0x1);
 }
 
+// Hex dump with no ASCII
+static void handler_hexdumpb(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
+{
+	de_dbg_hexdump(c, c->infile, tg->val_offset, tg->total_size, 256, NULL, 0);
+}
+
 static void handler_imagewidth(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
 	if(tg->valcount!=1) return;
@@ -1008,7 +1078,8 @@ static void handler_subifd(deark *c, lctx *d, const struct taginfo *tg, const st
 	de_int64 tmpoffset;
 	int ifdtype = IFDTYPE_NORMAL;
 
-	if(tg->tagnum==330) ifdtype = IFDTYPE_SUBIFD;
+	if(d->fmt==DE_TIFFFMT_NIKONMN && tg->tagnum==0x11) ifdtype = IFDTYPE_NIKONPREVIEW;
+	else if(tg->tagnum==330) ifdtype = IFDTYPE_SUBIFD;
 	else if(tg->tagnum==400) ifdtype = IFDTYPE_GLOBALPARAMS;
 	else if(tg->tagnum==34665) ifdtype = IFDTYPE_EXIF;
 	else if(tg->tagnum==34853) ifdtype = IFDTYPE_GPS;
@@ -1037,7 +1108,7 @@ static void handler_xmp(deark *c, lctx *d, const struct taginfo *tg, const struc
 
 static void handler_iptc(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_fmtutil_handle_iptc(c, tg->val_offset, tg->total_size);
+	de_fmtutil_handle_iptc(c, c->infile, tg->val_offset, tg->total_size);
 }
 
 static void handler_photoshoprsrc(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
@@ -1045,7 +1116,7 @@ static void handler_photoshoprsrc(deark *c, lctx *d, const struct taginfo *tg, c
 	de_dbg(c, "Photoshop resources at %d, len=%d",
 		(int)tg->val_offset, (int)tg->total_size);
 	de_dbg_indent(c, 1);
-	de_fmtutil_handle_photoshop_rsrc(c, tg->val_offset, tg->total_size);
+	de_fmtutil_handle_photoshop_rsrc(c, c->infile, tg->val_offset, tg->total_size);
 	de_dbg_indent(c, -1);
 }
 
@@ -1163,6 +1234,15 @@ done:
 	ucstring_destroy(s);
 }
 
+static void handler_olepropset(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
+{
+	de_dbg(c, "OLE property set storage dump at %"INT64_FMT", len=%"INT64_FMT,
+		tg->val_offset, tg->total_size);
+	de_dbg_indent(c, 1);
+	de_run_module_by_id_on_slice2(c, "cfb", "T", c->infile, tg->val_offset, tg->total_size);
+	de_dbg_indent(c, -1);
+}
+
 // Photoshop "ImageSourceData"
 static void handler_37724(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
@@ -1182,7 +1262,7 @@ static void handler_37724(deark *c, lctx *d, const struct taginfo *tg, const str
 	}
 
 	if(psdver==0) {
-		de_warn(c, "Bad or unsupported ImageSourceData tag at %d", (int)tg->val_offset);
+		detiff_warn(c, d, "Bad or unsupported ImageSourceData tag at %d", (int)tg->val_offset);
 		goto done;
 	}
 
@@ -1221,6 +1301,7 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 	de_int64 pos = tg->val_offset;
 	de_ucstring *s = NULL;
 
+	d->mpf_main_image_count = 0;
 	// Length is supposed to be 16x{NumberOfImages; tag 45057}. We'll just assume
 	// it's correct.
 	num_entries = tg->total_size/16;
@@ -1228,9 +1309,12 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 	s = ucstring_create(c);
 	for(k=0; k<num_entries; k++) {
 		de_int64 n;
+		de_int64 imgoffs_rel, imgoffs_abs;
+		de_int64 imgsize;
 		de_uint32 attrs;
 		de_uint32 dataformat;
 		de_uint32 typecode;
+		char offset_descr[80];
 
 		de_dbg(c, "entry #%d", (int)(k+1));
 		de_dbg_indent(c, 1);
@@ -1249,19 +1333,44 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 		if(typecode==0x020001U) ucstring_append_flags_item(s, "multi-frame image panorama");
 		if(typecode==0x020002U) ucstring_append_flags_item(s, "multi-frame image disparity");
 		if(typecode==0x020003U) ucstring_append_flags_item(s, "multi-frame image multi-angle");
+		if(typecode!=0x010001U && typecode!=0x010002U) {
+			// Count that number of non-thumbnail images
+			d->mpf_main_image_count++;
+		}
 
 		de_dbg(c, "image attribs: 0x%08x (%s)", (unsigned int)attrs,
 			ucstring_getpsz(s));
 
-		n = dbuf_getui32x(c->infile, pos+4, d->is_le);
-		de_dbg(c, "image size: %u", (unsigned int)n);
-		n = dbuf_getui32x(c->infile, pos+8, d->is_le);
+		imgsize = dbuf_getui32x(c->infile, pos+4, d->is_le);
+		de_dbg(c, "image size: %u", (unsigned int)imgsize);
 
-		// This is apparently relative to the offset of the MPF segment in
-		// the parent JPEG file.
-		de_dbg(c, "image offset: %u", (unsigned int)n);
+		imgoffs_rel = dbuf_getui32x(c->infile, pos+8, d->is_le);
+		// This is relative to beginning of the payload data (the TIFF header)
+		// of the MPF segment, except that 0 is a special case.
+		if(imgoffs_rel==0) {
+			imgoffs_abs = 0;
+			de_strlcpy(offset_descr, "refers to the first image", sizeof(offset_descr));
+		}
+		else if(d->in_params && (d->in_params->flags&0x01)) {
+			imgoffs_abs = d->in_params->offset_in_parent+imgoffs_rel;
+			de_snprintf(offset_descr, sizeof(offset_descr), "absolute offset %"INT64_FMT,
+				imgoffs_abs);
+		}
+		else {
+			imgoffs_abs = imgoffs_rel;
+			de_strlcpy(offset_descr, "?", sizeof(offset_descr));
+		}
+		de_dbg(c, "image offset: %u (%s)", (unsigned int)imgoffs_rel, offset_descr);
+
+		if(imgoffs_rel>0 && d->in_params && (d->in_params->flags&0x01)) {
+			// Record the minimum parent file size implied by this entry, if it's the
+			// largest we've seen so far.
+			if(imgoffs_abs+imgsize > d->mpf_min_file_size) {
+				d->mpf_min_file_size = imgoffs_abs+imgsize;
+			}
+		}
+
 		n = dbuf_getui16x(c->infile, pos+12, d->is_le);
-
 		de_dbg(c, "dep. image #1 entry: %u", (unsigned int)n);
 		n = dbuf_getui16x(c->infile, pos+14, d->is_le);
 		de_dbg(c, "dep. image #2 entry: %u", (unsigned int)n);
@@ -1301,6 +1410,22 @@ static void handler_utf16(deark *c, lctx *d, const struct taginfo *tg, const str
 done:
 	ucstring_destroy(s);
 	return;
+}
+
+static void handler_dngprivatedata(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
+{
+	struct de_stringreaderdata *srd;
+	de_int64 nbytes_to_scan;
+
+	nbytes_to_scan = tg->total_size;
+	if(nbytes_to_scan>128) nbytes_to_scan=128;
+
+	srd = dbuf_read_string(c->infile, tg->val_offset, nbytes_to_scan, nbytes_to_scan,
+		DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
+	if(srd->found_nul) {
+		de_dbg(c, "identifier: \"%s\"", ucstring_getpsz(srd->str));
+	}
+	de_destroy_stringreaderdata(c, srd);
 }
 
 static const struct tagnuminfo tagnuminfo_arr[] = {
@@ -1550,7 +1675,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 37521, 0x10, "SubSecTimeOriginal", NULL, NULL },
 	{ 37522, 0x10, "SubsecTimeDigitized", NULL, NULL },
 	{ 37679, 0x0000, "OCR Text", NULL, NULL },
-	{ 37680, 0x0000, "OLE Property Set Storage", NULL, NULL },
+	{ 37680, 0x0008, "OLE Property Set Storage", handler_olepropset, NULL },
 	{ 37681, 0x0000, "OCR Text Position Info", NULL, NULL },
 	{ 37724, 0x0008, "Photoshop ImageSourceData", handler_37724, NULL },
 	{ 40091, 0x0408, "XPTitle/Caption", handler_utf16, NULL },
@@ -1671,12 +1796,12 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 50737, 0x80, "ChromaBlurRadius", NULL, NULL},
 	{ 50738, 0x80, "AntiAliasStrength", NULL, NULL},
 	{ 50739, 0x80, "ShadowScale", NULL, NULL},
-	{ 50740, 0x80, "DNGPrivateData", NULL, NULL},
+	{ 50740, 0x0080, "DNGPrivateData", handler_dngprivatedata, NULL},
 	{ 50741, 0x80, "MakerNoteSafety", NULL, NULL},
 	{ 50778, 0x80, "CalibrationIlluminant1", NULL, NULL},
 	{ 50779, 0x80, "CalibrationIlluminant2", NULL, NULL},
 	{ 50780, 0x80, "BestQualityScale", NULL, NULL},
-	{ 50781, 0x80, "RawDataUniqueID", NULL, NULL},
+	{ 50781, 0x0088, "RawDataUniqueID", handler_hexdumpb, NULL},
 	{ 50784, 0x0000, "Alias Layer Metadata", NULL, NULL },
 	{ 50827, 0x80, "OriginalRawFileName", NULL, NULL},
 	{ 50828, 0x80, "OriginalRawFileData", NULL, NULL},
@@ -1704,11 +1829,11 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 50966, 0x80, "PreviewApplicationName", NULL, NULL},
 	{ 50967, 0x80, "PreviewApplicationVersion", NULL, NULL},
 	{ 50968, 0x80, "PreviewSettingsName", NULL, NULL},
-	{ 50969, 0x80, "PreviewSettingsDigest", NULL, NULL},
+	{ 50969, 0x0088, "PreviewSettingsDigest", handler_hexdumpb, NULL},
 	{ 50970, 0x80, "PreviewColorSpace", NULL, valdec_dngcolorspace},
 	{ 50971, 0x80, "PreviewDateTime", NULL, NULL},
-	{ 50972, 0x80, "RawImageDigest", NULL, NULL},
-	{ 50973, 0x80, "OriginalRawFileDigest", NULL, NULL},
+	{ 50972, 0x0088, "RawImageDigest", handler_hexdumpb, NULL},
+	{ 50973, 0x0088, "OriginalRawFileDigest", handler_hexdumpb, NULL},
 	{ 50974, 0x80, "SubTileBlockSize", NULL, NULL},
 	{ 50975, 0x80, "RowInterleaveFactor", NULL, NULL},
 	{ 50981, 0x80, "ProfileLookTableDims", NULL, NULL},
@@ -1724,7 +1849,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 51108, 0x80, "ProfileLookTableEncoding", NULL, NULL},
 	{ 51109, 0x80, "BaselineExposureOffset", NULL, NULL},
 	{ 51110, 0x80, "DefaultBlackRender", NULL, NULL},
-	{ 51111, 0x80, "NewRawImageDigest", NULL, NULL},
+	{ 51111, 0x0088, "NewRawImageDigest", handler_hexdumpb, NULL},
 	{ 51112, 0x80, "RawToPreviewGain", NULL, NULL},
 	{ 51113, 0x80, "CacheBlob", NULL, NULL},
 	{ 51114, 0x80, "CacheVersion", NULL, NULL},
@@ -1786,7 +1911,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 0xe, 0x1001, "ExposureDifference", NULL, NULL },
 	{ 0xf, 0x1001, "ISOSelection", NULL, NULL },
 	{ 0x10, 0x1001, "DataDump", NULL, NULL },
-	{ 0x11, 0x1001, "PreviewIFD", NULL, NULL },
+	{ 0x11, 0x1001, "PreviewIFD", handler_subifd, NULL },
 	{ 0x12, 0x1001, "FlashExposureComp", NULL, NULL },
 	{ 0x13, 0x1001, "ISOSetting", NULL, NULL },
 	{ 0x16, 0x1001, "ImageBoundary", NULL, NULL },
@@ -2089,15 +2214,18 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 		name=" (GPS IFD)";
 		d->current_textfield_encoding = DE_ENCODING_ASCII;
 		break;
+	case IFDTYPE_NIKONPREVIEW:
+		name=" (Nikon Preview)";
+		break;
 	default:
 		name="";
 	}
 
-	de_dbg(c, "IFD at %d%s", (int)pg->ifdpos, name);
+	de_dbg(c, "IFD at %"INT64_FMT"%s", pg->ifdpos, name);
 	de_dbg_indent(c, 1);
 
 	if(pg->ifdpos >= c->infile->len || pg->ifdpos<8) {
-		de_warn(c, "Invalid IFD offset (%d)", (int)pg->ifdpos);
+		detiff_warn(c, d, "Invalid IFD offset (%"INT64_FMT")", pg->ifdpos);
 		goto done;
 	}
 
@@ -2110,13 +2238,13 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 
 	de_dbg(c, "number of tags: %d", num_tags);
 	if(num_tags>200) {
-		de_warn(c, "Invalid or excessive number of TIFF tags (%d)", num_tags);
+		detiff_warn(c, d, "Invalid or excessive number of TIFF tags (%d)", num_tags);
 		goto done;
 	}
 
 	// Record the next IFD in the main list.
-	tmpoffset = dbuf_getui32x(c->infile, pg->ifdpos+d->ifdhdrsize+num_tags*d->ifditemsize, d->is_le);
-	de_dbg(c, "offset of next IFD: %d%s", (int)tmpoffset, tmpoffset==0?" (none)":"");
+	tmpoffset = getfpos(c, d, pg->ifdpos+d->ifdhdrsize+num_tags*d->ifditemsize);
+	de_dbg(c, "offset of next IFD: %"INT64_FMT"%s", tmpoffset, tmpoffset==0?" (none)":"");
 	push_ifd(c, d, tmpoffset, IFDTYPE_NORMAL);
 
 	dbgline = ucstring_create(c);
@@ -2305,20 +2433,26 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 
 	d = de_malloc(c, sizeof(lctx));
 
+	if(mparams) {
+		d->in_params = &mparams->in_params;
+	}
+
 	d->fmt = de_identify_tiff_internal(c, &d->is_le);
 
-	if(mparams && mparams->codes) {
-		if(de_strchr(mparams->codes, 'N')) {
+	if(mparams && mparams->in_params.codes) {
+		if(de_strchr(mparams->in_params.codes, 'N')) {
+			d->errmsgprefix = "[Nikon MakerNote] ";
 			d->fmt = DE_TIFFFMT_NIKONMN;
 		}
 
-		if(de_strchr(mparams->codes, 'M') && (d->fmt==DE_TIFFFMT_TIFF))
+		if(de_strchr(mparams->in_params.codes, 'M') && (d->fmt==DE_TIFFFMT_TIFF))
 		{
 			d->fmt = DE_TIFFFMT_MPEXT;
 		}
 
-		if(de_strchr(mparams->codes, 'E')) {
+		if(de_strchr(mparams->in_params.codes, 'E')) {
 			d->is_exif_submodule = 1;
+			d->errmsgprefix = "[Exif] ";
 		}
 	}
 
@@ -2348,7 +2482,7 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 	}
 
 	if(d->fmt==0) {
-		de_warn(c, "This is not a known/supported TIFF or TIFF-like format.");
+		detiff_warn(c, d, "This is not a known/supported TIFF or TIFF-like format.");
 	}
 
 	if(d->is_bigtiff) {
@@ -2370,18 +2504,23 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 
 	if(mparams) {
 		if(d->has_exif_gps) {
-			mparams->returned_flags |= 0x08;
+			mparams->out_params.flags |= 0x08;
 		}
 		if(d->first_ifd_cosited) {
-			mparams->returned_flags |= 0x10;
+			mparams->out_params.flags |= 0x10;
 		}
 		if(d->first_ifd_orientation>0) {
-			mparams->returned_flags |= 0x20;
-			mparams->uint1 = d->first_ifd_orientation;
+			mparams->out_params.flags |= 0x20;
+			mparams->out_params.uint1 = d->first_ifd_orientation;
 		}
 		if(d->exif_version_as_uint32>0) {
-			mparams->returned_flags |= 0x40;
-			mparams->uint2 = d->exif_version_as_uint32;
+			mparams->out_params.flags |= 0x40;
+			mparams->out_params.uint2 = d->exif_version_as_uint32;
+		}
+		if(d->fmt==DE_TIFFFMT_MPEXT && d->mpf_min_file_size>0) {
+			mparams->out_params.flags |= 0x80;
+			mparams->out_params.uint3 = d->mpf_main_image_count;
+			mparams->out_params.int64_1 = d->mpf_min_file_size;
 		}
 	}
 

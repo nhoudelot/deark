@@ -6,14 +6,16 @@ obj/modules/amigaicon.o: modules/amigaicon.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/ansiart.o: modules/ansiart.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
+obj/modules/apple2-dsk.o: modules/apple2-dsk.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/ar.o: modules/ar.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/asf.o: modules/asf.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
+obj/modules/atari-dsk.o: modules/atari-dsk.c src/deark-config.h \
+ src/deark-private.h src/deark.h
 obj/modules/atari-img.o: modules/atari-img.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
-obj/modules/atari.o: modules/atari.c src/deark-config.h \
- src/deark-private.h src/deark.h
 obj/modules/autocad.o: modules/autocad.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/modules/awbm.o: modules/awbm.c src/deark-config.h src/deark-private.h \
@@ -26,6 +28,8 @@ obj/modules/bintext.o: modules/bintext.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/bmff.o: modules/bmff.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
+obj/modules/bmi.o: modules/bmi.c src/deark-config.h src/deark-private.h \
+ src/deark.h
 obj/modules/bmp.o: modules/bmp.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
 obj/modules/bpg.o: modules/bpg.c src/deark-config.h src/deark-private.h \
@@ -59,7 +63,7 @@ obj/modules/exe.o: modules/exe.c src/deark-config.h src/deark-private.h \
 obj/modules/flif.o: modules/flif.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/fnt.o: modules/fnt.c src/deark-config.h src/deark-private.h \
- src/deark.h
+ src/deark.h src/deark-fmtutil.h
 obj/modules/gemfont.o: modules/gemfont.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/modules/gemmeta.o: modules/gemmeta.c src/deark-config.h \
@@ -67,7 +71,7 @@ obj/modules/gemmeta.o: modules/gemmeta.c src/deark-config.h \
 obj/modules/gemras.o: modules/gemras.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/gif.o: modules/gif.c src/deark-config.h src/deark-private.h \
- src/deark.h
+ src/deark.h src/deark-fmtutil.h
 obj/modules/grasp.o: modules/grasp.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/modules/grob.o: modules/grob.c src/deark-config.h src/deark-private.h \
@@ -89,6 +93,8 @@ obj/modules/ilbm.o: modules/ilbm.c src/deark-config.h src/deark-private.h \
 obj/modules/insetpix.o: modules/insetpix.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/modules/iptc.o: modules/iptc.c src/deark-config.h src/deark-private.h \
+ src/deark.h
+obj/modules/j2c.o: modules/j2c.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/jbf.o: modules/jbf.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
@@ -114,6 +120,10 @@ obj/modules/msp.o: modules/msp.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/nokia.o: modules/nokia.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
+obj/modules/ogg.o: modules/ogg.c src/deark-config.h src/deark-private.h \
+ src/deark.h
+obj/modules/olepropset.o: modules/olepropset.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/os2bmp.o: modules/os2bmp.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/palmbitmap.o: modules/palmbitmap.c src/deark-config.h \
@@ -125,7 +135,7 @@ obj/modules/pcpaint.o: modules/pcpaint.c src/deark-config.h \
 obj/modules/pcx.o: modules/pcx.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/pff2.o: modules/pff2.c src/deark-config.h src/deark-private.h \
- src/deark.h
+ src/deark.h src/deark-fmtutil.h
 obj/modules/pict.o: modules/pict.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
 obj/modules/pkfont.o: modules/pkfont.c src/deark-config.h \
@@ -183,7 +193,7 @@ obj/modules/vort.o: modules/vort.c src/deark-config.h src/deark-private.h \
 obj/modules/wad.o: modules/wad.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/wmf.o: modules/wmf.c src/deark-config.h src/deark-private.h \
- src/deark.h
+ src/deark.h src/deark-fmtutil.h
 obj/modules/wpg.o: modules/wpg.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/wri.o: modules/wri.c src/deark-config.h src/deark-private.h \
@@ -193,7 +203,7 @@ obj/modules/xface.o: modules/xface.c src/deark-config.h \
 obj/modules/xfer.o: modules/xfer.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/zip.o: modules/zip.c src/deark-config.h src/deark-private.h \
- src/deark.h
+ src/deark.h src/deark-fmtutil.h
 obj/modules/zoo.o: modules/zoo.c src/deark-config.h src/deark-private.h \
  src/deark.h modules/../foreign/unzoo.h modules/../foreign/zoo-lzd.h
 obj/src/deark-bitmap.o: src/deark-bitmap.c src/deark-config.h \

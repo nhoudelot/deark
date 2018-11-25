@@ -460,20 +460,33 @@ void de_dbg_pal_entry(deark *c, de_int64 idx, de_uint32 clr)
 	de_dbg_pal_entry2(c, idx, clr, NULL, NULL, NULL);
 }
 
-// c can be NULL
-void de_err(deark *c, const char *fmt, ...)
+void de_verr(deark *c, const char *fmt, va_list ap)
 {
-	va_list ap;
-
 	if(c) {
 		c->error_count++;
 	}
 
 	de_puts(c, DE_MSGTYPE_ERROR, "Error: ");
-	va_start(ap, fmt);
 	de_vprintf(c, DE_MSGTYPE_ERROR, fmt, ap);
-	va_end(ap);
 	de_puts(c, DE_MSGTYPE_ERROR, "\n");
+}
+
+// c can be NULL
+void de_err(deark *c, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	de_verr(c, fmt, ap);
+	va_end(ap);
+}
+
+void de_vwarn(deark *c, const char *fmt, va_list ap)
+{
+	if(!c->show_warnings) return;
+	de_puts(c, DE_MSGTYPE_WARNING, "Warning: ");
+	de_vprintf(c, DE_MSGTYPE_WARNING, fmt, ap);
+	de_puts(c, DE_MSGTYPE_WARNING, "\n");
 }
 
 void de_warn(deark *c, const char *fmt, ...)
@@ -481,11 +494,9 @@ void de_warn(deark *c, const char *fmt, ...)
 	va_list ap;
 
 	if(!c->show_warnings) return;
-	de_puts(c, DE_MSGTYPE_WARNING, "Warning: ");
 	va_start(ap, fmt);
-	de_vprintf(c, DE_MSGTYPE_WARNING, fmt, ap);
+	de_vwarn(c, fmt, ap);
 	va_end(ap);
-	de_puts(c, DE_MSGTYPE_WARNING, "\n");
 }
 
 void de_msg(deark *c, const char *fmt, ...)
@@ -624,9 +635,18 @@ void de_run_module_by_id_on_slice(deark *c, const char *id, de_module_params *mp
 	dbuf *old_ifile;
 
 	old_ifile = c->infile;
-	c->infile = dbuf_open_input_subfile(f, pos, len);
-	de_run_module_by_id(c, id, mparams);
-	dbuf_close(c->infile);
+
+	if(pos==0 && len==f->len) {
+		// Optimization: We don't need a subfile in this case
+		c->infile = f;
+		de_run_module_by_id(c, id, mparams);
+	}
+	else {
+		c->infile = dbuf_open_input_subfile(f, pos, len);
+		de_run_module_by_id(c, id, mparams);
+		dbuf_close(c->infile);
+	}
+
 	c->infile = old_ifile;
 }
 
@@ -638,7 +658,7 @@ void de_run_module_by_id_on_slice2(deark *c, const char *id, const char *codes,
 	de_module_params *mparams = NULL;
 
 	mparams = de_malloc(c, sizeof(de_module_params));
-	mparams->codes = codes;
+	mparams->in_params.codes = codes;
 	de_run_module_by_id_on_slice(c, id, mparams, f, pos, len);
 	de_free(c, mparams);
 }
@@ -947,7 +967,7 @@ void de_copy_bits(const de_byte *src, de_int64 srcbitnum,
 
 struct de_inthashtable_item {
 	de_int64 key;
-	//void *value; // Item data will go here, if we ever need it
+	void *value;
 	struct de_inthashtable_item *next; // Next item in linked list
 };
 
@@ -1026,6 +1046,20 @@ static struct de_inthashtable_item *inthashtable_find_item(struct de_inthashtabl
 	return inthashtable_find_item_in_bucket(ht, bkt, key);
 }
 
+// If key does not exist, sets *pvalue to NULL and returns 0.
+int de_inthashtable_get_item(deark *c, struct de_inthashtable *ht, de_int64 key, void **pvalue)
+{
+	struct de_inthashtable_item *item;
+
+	item = inthashtable_find_item(ht, key);
+	if(item) {
+		*pvalue = item->value;
+		return 1;
+	}
+	*pvalue = NULL;
+	return 0;
+}
+
 int de_inthashtable_item_exists(deark *c, struct de_inthashtable *ht, de_int64 key)
 {
 	return (inthashtable_find_item(ht, key) != NULL);
@@ -1041,7 +1075,7 @@ static void inthashtable_add_item_to_bucket(struct de_inthashtable *ht,
 
 // Returns 1 if the key has been newly-added,
 // or 0 if the key already existed.
-int de_inthashtable_add_item(deark *c, struct de_inthashtable *ht, de_int64 key)
+int de_inthashtable_add_item(deark *c, struct de_inthashtable *ht, de_int64 key, void *value)
 {
 	struct de_inthashtable_bucket *bkt;
 	struct de_inthashtable_item *new_item;
@@ -1056,6 +1090,41 @@ int de_inthashtable_add_item(deark *c, struct de_inthashtable *ht, de_int64 key)
 
 	new_item = de_malloc(c, sizeof(struct de_inthashtable_item));
 	new_item->key = key;
+	new_item->value = value;
 	inthashtable_add_item_to_bucket(ht, bkt, new_item);
 	return 1;
+}
+
+int de_inthashtable_remove_item(deark *c, struct de_inthashtable *ht, de_int64 key, void **pvalue)
+{
+	// TODO
+	return 0;
+}
+
+// Select one item arbitrarily, return its key and value, and delete it from the
+// hashtable.
+int de_inthashtable_remove_any_item(deark *c, struct de_inthashtable *ht, de_int64 *pkey, void **pvalue)
+{
+	de_int64 i;
+
+	for(i=0; i<DE_INTHASHTABLE_NBUCKETS; i++) {
+		struct de_inthashtable_item *item;
+
+		item = ht->buckets[i].first_item;
+		if(!item) continue;
+
+		// Found an item. Copy it, for the caller.
+		if(pkey) *pkey = item->key;
+		if(pvalue) *pvalue = item->value;
+
+		// Delete our copy of it.
+		ht->buckets[i].first_item = item->next;
+		inthashtable_destroy_item(c, item);
+		return 1;
+	}
+
+	// No items in hashtable.
+	if(pkey) *pkey = 0;
+	if(pvalue) *pvalue = NULL;
+	return 0;
 }

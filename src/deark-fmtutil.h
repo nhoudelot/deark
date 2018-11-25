@@ -47,11 +47,11 @@ void de_fmtutil_handle_exif2(deark *c, de_int64 pos, de_int64 len,
 	de_uint32 *returned_flags, de_uint32 *orientation, de_uint32 *exifversion);
 void de_fmtutil_handle_exif(deark *c, de_int64 pos, de_int64 len);
 
-void de_fmtutil_handle_iptc(deark *c, de_int64 pos, de_int64 len);
+void de_fmtutil_handle_iptc(deark *c, dbuf *f, de_int64 pos, de_int64 len);
 
-void de_fmtutil_handle_photoshop_rsrc2(deark *c, de_int64 pos, de_int64 len,
+void de_fmtutil_handle_photoshop_rsrc2(deark *c, dbuf *f, de_int64 pos, de_int64 len,
 	de_uint32 *returned_flags);
-void de_fmtutil_handle_photoshop_rsrc(deark *c, de_int64 pos, de_int64 len);
+void de_fmtutil_handle_photoshop_rsrc(deark *c, dbuf *f, de_int64 pos, de_int64 len);
 
 int de_fmtutil_uncompress_packbits(dbuf *f, de_int64 pos1, de_int64 len,
 	dbuf *unc_pixels, de_int64 *cmpr_bytes_consumed);
@@ -155,6 +155,11 @@ struct de_iffctx;
 // Return value: Normally 1; 0 to immediately stop processing the entire file.
 typedef int (*de_handle_iff_chunk_fn)(deark *c, struct de_iffctx *ictx);
 
+// Mainly for identifying the chunk.
+// The user can also adjust ictx->chunkctx->dlen.
+// Return value: Normally 1 (reserved)
+typedef int (*de_preprocess_iff_chunk_fn)(deark *c, struct de_iffctx *ictx);
+
 // Return value: Normally 1; 0 to immediately stop processing the entire file.
 typedef int (*de_on_iff_container_end_fn)(deark *c, struct de_iffctx *ictx);
 
@@ -164,16 +169,21 @@ typedef int (*de_on_std_iff_container_start_fn)(deark *c, struct de_iffctx *ictx
 
 struct de_iffchunkctx {
 	struct de_fourcc chunk4cc;
-	de_int64 chunk_pos;
-	de_int64 chunk_len;
-	de_int64 chunk_dpos;
-	de_int64 chunk_dlen;
+	de_int64 pos;
+	de_int64 len;
+	de_int64 dpos;
+	de_int64 dlen;
+
+	// To be filled in by identify_chunk_fn:
+	void *chunk_userdata;
+	const char *chunk_name;
 };
 
 struct de_iffctx {
 	void *userdata;
 	dbuf *f; // Input file
 	de_handle_iff_chunk_fn handle_chunk_fn;
+	de_preprocess_iff_chunk_fn preprocess_chunk_fn;
 	de_on_std_iff_container_start_fn on_std_container_start_fn;
 	de_on_iff_container_end_fn on_container_end_fn;
 	de_int64 alignment; // 0 = default
@@ -192,7 +202,7 @@ struct de_iffctx {
 	struct de_fourcc curr_container_contentstype4cc;
 
 	// Per-chunk info supplied to handle_chunk_fn:
-	const struct de_iffchunkctx *chunkctx;
+	struct de_iffchunkctx *chunkctx;
 
 	// To be filled in by handle_chunk_fn:
 	int handled;
@@ -204,5 +214,10 @@ void de_fmtutil_read_iff_format(deark *c, struct de_iffctx *ictx,
 	de_int64 pos, de_int64 len);
 int de_fmtutil_is_standard_iff_chunk(deark *c, struct de_iffctx *ictx,
 	de_uint32 ct);
+void de_fmtutil_default_iff_chunk_identify(deark *c, struct de_iffctx *ictx);
 
 const char *de_fmtutil_tiff_orientation_name(de_int64 n);
+const char *de_fmtutil_get_windows_charset_name(de_byte cs);
+const char *de_fmtutil_get_windows_cb_data_type_name(unsigned int ty);
+
+int de_fmtutil_find_zip_eocd(deark *c, dbuf *f, de_int64 *foundpos);

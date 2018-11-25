@@ -115,6 +115,7 @@ DE_DECLARE_MODULE(de_module_ps_pattern);
 #define CODE_vsms 0x76736d73U
 #define CODE_vstk 0x7673746bU
 
+#define PSD_CM_BITMAP   0
 #define PSD_CM_GRAY     1
 #define PSD_CM_PALETTE  2
 #define PSD_CM_RGB      3
@@ -172,6 +173,7 @@ struct image_info {
 typedef struct localctx_struct {
 	int version; // 1=PSD, 2=PSB
 	int is_le;
+	int input_encoding;
 	int tagged_blocks_only;
 #define MAX_NESTING_LEVEL 50
 	int nesting_level;
@@ -191,7 +193,8 @@ typedef void (*rsrc_handler_fn)(deark *c, lctx *d, zztype *zz, const struct rsrc
 struct rsrc_info {
 	de_uint16 id;
 
-	// 0x4 = Item consists of a version number, followed by a "Descriptor structure".
+	// 0x0004 = Item consists of a version number, followed by a "Descriptor structure".
+	// 0x0010 = Do not include ASCII in hexdumps.
 	de_uint32 flags;
 
 	const char *idname;
@@ -241,7 +244,7 @@ static const struct rsrc_info rsrc_info_arr[] = {
 	{ 0x03f5, 0, "Color halftoning info", NULL },
 	{ 0x03f6, 0, "Duotone halftoning information", NULL },
 	{ 0x03f7, 0, "Grayscale and multichannel transfer function", NULL },
-	{ 0x03f8, 0, "Color transfer functions", NULL },
+	{ 0x03f8, 0x0010, "Color transfer functions", NULL },
 	{ 0x03f9, 0, "Duotone transfer functions", NULL },
 	{ 0x03fa, 0, "Duotone image information", NULL },
 	{ 0x03fb, 0, "Effective black and white values", NULL },
@@ -251,12 +254,12 @@ static const struct rsrc_info rsrc_info_arr[] = {
 	//{ 0x03ff, 0, "(Obsolete)", NULL },
 	{ 0x0400, 0, "Layer state information", hrsrc_uint16 },
 	{ 0x0401, 0, "Working path", hrsrc_pathinfo },
-	{ 0x0402, 0, "Layers group information", NULL },
+	{ 0x0402, 0x0010, "Layers group information", NULL },
 	//{ 0x0403, 0, "(Obsolete)", NULL },
 	{ 0x0404, 0, "IPTC-NAA", hrsrc_iptc },
 	{ 0x0405, 0, "Image mode for raw format files", NULL },
-	{ 0x0406, 0, "JPEG quality", NULL },
-	{ 0x0408, 0, "Grid and guides info", NULL },
+	{ 0x0406, 0x0010, "JPEG quality", NULL },
+	{ 0x0408, 0x0010, "Grid and guides info", NULL },
 	{ 0x0409, 0, "Thumbnail - Photoshop 4.0", hrsrc_thumbnail },
 	{ 0x040a, 0, "Copyright flag", hrsrc_byte },
 	{ 0x040b, 0, "URL", hrsrc_plaintext },
@@ -282,7 +285,7 @@ static const struct rsrc_info rsrc_info_arr[] = {
 	{ 0x0422, 0, "EXIF data 1", hrsrc_exif },
 	{ 0x0423, 0, "EXIF data 3", NULL },
 	{ 0x0424, 0, "XMP metadata", hrsrc_xmp },
-	{ 0x0425, 0, "Caption digest", NULL },
+	{ 0x0425, 0x0010, "Caption digest", NULL },
 	{ 0x0426, 0, "Print scale", hrsrc_printscale },
 	{ 0x0428, 0, "Pixel Aspect Ratio", hrsrc_pixelaspectratio },
 	{ 0x0429, 0x0004, "Layer Comps", NULL },
@@ -291,7 +294,7 @@ static const struct rsrc_info rsrc_info_arr[] = {
 	{ 0x042d, 0, "Layer Selection ID(s)", hrsrc_layerselectionids },
 	{ 0x042e, 0, "HDR Toning information", NULL },
 	{ 0x042f, 0, "Auto Save Format", NULL },
-	{ 0x0430, 0, "Layer Group(s) Enabled ID", NULL },
+	{ 0x0430, 0x0010, "Layer Group(s) Enabled ID", NULL },
 	{ 0x0431, 0, "Color samplers resource (Photoshop CS3)", NULL },
 	{ 0x0432, 0x0004, "Measurement Scale", NULL },
 	{ 0x0433, 0x0004, "Timeline Information", NULL },
@@ -446,7 +449,7 @@ static const char *get_colormode_name(de_int64 n)
 {
 	const char *name = "?";
 	switch(n) {
-	case 0: name="bitmap"; break;
+	case PSD_CM_BITMAP: name="bitmap"; break;
 	case PSD_CM_GRAY: name="grayscale"; break;
 	case PSD_CM_PALETTE: name="indexed"; break;
 	case PSD_CM_RGB: name="RGB"; break;
@@ -477,7 +480,7 @@ static void dbg_print_compression_method(deark *c, lctx *d, de_int64 cmpr)
 // The PSD module's version of dbuf_read_fourcc()
 static void psd_read_fourcc_zz(deark *c, lctx *d, zztype *zz, struct de_fourcc *fourcc)
 {
-	dbuf_read_fourcc(c->infile, zz->pos, fourcc, d->is_le);
+	dbuf_read_fourcc(c->infile, zz->pos, fourcc, 4, d->is_le ? DE_4CCFLAG_REVERSED : 0);
 	zz->pos += 4;
 }
 
@@ -518,11 +521,7 @@ static void read_pascal_string_to_ucstring(deark *c, lctx *d, de_ucstring *s, zz
 		return;
 	}
 
-	// The PSD spec does not say what encoding these strings use.
-	// Some sources say they use MacRoman, and *some* PSD files do use MacRoman.
-	// But other PSD files use other encodings, and I don't know how to know what
-	// encoding they use.
-	dbuf_read_to_ucstring(c->infile, zz->pos, dlen, s, 0, DE_ENCODING_MACROMAN);
+	dbuf_read_to_ucstring(c->infile, zz->pos, dlen, s, 0, d->input_encoding);
 	zz->pos += dlen;
 }
 
@@ -544,7 +543,7 @@ static void read_prefixed_string_to_ucstring(deark *c, lctx *d, de_ucstring *s, 
 		return;
 	}
 
-	dbuf_read_to_ucstring(c->infile, zz->pos, dlen, s, 0, DE_ENCODING_MACROMAN);
+	dbuf_read_to_ucstring(c->infile, zz->pos, dlen, s, 0, d->input_encoding);
 	zz->pos += dlen;
 }
 
@@ -722,7 +721,7 @@ static void hrsrc_exif(deark *c, lctx *d, zztype *zz, const struct rsrc_info *ri
 static void hrsrc_iptc(deark *c, lctx *d, zztype *zz, const struct rsrc_info *ri)
 {
 	d->has_iptc = 1;
-	de_fmtutil_handle_iptc(c, zz->pos, zz_avail(zz));
+	de_fmtutil_handle_iptc(c, c->infile, zz->pos, zz_avail(zz));
 }
 
 static void hrsrc_xmp(deark *c, lctx *d, zztype *zz, const struct rsrc_info *ri)
@@ -745,7 +744,7 @@ static void do_pluginrsrc_mani(deark *c, lctx *d, zztype *zz)
 
 	if(zz_avail(zz)<4) goto done;
 	psd_read_fourcc_zz(c, d, zz, &fourcc);
-	de_dbg(c, "id: '%s'", fourcc.id_printable);
+	de_dbg(c, "id: '%s'", fourcc.id_dbgstr);
 
 	if(fourcc.id==CODE_IRFR) { // Most likely related to Image Ready
 		if(zz_avail(zz)<4) goto done;
@@ -830,7 +829,7 @@ static void hrsrc_pluginresource(deark *c, lctx *d, zztype *zz, const struct rsr
 	// Plug-in resources seem to start with a fourcc.
 	if(zz_avail(zz)<4) return;
 	psd_read_fourcc_zz(c, d, zz, &fourcc);
-	de_dbg(c, "id: '%s'", fourcc.id_printable);
+	de_dbg(c, "id: '%s'", fourcc.id_dbgstr);
 	zz_init(&czz, zz);
 	switch(fourcc.id) {
 	case CODE_mani:
@@ -906,7 +905,7 @@ static void read_flexible_id(deark *c, lctx *d, de_int64 pos,
 	length = psd_getui32(pos);
 	if(length==0) {
 		flid->is_fourcc = 1;
-		dbuf_read_fourcc(c->infile, pos+4, &flid->fourcc, d->is_le);
+		dbuf_read_fourcc(c->infile, pos+4, &flid->fourcc, 4, d->is_le ? DE_4CCFLAG_REVERSED : 0);
 		flid->bytes_consumed = 4 + 4;
 	}
 	else {
@@ -937,7 +936,7 @@ static void dbg_print_flexible_id(deark *c, lctx *d,
 	const struct flexible_id *flid, const char *name)
 {
 	if(flid->is_fourcc) {
-		de_dbg(c, "%s: fourcc('%s')", name, flid->fourcc.id_printable);
+		de_dbg(c, "%s: fourcc('%s')", name, flid->fourcc.id_dbgstr);
 	}
 	else {
 		de_dbg(c, "%s: string(\"%s\")", name, ucstring_getpsz(flid->s));
@@ -976,7 +975,7 @@ static void do_item_type_UntF(deark *c, lctx *d, zztype *zz)
 	struct de_fourcc unit4cc;
 
 	psd_read_fourcc_zz(c, d, zz, &unit4cc);
-	de_dbg(c, "units code: '%s'", unit4cc.id_printable);
+	de_dbg(c, "units code: '%s'", unit4cc.id_dbgstr);
 
 	v = dbuf_getfloat64x(c->infile, zz->pos, d->is_le);
 	de_dbg(c, "value: %f", v);
@@ -1017,7 +1016,7 @@ static void do_item_type_UnFl(deark *c, lctx *d, zztype *zz)
 	struct de_fourcc unit4cc;
 
 	psd_read_fourcc_zz(c, d, zz, &unit4cc);
-	de_dbg(c, "units code: '%s'", unit4cc.id_printable);
+	de_dbg(c, "units code: '%s'", unit4cc.id_dbgstr);
 
 	count = psd_getui32zz(zz);
 	de_dbg(c, "count: %d", (int)count);
@@ -1283,7 +1282,7 @@ static int do_item_type_obj(deark *c, lctx *d, zztype *zz)
 		itempos = zz->pos;
 		if(itempos >= zz->endpos) goto done;
 		psd_read_fourcc_zz(c, d, zz, &type4cc);
-		de_dbg(c, "reference item[%d] '%s' at %d", (int)i, type4cc.id_printable, (int)itempos);
+		de_dbg(c, "reference item[%d] '%s' at %d", (int)i, type4cc.id_dbgstr, (int)itempos);
 
 		de_dbg_indent(c, 1);
 
@@ -1337,7 +1336,7 @@ static int do_descriptor_item_ostype_and_data(deark *c, lctx *d,
 	zztype czz;
 
 	psd_read_fourcc_zz(c, d, zz, &type4cc);
-	de_dbg(c, "item OSType: '%s'", type4cc.id_printable);
+	de_dbg(c, "item OSType: '%s'", type4cc.id_dbgstr);
 
 	zz_init(&czz, zz);
 
@@ -1757,7 +1756,7 @@ static void hrsrc_plaintext(deark *c, lctx *d, zztype *zz, const struct rsrc_inf
 
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring_n(c->infile, zz->pos, zz_avail(zz), DE_DBG_MAX_STRLEN,
-		s, 0, DE_ENCODING_MACROMAN);
+		s, 0, d->input_encoding);
 	de_dbg(c, "%s: \"%s\"", ri->idname, ucstring_getpsz(s));
 	ucstring_destroy(s);
 }
@@ -1784,7 +1783,7 @@ static void hrsrc_urllist(deark *c, lctx *d, zztype *zz, const struct rsrc_info 
 
 		read_unicode_string(c, d, s, zz);
 		de_dbg(c, "URL[%d]: '%s', id=%d, value=\"%s\"", (int)i,
-			url4cc.id_printable, (int)id, ucstring_getpsz(s));
+			url4cc.id_dbgstr, (int)id, ucstring_getpsz(s));
 		ucstring_empty(s);
 	}
 
@@ -1894,7 +1893,7 @@ static int do_image_resource(deark *c, lctx *d, zztype *zz)
 	}
 	else {
 		de_warn(c, "Bad Photoshop resource block signature '%s' at %d",
-			sig4cc.id_printable, (int)zz->startpos);
+			sig4cc.id_sanitized_sz, (int)zz->startpos);
 		goto done;
 	}
 
@@ -1915,6 +1914,11 @@ static int do_image_resource(deark *c, lctx *d, zztype *zz)
 		signame, (int)resource_id, ri.idname, (int)zz->startpos,
 		ucstring_getpsz(blkname), (int)zz->pos, (int)block_data_len);
 
+	if(zz->pos+block_data_len > zz->endpos) {
+		de_warn(c, "PSD rsrc exceeds its parent's bounds. Ends at %"INT64_FMT
+			", parent ends at %"INT64_FMT".", zz->pos+block_data_len, zz->endpos);
+	}
+
 	de_dbg_indent(c, 1);
 	if(ri.hfn) {
 		zz_init_with_len(&czz, zz, block_data_len);
@@ -1925,7 +1929,8 @@ static int do_image_resource(deark *c, lctx *d, zztype *zz)
 		hrsrc_descriptor_with_version(c, d, &czz, &ri);
 	}
 	else if(c->debug_level>=2) {
-		de_dbg_hexdump(c, c->infile, zz->pos, block_data_len, 256, NULL, 0x1);
+		de_dbg_hexdump(c, c->infile, zz->pos, block_data_len, 256, NULL,
+			(ri.flags&0x0010)?0x0:0x1);
 	}
 	de_dbg_indent(c, -1);
 
@@ -2016,7 +2021,7 @@ static int do_layer_record(deark *c, lctx *d, zztype *zz, struct channel_data *c
 	}
 
 	psd_read_fourcc_zz(c, d, zz, &tmp4cc);
-	de_dbg(c, "blend mode: '%s'", tmp4cc.id_printable);
+	de_dbg(c, "blend mode: '%s'", tmp4cc.id_dbgstr);
 
 	b = psd_getbytezz(zz);
 	de_dbg(c, "opacity: %d", (int)b);
@@ -2168,7 +2173,7 @@ static void do_fourcc_block(deark *c, lctx *d, zztype *zz,
 
 	if(zz_avail(zz)!=4) return;
 	psd_read_fourcc_zz(c, d, zz, &fourcc);
-	de_dbg(c, "%s: '%s'", name, fourcc.id_printable);
+	de_dbg(c, "%s: '%s'", name, fourcc.id_dbgstr);
 }
 
 static void do_Layr_block(deark *c, lctx *d, zztype *zz, const struct de_fourcc *blk4cc)
@@ -2235,7 +2240,7 @@ static int do_one_linked_layer(deark *c, lctx *d, zztype *zz, const struct de_fo
 	retval = 1;
 
 	psd_read_fourcc_zz(c, d, &datazz, &type4cc);
-	de_dbg(c, "type: '%s'", type4cc.id_printable);
+	de_dbg(c, "type: '%s'", type4cc.id_dbgstr);
 
 	ver = psd_getui32zz(&datazz);
 	de_dbg(c, "version: %d", (int)ver);
@@ -2249,10 +2254,10 @@ static int do_one_linked_layer(deark *c, lctx *d, zztype *zz, const struct de_fo
 	de_dbg(c, "original file name: \"%s\"", ucstring_getpsz(s));
 
 	psd_read_fourcc_zz(c, d, &datazz, &tmp4cc);
-	de_dbg(c, "file type: '%s'", tmp4cc.id_printable);
+	de_dbg(c, "file type: '%s'", tmp4cc.id_dbgstr);
 
 	psd_read_fourcc_zz(c, d, &datazz, &tmp4cc);
-	de_dbg(c, "file creator: '%s'", tmp4cc.id_printable);
+	de_dbg(c, "file creator: '%s'", tmp4cc.id_dbgstr);
 
 	dlen2 = psd_geti64zz(&datazz);
 	de_dbg(c, "length2: %"INT64_FMT"", dlen2);
@@ -2601,7 +2606,7 @@ static void do_lrFX_block(deark *c, lctx *d, zztype *zz, const struct de_fourcc 
 
 		dlen = psd_getui32zz(zz);
 
-		de_dbg(c, "effects[%d] '%s' at %d, dpos=%d, dlen=%d", (int)i, sig4cc.id_printable,
+		de_dbg(c, "effects[%d] '%s' at %d, dpos=%d, dlen=%d", (int)i, sig4cc.id_dbgstr,
 			(int)epos, (int)zz->pos, (int)dlen);
 		zz->pos += dlen;
 	}
@@ -2635,7 +2640,7 @@ static void do_lsct_block(deark *c, lctx *d, zztype *zz)
 
 	if(zz_avail(zz)<4) return;
 	psd_read_fourcc_zz(c, d, zz, &tmp4cc);
-	de_dbg(c, "blend mode key: '%s'", tmp4cc.id_printable);
+	de_dbg(c, "blend mode key: '%s'", tmp4cc.id_dbgstr);
 
 	if(zz_avail(zz)<4) return;
 	x = psd_getui32zz(zz);
@@ -2674,7 +2679,7 @@ static void do_vscg_block(deark *c, lctx *d, zztype *zz)
 	struct de_fourcc key4cc;
 
 	psd_read_fourcc_zz(c, d, zz, &key4cc);
-	de_dbg(c, "key: '%s'", key4cc.id_printable);
+	de_dbg(c, "key: '%s'", key4cc.id_dbgstr);
 	read_descriptor(c, d, zz, 1, " (for Vector Stroke Content Data)");
 }
 
@@ -2764,7 +2769,7 @@ static void do_SoLd_block(deark *c, lctx *d, zztype *zz)
 	de_int64 ver;
 
 	psd_read_fourcc_zz(c, d, zz, &id4cc);
-	de_dbg(c, "identifier: '%s'", id4cc.id_printable);
+	de_dbg(c, "identifier: '%s'", id4cc.id_dbgstr);
 	ver = psd_getui32zz(zz);
 	de_dbg(c, "version: %d", (int)ver);
 
@@ -2951,7 +2956,7 @@ static void do_shmd_block(deark *c, lctx *d, zztype *zz)
 
 		dpos = zz->pos;
 		de_dbg(c, "metadata item[%d] '%s' at %d, dpos=%d, dlen=%d",
-			(int)i, key4cc.id_printable, (int)itempos, (int)dpos, (int)dlen);
+			(int)i, key4cc.id_dbgstr, (int)itempos, (int)dpos, (int)dlen);
 
 		de_dbg_indent(c, 1);
 
@@ -3007,7 +3012,7 @@ static int do_tagged_block(deark *c, lctx *d, zztype *zz, int tbnamespace)
 
 	zz_init_with_len(&czz, zz, blklen);
 
-	de_dbg(c, "tagged block '%s' at %d, dpos=%d, dlen=%d", blk4cc.id_printable,
+	de_dbg(c, "tagged block '%s' at %d, dpos=%d, dlen=%d", blk4cc.id_dbgstr,
 		(int)zz->startpos, (int)czz.startpos, (int)blklen);
 
 	de_dbg_indent(c, 1);
@@ -3285,7 +3290,7 @@ static int do_action_item(deark *c, lctx *d, zztype *zz)
 	s = ucstring_create(c);
 
 	psd_read_fourcc_zz(c, d, zz, &id4cc);
-	de_dbg(c, "identifier type: '%s'", id4cc.id_printable);
+	de_dbg(c, "identifier type: '%s'", id4cc.id_dbgstr);
 	if(id4cc.id==CODE_TEXT) {
 		read_prefixed_string_to_ucstring(c, d, s, zz);
 		de_dbg(c, "id: \"%s\"", ucstring_getpsz_d(s));
@@ -3296,7 +3301,7 @@ static int do_action_item(deark *c, lctx *d, zztype *zz)
 		de_dbg(c, "itemID: %d", (int)id_long);
 	}
 	else {
-		de_err(c, "Unsupported identifier type: '%s'", id4cc.id_printable);
+		de_err(c, "Unsupported identifier type: '%s'", id4cc.id_sanitized_sz);
 		goto done;
 	}
 
@@ -3426,6 +3431,15 @@ static void init_version_specific_info(deark *c, lctx *d)
 		d->intsize_2or4 = 2;
 		d->intsize_4or8 = 4;
 	}
+
+	// The PSD spec does not say what encoding these strings use.
+	// Some sources say they use MacRoman, and *some* PSD files do use MacRoman.
+	// But other PSD files use other encodings, and I don't know how to know what
+	// encoding they use.
+	if(c->input_encoding==DE_ENCODING_UNKNOWN)
+		d->input_encoding = DE_ENCODING_MACROMAN;
+	else
+		d->input_encoding = c->input_encoding;
 }
 
 static int do_psd_header(deark *c, lctx *d, de_int64 pos)
@@ -3530,6 +3544,14 @@ static void do_bitmap(deark *c, lctx *d, const struct image_info *iinfo, dbuf *f
 	de_byte b;
 
 	if(!de_good_image_dimensions(c, iinfo->width, iinfo->height)) goto done;
+
+	if(iinfo->color_mode==PSD_CM_BITMAP && iinfo->bits_per_channel==1 &&
+		iinfo->num_channels==1)
+	{
+		de_convert_and_write_image_bilevel(f, 0, iinfo->width, iinfo->height,
+			(iinfo->width+7)/8, DE_CVTF_WHITEISZERO, NULL, 0);
+		goto done;
+	}
 
 	if(iinfo->bits_per_channel!=8 && iinfo->bits_per_channel!=16 &&
 		iinfo->bits_per_channel!=32)
@@ -3674,22 +3696,22 @@ static void de_run_psd(deark *c, de_module_params *mparams)
 	zz = de_malloc(c, sizeof(zztype));
 	zz_init_absolute(zz, 0, c->infile->len);
 
-	if(mparams && mparams->codes) {
-		if(de_strchr(mparams->codes, 'R')) { // Image resources
+	if(mparams && mparams->in_params.codes) {
+		if(de_strchr(mparams->in_params.codes, 'R')) { // Image resources
 			d->version = 1;
 			init_version_specific_info(c, d);
 			do_image_resource_blocks(c, d, zz);
-			mparams->returned_flags = 0;
-			if(d->has_iptc) mparams->returned_flags |= 0x02;
+			mparams->out_params.flags = 0;
+			if(d->has_iptc) mparams->out_params.flags |= 0x02;
 			goto done;
 		}
-		if(de_strchr(mparams->codes, 'T')) { // Tagged blocks
+		if(de_strchr(mparams->in_params.codes, 'T')) { // Tagged blocks
 			d->version = 1;
 			init_version_specific_info(c, d);
 			do_external_tagged_blocks(c, d, zz);
 			goto done;
 		}
-		if(de_strchr(mparams->codes, 'B')) { // Tagged blocks, PSB-format
+		if(de_strchr(mparams->in_params.codes, 'B')) { // Tagged blocks, PSB-format
 			d->version = 2;
 			init_version_specific_info(c, d);
 			do_external_tagged_blocks(c, d, zz);

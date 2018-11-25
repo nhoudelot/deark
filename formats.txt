@@ -51,7 +51,7 @@ Deark -- Information about supported formats
 * AutoCAD Slide Library (.slb) (module="autocad_slb")
   - Extracts the component AutoCAD Slide (.sld) files.
 
-* Award BIOS logo (EPA, AWBM) (module="awbm") (experimental)
+* Award BIOS logo (EPA, AWBM) (module="awbm")
   - Supports version 1
   - Supports 4-bit and 8-bit version 2
   Options
@@ -62,6 +62,8 @@ Deark -- Information about supported formats
   - Must use "-m bintext", unless the file has a SAUCE record.
   Options
    -opt char:width=<n> - Number of characters per row
+
+* BMI (Zoner bitmap) (module="bmi") (experimental)
 
 * BMP (Windows bitmap) (module="bmp")
 
@@ -104,10 +106,6 @@ Deark -- Information about supported formats
   software.
   - Cannot be autodetected. You must use "-m compfacei".
 
-* Dr. Halo .CUT (module="drhalocut")
-  Options
-   -file2 <file.pal> - Read the palette from this file.
-
 * DIB (module="dib")
   - Adds a BMP file header to a raw Windows DIB file.
 
@@ -120,10 +118,14 @@ Deark -- Information about supported formats
 * Doodle (Atari) (module="doodle")
   - Supports high resolution (640x400) only
 
+* Dr. Halo .CUT (module="drhalocut")
+  Options
+   -file2 <file.pal> - Read the palette from this file.
+
 * EggPaint (*.trp) (module="eggpaint")
 
-* Enhanced Windows Metafile (module=emf) (experimental)
-  - Extract BMP images from some records.
+* Enhanced Windows Metafile (module=emf)
+  - Extract BMP and other images from some records.
 
 * EPOC MBM/Sketch/AIF (module="epocimage")
   - Supports grayscale with 2 or 4 bits/pixel
@@ -146,12 +148,16 @@ Deark -- Information about supported formats
 
 * GIF (module="gif")
   - Extract the image, or every frame from an animated or mult-image GIF.
-  - Extract text from plaintext extensions, as separate text files. Text only;
-     colors are ignored.
+  - Plain text extensions are supported.
   - Extract comments (use -a).
   Options
    -opt gif:raw - Extract the individual component images, instead of rendering
-     the frame in full.
+     the frame in full. Plain text extensions might be extracted as text files,
+     instead of images of text.
+   -opt gif:dumpplaintext - Extract plain text extensions to text files (in
+     addition to rendering them to the image).
+   -opt gif:dumpscreen - Save a copy of the "screen" after the last image in
+     the file has been disposed of. Incompatible with gif:raw.
 
 * GodPaint (Atari Falcon) (module="godpaint")
 
@@ -209,13 +215,15 @@ Deark -- Information about supported formats
 * JPEG and JPEG-LS (module="jpeg")
   - Extract ICC profiles.
   - Extract JFXX JPEG-formatted thumbnails (rare).
+  - Extract JFIF uncompressed thumbnails (rare).
   - Extract XMP data, including "extended XMP".
   - Extract JPEG-HDR residual images.
   - Process Exif data (or extract it: use -a)
   - Process Photoshop-related data.
   - Process Multi-Picture Format (MPF/MPO) data.
-  - Extract comments (use -a). Comment bytes are extracted as-is, because there
-     is no way to determine the character encoding.
+  - Extract comments (use -a). Comment bytes are extracted as-is, or
+     interpreted based on the "-inenc" option.
+  - Extract Exif FPXR streams (use -a).
   Options
    -opt jpeg:stopateoi - Stop when the end of the first JPEG "file" has been
      found, instead of looking for additional JPEG data after it (as in MPO
@@ -245,7 +253,7 @@ Deark -- Information about supported formats
   Options
    -opt macpaint:macbinary=<0|1>
 
-* MAKIchan graphics (module="makichan") (experimental)
+* MAKIchan graphics (module="makichan")
   - Supports most 16- and 256-color .MAG images
   - Supports most 16-color .MKI images
   - Does not support .MAX
@@ -256,7 +264,7 @@ Deark -- Information about supported formats
 * MSP (Microsoft Paint graphics) (module="msp")
   - Version 1 and 2
 
-* MS Word for DOS Screen Capture (module="mswordscr") (experimental)
+* MS Word for DOS Screen Capture (module="mswordscr")
   Supports the same options as the pcx module.
 
 * NEOchrome (.NEO) (module="neochrome")
@@ -341,6 +349,7 @@ Deark -- Information about supported formats
 * PNG / MNG / JNG (module="png")
   - Extract XMP data.
   - Extract ICC profiles.
+  - Extract or process various other metadata formats.
 
 * PNM/PBM/PGM/PPM/PAM (module="pnm")
 
@@ -348,6 +357,8 @@ Deark -- Information about supported formats
   Options
    -file2 <file.sdr> - Use this "name" file
    -opt namefile=<file.sdr> - Use this "name" file
+
+* PrintPartner .GPH (module="pp_gph")
 
 * Print Shop .DAT format (module="printshop")
   - Not all files can be autodetected. You may need "-m printshop".
@@ -378,10 +389,6 @@ Deark -- Information about supported formats
    -opt psionpic:bw - Do not try to detect grayscale images. Write each bitmap
      as a separate image.
 
-* RSC (GEM resource) (module="rsc") (experimental)
-  - Supports both "old" and "new" formats.
-  - Extracts icons and bitmaps.
-
 * QDV (Giffer) (module="qdv")
 
 * QTIF (QuickTime image) (module="qtif")
@@ -395,6 +402,10 @@ Deark -- Information about supported formats
   - Autodetection may not always work. May need "-m rosprite".
   - "Old" format is pretty well supported.
   - "New" format is mostly supported, but not well-tested.
+
+* RSC (GEM resource) (module="rsc") (experimental)
+  - Supports both "old" and "new" formats.
+  - Extracts icons and bitmaps.
 
 * SHG and MRB (module="shg")
   Segmented Hypergraphics and Multi-Resolution Bitmap formats are used in
@@ -412,7 +423,7 @@ Deark -- Information about supported formats
 
 * Spectrum 512 uncompressed (.spu) (module="spectrum512u")
 
-* STOS Memory Bank (module="stos") (experimental)
+* STOS Memory Bank (module="stos")
   - Decode "sprite bank" images
   - Decode "icon bank" images
 
@@ -449,8 +460,9 @@ Deark -- Information about supported formats
 
 * VORT ray tracer .pix image (module="vort") (experimental/incomplete)
 
-* Windows Metafile (module=wmf) (experimental)
+* Windows Metafile (module=wmf)
   - Extract BMP images from some records.
+  - Extract embedded EMF documents.
 
 * Winzle (module=winzle)
   - Convert Winzle obfuscated BMP (.wzl) to BMP.
@@ -476,6 +488,8 @@ Deark -- Information about supported formats
 
 * YBM (Bennet Yee face format) (module="ybm")
 
+* ZBR ((Zoner) Zebra Metafile) (module="zbr")
+  - Extract the preview image.
 
 === Font formats ===
 
@@ -509,6 +523,10 @@ Deark -- Information about supported formats
 * BinHex (.hqx) (module="binhex")
   - Extract data and resource forks to separate files.
 
+* CAB (Microsoft Cabinet) (module="cab")
+  - Files can be parsed, but there is usually nothing that can be extracted
+    from them.
+
 * compress (legacy Unix .Z format) (module="compress")
 
 * cpio (module="cpio")
@@ -520,10 +538,15 @@ Deark -- Information about supported formats
 
 * Gzip (module="gzip")
 
+* LHA/LZH/PMA (module="lha")
+  - Files can be parsed, but there is usually nothing that can be extracted
+    from them.
+
 * Microsoft Compound File Binary (module="cfb")
-  - Extract the embedded data streams, though many of them may not be in a
-    standard file format.
+  - Streams are not extracted by default, but some streams contain images and
+    other objects that can be extracted.
   Options
+   -opt cfb:extractstreams - Extract raw streams, instead of decoding.
    -opt cfb:fmt=raw - Do not try to detect the document type.
    -opt cfb:fmt=auto - Autodetect the document type (default).
    -opt cfb:fmt=thumbsdb - Treat the file as a Thumbs.db file.
@@ -551,6 +574,10 @@ Deark -- Information about supported formats
 
 * tar (module="tar") (experimental/incomplete)
   - Rare files may need "-m tar", as tar is difficult to autodetect.
+
+* WOZ (module="woz") (incomplete)
+  Apple II disk image format.
+  - Some metadata is parsed, but the disk contents are not extracted or listed.
 
 * ZIP (module="zip")
   - Limited support
@@ -607,7 +634,9 @@ Deark -- Information about supported formats
 * CRC-32 (module="crc32")
   - Print the IEEE CRC-32 of the file.
 
-* EBML/Matroska/MKV/WebM (module="ebml") (experimental/incomplete)
+* EBML/Matroska/MKV/WebM (module="ebml")
+  Options
+   -opt ebml:encodedid : Also print element ID numbers in raw (encoded) form.
 
 * EXE/PE/NE/etc. (module="exe")
   EXE format can be complex. Not all varieties are correctly supported.
@@ -633,8 +662,11 @@ Deark -- Information about supported formats
   - Extract captions/abstracts (use -a).
   - Extract raster caption bitmaps.
 
-* ISO-BMFF (module="bmff") (experimental/incomplete)
-  - MP4, QuickTime .mov, etc.
+* ISO-BMFF (module="bmff") (incomplete)
+  - MP4, QuickTime .mov, HEIF, etc.
+  Options
+   -opt bmff:maxentries=<n> : Maximum number of sample table entries to print
+     when using -d. This applies to several boxes, such as 'stsz'.
 
 * JPEG scan (module="jpegscan")
   - This module tries to find and extract embedded JPEG and JPEG-LS files from
@@ -644,12 +676,22 @@ Deark -- Information about supported formats
   - Extract SHG/MRB graphics
   - Extract icon (rarely present)
 
-* MP3 audio (module="mp3") (experimental)
+* MIDI (module="midi")
+  - Files can be parsed, but there is usually nothing that can be extracted
+    from them.
+
+* MP3 / MPEG audio (module="mpegaudio" or "mp3")
   - Not all files can be autodetected.
-  - Mainly for ID3 metadata. The audio data is not converted.
+  - Mainly for ID3 and APE metadata. The audio data is not converted.
 
 * NULL (module="null")
   - Do nothing.
+
+* Ogg (Vorbis, Theora, etc.) (module="ogg")
+  - Files can be parsed, but there is usually nothing that can be extracted
+    from them.
+  Options
+   -opt ogg:hexdump : With -d, include a hex dump of more data than usual.
 
 * Photoshop Action format (.atn) (module="ps_action")
   - Files can be parsed, but there is usually nothing that can be extracted
@@ -684,8 +726,7 @@ Deark -- Information about supported formats
   Metaformat used by WAV, AVI, WebP, etc.
   - RIFF can be parsed, but in many cases nothing can be extracted from it.
 
-* WRI - Microsoft Write (module="wri") (experimental/incomplete)
-  - Extract raw text to an HTML file. No formatting, etc. Only Windows-1252
-    encoding is supported.
+* WRI - Microsoft Write (module="wri") (incomplete)
+  - Extract raw text to an HTML file. Very little formatting, etc.
   - Extract most pictures.
 

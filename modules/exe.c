@@ -1114,8 +1114,12 @@ static const char *identify_lx_rsrc(deark *c, lctx *d, de_int64 pos, de_int64 le
 	if(!de_memcmp(buf, "BM", 2)) {
 		return is_ba ? "ba.bmp" : "bmp";
 	}
-	if(!de_memcmp(buf, "CI", 2) || !de_memcmp(buf, "IC", 2)) return "os2.ico";
-	if(!de_memcmp(buf, "CP", 2) || !de_memcmp(buf, "PT", 2)) return "ptr";
+	if(!de_memcmp(buf, "CI", 2) || !de_memcmp(buf, "IC", 2)) {
+		return is_ba ? "ba.os2.ico" : "os2.ico";
+	}
+	if(!de_memcmp(buf, "CP", 2) || !de_memcmp(buf, "PT", 2)) {
+		return is_ba ? "ba.ptr" : "ptr";
+	}
 	return NULL;
 }
 
@@ -1223,6 +1227,7 @@ static void do_lx_or_le_rsrc_tbl(deark *c, lctx *d)
 static void de_run_exe(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
+	de_int64 eocdpos = 0;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -1238,6 +1243,9 @@ static void de_run_exe(deark *c, de_module_params *mparams)
 		do_lx_or_le_rsrc_tbl(c, d);
 	}
 
+	if(de_fmtutil_find_zip_eocd(c, c->infile, &eocdpos)) {
+		de_msg(c, "Note: This might be a self-extracting ZIP file (try \"-m zip\").");
+	}
 	de_free(c, d);
 }
 

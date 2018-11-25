@@ -201,6 +201,50 @@ de_byte dbuf_getbyte(dbuf *f, de_int64 pos)
 	return 0x00;
 }
 
+de_byte dbuf_getbyte_p(dbuf *f, de_int64 *ppos)
+{
+	de_byte b;
+	b = dbuf_getbyte(f, *ppos);
+	(*ppos)++;
+	return b;
+}
+
+static de_int64 dbuf_getuint_ext_be_direct(const de_byte *m, unsigned int nbytes)
+{
+	unsigned int k;
+	de_uint64 val = 0;
+
+	if(nbytes>8) return 0;
+	for(k=0; k<nbytes; k++) {
+		val = (val<<8) | (de_uint64)m[k];
+	}
+	return (de_int64)val;
+}
+
+static de_int64 dbuf_getuint_ext_le_direct(const de_byte *m, unsigned int nbytes)
+{
+	unsigned int k;
+	de_uint64 val = 0;
+
+	if(nbytes>8) return 0;
+	for(k=0; k<nbytes; k++) {
+		val |= ((de_uint64)m[k])<<k;
+	}
+	return (de_int64)val;
+}
+
+static de_int64 dbuf_getuint_ext_x(dbuf *f, de_int64 pos, unsigned int nbytes,
+	int is_le)
+{
+	de_byte m[8];
+	if(nbytes>8) return 0;
+	dbuf_read(f, m, pos, (de_int64)nbytes);
+	if(is_le) {
+		return dbuf_getuint_ext_le_direct(m, nbytes);
+	}
+	return dbuf_getuint_ext_be_direct(m, nbytes);
+}
+
 de_int64 de_getui16be_direct(const de_byte *m)
 {
 	return (de_int64)(((de_uint32)m[1]) | (((de_uint32)m[0])<<8));
@@ -213,6 +257,14 @@ de_int64 dbuf_getui16be(dbuf *f, de_int64 pos)
 	return de_getui16be_direct(m);
 }
 
+de_int64 dbuf_getui16be_p(dbuf *f, de_int64 *ppos)
+{
+	de_byte m[2];
+	dbuf_read(f, m, *ppos, 2);
+	(*ppos) += 2;
+	return de_getui16be_direct(m);
+}
+
 de_int64 de_getui16le_direct(const de_byte *m)
 {
 	return (de_int64)(((de_uint32)m[0]) | (((de_uint32)m[1])<<8));
@@ -222,6 +274,14 @@ de_int64 dbuf_getui16le(dbuf *f, de_int64 pos)
 {
 	de_byte m[2];
 	dbuf_read(f, m, pos, 2);
+	return de_getui16le_direct(m);
+}
+
+de_int64 dbuf_getui16le_p(dbuf *f, de_int64 *ppos)
+{
+	de_byte m[2];
+	dbuf_read(f, m, *ppos, 2);
+	(*ppos) += 2;
 	return de_getui16le_direct(m);
 }
 
@@ -241,6 +301,22 @@ de_int64 dbuf_geti16le(dbuf *f, de_int64 pos)
 	return n;
 }
 
+de_int64 dbuf_geti16be_p(dbuf *f, de_int64 *ppos)
+{
+	de_int64 n;
+	n = dbuf_geti16be(f, *ppos);
+	(*ppos) += 2;
+	return n;
+}
+
+de_int64 dbuf_geti16le_p(dbuf *f, de_int64 *ppos)
+{
+	de_int64 n;
+	n = dbuf_geti16le(f, *ppos);
+	(*ppos) += 2;
+	return n;
+}
+
 de_int64 de_getui32be_direct(const de_byte *m)
 {
 	return (de_int64)(((de_uint32)m[3]) | (((de_uint32)m[2])<<8) |
@@ -254,6 +330,14 @@ de_int64 dbuf_getui32be(dbuf *f, de_int64 pos)
 	return de_getui32be_direct(m);
 }
 
+de_int64 dbuf_getui32be_p(dbuf *f, de_int64 *ppos)
+{
+	de_byte m[4];
+	dbuf_read(f, m, *ppos, 4);
+	(*ppos) += 4;
+	return de_getui32be_direct(m);
+}
+
 de_int64 de_getui32le_direct(const de_byte *m)
 {
 	return (de_int64)(((de_uint32)m[0]) | (((de_uint32)m[1])<<8) |
@@ -264,6 +348,14 @@ de_int64 dbuf_getui32le(dbuf *f, de_int64 pos)
 {
 	de_byte m[4];
 	dbuf_read(f, m, pos, 4);
+	return de_getui32le_direct(m);
+}
+
+de_int64 dbuf_getui32le_p(dbuf *f, de_int64 *ppos)
+{
+	de_byte m[4];
+	dbuf_read(f, m, *ppos, 4);
+	(*ppos) += 4;
 	return de_getui32le_direct(m);
 }
 
@@ -281,7 +373,23 @@ de_int64 dbuf_geti32le(dbuf *f, de_int64 pos)
 	return (de_int64)(de_int32)(de_uint32)n;
 }
 
-de_int64 de_geti64be_direct(const de_byte *m)
+de_int64 dbuf_geti32be_p(dbuf *f, de_int64 *ppos)
+{
+	de_int64 n;
+	n = dbuf_geti32be(f, *ppos);
+	(*ppos) += 4;
+	return n;
+}
+
+de_int64 dbuf_geti32le_p(dbuf *f, de_int64 *ppos)
+{
+	de_int64 n;
+	n = dbuf_geti32le(f, *ppos);
+	(*ppos) += 4;
+	return n;
+}
+
+de_uint64 de_getui64be_direct(const de_byte *m)
 {
 	unsigned int i;
 	de_uint64 val = 0;
@@ -289,7 +397,12 @@ de_int64 de_geti64be_direct(const de_byte *m)
 	for(i=0; i<8; i++) {
 		val |= ((de_uint64)m[i])<<((7-i)*8);
 	}
-	return (de_int64)val;
+	return val;
+}
+
+de_int64 de_geti64be_direct(const de_byte *m)
+{
+	return (de_int64)de_getui64be_direct(m);
 }
 
 de_int64 dbuf_geti64be(dbuf *f, de_int64 pos)
@@ -299,7 +412,7 @@ de_int64 dbuf_geti64be(dbuf *f, de_int64 pos)
 	return de_geti64be_direct(m);
 }
 
-de_int64 de_geti64le_direct(const de_byte *m)
+de_uint64 de_getui64le_direct(const de_byte *m)
 {
 	unsigned int i;
 	de_uint64 val = 0;
@@ -307,7 +420,12 @@ de_int64 de_geti64le_direct(const de_byte *m)
 	for(i=0; i<8; i++) {
 		val |= ((de_uint64)m[i])<<(i*8);
 	}
-	return (de_int64)val;
+	return val;
+}
+
+de_int64 de_geti64le_direct(const de_byte *m)
+{
+	return (de_int64)de_getui64le_direct(m);
 }
 
 de_int64 dbuf_geti64le(dbuf *f, de_int64 pos)
@@ -345,6 +463,51 @@ de_int64 dbuf_geti64x(dbuf *f, de_int64 pos, int is_le)
 {
 	if(is_le) return dbuf_geti64le(f, pos);
 	return dbuf_geti64be(f, pos);
+}
+
+de_uint64 dbuf_getui64be(dbuf *f, de_int64 pos)
+{
+	de_byte m[8];
+	dbuf_read(f, m, pos, 8);
+	return de_getui64be_direct(m);
+}
+
+de_uint64 dbuf_getui64le(dbuf *f, de_int64 pos)
+{
+	de_byte m[8];
+	dbuf_read(f, m, pos, 8);
+	return de_getui64le_direct(m);
+}
+
+de_uint64 dbuf_getui64x(dbuf *f, de_int64 pos, int is_le)
+{
+	if(is_le) return dbuf_getui64le(f, pos);
+	return dbuf_getui64be(f, pos);
+}
+
+de_int64 dbuf_getint_ext(dbuf *f, de_int64 pos, unsigned int nbytes,
+	int is_le, int is_signed)
+{
+	if(is_signed) {
+		// TODO: Extend this to any number of bytes, 1-8.
+		switch(nbytes) {
+		case 1: return (de_int64)(signed char)dbuf_getbyte(f, pos); break;
+		case 2: return dbuf_geti16x(f, pos, is_le); break;
+		case 4: return dbuf_geti32x(f, pos, is_le); break;
+		case 8: return dbuf_geti64x(f, pos, is_le); break;
+		}
+	}
+	else {
+		switch(nbytes) {
+		case 1: return (de_int64)dbuf_getbyte(f, pos); break;
+		case 2: return dbuf_getui16x(f, pos, is_le); break;
+		case 4: return dbuf_getui32x(f, pos, is_le); break;
+		case 8: return dbuf_geti64x(f, pos, is_le); break;
+		default:
+			return dbuf_getuint_ext_x(f, pos, nbytes, is_le);
+		}
+	}
+	return 0;
 }
 
 static void init_fltpt_decoder(deark *c)
@@ -746,6 +909,11 @@ dbuf *dbuf_create_output_file(deark *c, const char *ext, de_finfo *fi,
 
 	c->num_files_extracted++;
 
+	if(c->extrlist_file) {
+		fprintf(c->extrlist_file, "%s\n", f->name);
+		fflush(c->extrlist_file);
+	}
+
 	if(c->list_mode) {
 		f->btype = DBUF_TYPE_NULL;
 		de_msg(c, "%s", f->name);
@@ -767,7 +935,7 @@ dbuf *dbuf_create_output_file(deark *c, const char *ext, de_finfo *fi,
 	else {
 		de_msg(c, "Writing %s", f->name);
 		f->btype = DBUF_TYPE_OFILE;
-		f->fp = de_fopen_for_write(c, f->name, msgbuf, sizeof(msgbuf));
+		f->fp = de_fopen_for_write(c, f->name, msgbuf, sizeof(msgbuf), 0);
 
 		if(!f->fp) {
 			de_err(c, "Failed to write %s: %s", f->name, msgbuf);
@@ -1284,7 +1452,7 @@ int dbuf_dump_to_file(dbuf *inf, const char *fn)
 	dbuf *tmpdbuf = NULL;
 	deark *c = inf->c;
 
-	fp = de_fopen_for_write(c, fn, msgbuf, sizeof(msgbuf));
+	fp = de_fopen_for_write(c, fn, msgbuf, sizeof(msgbuf), 0);
 	if(!fp) return 0;
 
 	tmpdbuf = dbuf_create_membuf(c, inf->len, 1);
@@ -1297,21 +1465,39 @@ int dbuf_dump_to_file(dbuf *inf, const char *fn)
 	return 1;
 }
 
-static void reverse_fourcc(de_byte *buf)
+static void reverse_fourcc(de_byte *buf, int nbytes)
 {
-	de_byte tmpc;
-	tmpc=buf[0]; buf[0]=buf[3]; buf[3]=tmpc;
-	tmpc=buf[1]; buf[1]=buf[2]; buf[2]=tmpc;
+	size_t k;
+
+	for(k=0; k<((size_t)nbytes)/2; k++) {
+		de_byte tmpc;
+		tmpc = buf[k];
+		buf[k] = buf[nbytes-1-k];
+		buf[nbytes-1-k] = tmpc;
+	}
 }
 
-void dbuf_read_fourcc(dbuf *f, de_int64 pos, struct de_fourcc *fcc, int is_reversed)
+// Though we call it a "fourcc", we support 'nbytes' from 1 to 4.
+void dbuf_read_fourcc(dbuf *f, de_int64 pos, struct de_fourcc *fcc,
+	int nbytes, unsigned int flags)
 {
-	dbuf_read(f, fcc->bytes, pos, 4);
-	if(is_reversed) {
-		reverse_fourcc(fcc->bytes);
+	if(nbytes<1 || nbytes>4) return;
+
+	de_memset(fcc->bytes, 0, 4);
+	dbuf_read(f, fcc->bytes, pos, (de_int64)nbytes);
+	if(flags&DE_4CCFLAG_REVERSED) {
+		reverse_fourcc(fcc->bytes, nbytes);
 	}
+
 	fcc->id = (de_uint32)de_getui32be_direct(fcc->bytes);
-	de_bytes_to_printable_sz(fcc->bytes, 4,
-		fcc->id_printable, sizeof(fcc->id_printable),
+	if(nbytes<4) {
+		fcc->id >>= (4-(unsigned int)nbytes)*8;
+	}
+
+	de_bytes_to_printable_sz(fcc->bytes, (de_int64)nbytes,
+		fcc->id_sanitized_sz, sizeof(fcc->id_sanitized_sz),
 		0, DE_ENCODING_ASCII);
+	de_bytes_to_printable_sz(fcc->bytes, (de_int64)nbytes,
+		fcc->id_dbgstr, sizeof(fcc->id_dbgstr),
+		DE_CONVFLAG_ALLOW_HL, DE_ENCODING_ASCII);
 }

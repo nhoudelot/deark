@@ -23,7 +23,9 @@
 #define DE_ENCODING_PETSCII      8
 #define DE_ENCODING_CP437_G      10
 #define DE_ENCODING_CP437_C      11
-#define DE_ENCODING_WINDOWS1252  20
+#define DE_ENCODING_WINDOWS1250  20
+#define DE_ENCODING_WINDOWS1251  21
+#define DE_ENCODING_WINDOWS1252  22
 #define DE_ENCODING_UTF16LE      30
 #define DE_ENCODING_UTF16BE      31
 #define DE_ENCODING_MACROMAN     40
@@ -41,17 +43,32 @@
 
 #define DE_ITEMS_IN_ARRAY(x) (sizeof(x)/sizeof(x[0]))
 
-typedef struct de_module_params_struct {
+struct de_module_in_params {
 	const char *codes;
-	// returned_flags can be module-specific.
+	//  0x01: offset_in_parent is set
+	de_uint32 flags;
+	de_int64 offset_in_parent;
+};
+
+struct de_module_out_params {
+	// flags can be module-specific.
 	//  psd: 0x02: has_iptc
 	//  tiff: 0x08: has_exif_gps
 	//  tiff: 0x10: first IFD has subsampling=cosited
 	//  tiff: 0x20: uint1 = first IFD's orientation
 	//  tiff: 0x40: uint2 = Exif version
-	de_uint32 returned_flags;
+	//  tiff: 0x80: int64_1 = MPF min expected file size, uint3 = image count
+	de_uint32 flags;
 	de_uint32 uint1;
 	de_uint32 uint2;
+	de_uint32 uint3;
+	de_int64 int64_1;
+};
+
+typedef struct de_module_params_struct {
+	struct de_module_in_params in_params;
+	struct de_module_out_params out_params;
+
 } de_module_params;
 
 #define DE_DECLARE_MODULE(x) void x(deark *c, struct deark_module_info *mi)
@@ -128,7 +145,7 @@ struct dbuf_struct {
 	unsigned int mode_flags;
 
 	int write_memfile_to_zip_archive; // used for DBUF_TYPE_OFILE, at least
-	char *name; // used for DBUF_TYPE_OFILE
+	char *name; // used for DBUF_TYPE_OFILE (utf-8)
 
 	de_int64 membuf_alloc;
 	de_byte *membuf_buf;
@@ -278,9 +295,11 @@ struct deark_struct {
 	const char *dprefix;
 
 	void *zip_data;
+	FILE *extrlist_file;
 
 	char *base_output_filename;
 	char *output_archive_filename;
+	char *extrlist_filename;
 
 	struct de_timestamp current_time;
 
@@ -343,15 +362,17 @@ void de_dbg3(deark *c, const char *fmt, ...)
   de_gnuc_attribute ((format (printf, 2, 3)));
 void de_msg(deark *c, const char *fmt, ...)
   de_gnuc_attribute ((format (printf, 2, 3)));
+void de_vwarn(deark *c, const char *fmt, va_list ap);
 void de_warn(deark *c, const char *fmt, ...)
   de_gnuc_attribute ((format (printf, 2, 3)));
+void de_verr(deark *c, const char *fmt, va_list ap);
 void de_err(deark *c, const char *fmt, ...)
   de_gnuc_attribute ((format (printf, 2, 3)));
 
 FILE* de_fopen_for_read(deark *c, const char *fn, de_int64 *len,
 	char *errmsg, size_t errmsg_len, unsigned int *returned_flags);
 FILE* de_fopen_for_write(deark *c, const char *fn,
-	char *errmsg, size_t errmsg_len);
+	char *errmsg, size_t errmsg_len, unsigned int flags);
 
 int de_fclose(FILE *fp);
 
@@ -404,6 +425,8 @@ de_int64 de_getui32be_direct(const de_byte *m);
 de_int64 de_getui32le_direct(const de_byte *m);
 de_int64 de_geti64be_direct(const de_byte *m);
 de_int64 de_geti64le_direct(const de_byte *m);
+de_uint64 de_getui64be_direct(const de_byte *m);
+de_uint64 de_getui64le_direct(const de_byte *m);
 
 void dbuf_read(dbuf *f, de_byte *buf, de_int64 pos, de_int64 len);
 de_int64 dbuf_standard_read(dbuf *f, de_byte *buf, de_int64 n, de_int64 *fpos);
@@ -424,6 +447,23 @@ de_int64 dbuf_geti32x(dbuf *f, de_int64 pos, int is_le);
 de_int64 dbuf_geti64be(dbuf *f, de_int64 pos);
 de_int64 dbuf_geti64le(dbuf *f, de_int64 pos);
 de_int64 dbuf_geti64x(dbuf *f, de_int64 pos, int is_le);
+de_uint64 dbuf_getui64be(dbuf *f, de_int64 pos);
+de_uint64 dbuf_getui64le(dbuf *f, de_int64 pos);
+de_uint64 dbuf_getui64x(dbuf *f, de_int64 pos, int is_le);
+
+de_int64 dbuf_getint_ext(dbuf *f, de_int64 pos, unsigned int nbytes,
+	int is_le, int is_signed);
+
+// The _p functions update a caller-supplied position.
+de_byte dbuf_getbyte_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_getui16be_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_getui16le_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_getui32le_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_getui32be_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_geti16be_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_geti16le_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_geti32be_p(dbuf *f, de_int64 *ppos);
+de_int64 dbuf_geti32le_p(dbuf *f, de_int64 *ppos);
 
 // Only format modules should use these convenience macros.
 // (The DE_WINDOWS condition has no functional purpose; it's a hack to make
@@ -441,6 +481,15 @@ de_int64 dbuf_geti64x(dbuf *f, de_int64 pos, int is_le);
 #define de_geti32le(p) dbuf_geti32le(c->infile,p)
 #define de_geti64be(p) dbuf_geti64be(c->infile,p)
 #define de_geti64le(p) dbuf_geti64le(c->infile,p)
+#define de_getbyte_p(p) dbuf_getbyte_p(c->infile,p)
+#define de_getui16be_p(p) dbuf_getui16be_p(c->infile,p)
+#define de_getui16le_p(p) dbuf_getui16le_p(c->infile,p)
+#define de_getui32be_p(p) dbuf_getui32be_p(c->infile,p)
+#define de_getui32le_p(p) dbuf_getui32le_p(c->infile,p)
+#define de_geti16be_p(p) dbuf_geti16be_p(c->infile,p)
+#define de_geti16le_p(p) dbuf_geti16le_p(c->infile,p)
+#define de_geti32be_p(p) dbuf_geti32be_p(c->infile,p)
+#define de_geti32le_p(p) dbuf_geti32le_p(c->infile,p)
 #endif
 
 // Read IEEE 754 floating point
@@ -561,9 +610,12 @@ int dbuf_find_line(dbuf *f, de_int64 pos1, de_int64 *pcontent_len, de_int64 *pto
 struct de_fourcc {
   de_byte bytes[4];
   de_uint32 id;
-  char id_printable[8];
+  char id_sanitized_sz[8]; // NUL-terminated printable ASCII
+  char id_dbgstr[32]; // Usable only with de_dbg()
 };
-void dbuf_read_fourcc(dbuf *f, de_int64 pos, struct de_fourcc *fcc, int is_reversed);
+#define DE_4CCFLAG_REVERSED 0x1
+void dbuf_read_fourcc(dbuf *f, de_int64 pos, struct de_fourcc *fcc, int nbytes,
+	unsigned int flags);
 
 ///////////////////////////////////////////
 
@@ -685,6 +737,7 @@ de_uint32 de_palette_ega64(int index);
 de_uint32 de_palette_pc16(int index);
 de_uint32 de_palette_pcpaint_cga4(int palnum, int index);
 
+const de_byte *de_get_8x8ascii_font_ptr(void);
 const de_byte *de_get_vga_cp437_font_ptr(void);
 
 void de_color_to_css(de_uint32 color, char *buf, int buflen);
@@ -710,6 +763,7 @@ int de_is_ascii(const de_byte *buf, de_int64 buflen);
 #define DE_CONVFLAG_STOP_AT_NUL 0x1
 #define DE_CONVFLAG_MAKE_PRINTABLE 0x2
 #define DE_CONVFLAG_WANT_UTF8 0x10
+#define DE_CONVFLAG_ALLOW_HL  0x20
 
 char de_byte_to_printable_char(de_byte b);
 
@@ -775,15 +829,23 @@ void ucstring_append_flags_item(de_ucstring *s, const char *str);
 void de_write_codepoint_to_html(deark *c, dbuf *f, de_int32 ch);
 
 int de_encoding_name_to_code(const char *encname);
+int de_windows_codepage_to_encoding(deark *c, int wincodepage,
+	char *encname, size_t encname_len, unsigned int flags);
 
 void de_copy_bits(const de_byte *src, de_int64 srcbitnum,
 	de_byte *dst, de_int64 dstbitnum, de_int64 bitstocopy);
 
+void de_decode_base16(deark *c, dbuf *inf, de_int64 pos1, de_int64 len,
+	dbuf *outf, unsigned int flags);
+
 struct de_inthashtable;
 struct de_inthashtable *de_inthashtable_create(deark *c);
 void de_inthashtable_destroy(deark *c, struct de_inthashtable *ht);
-int de_inthashtable_add_item(deark *c, struct de_inthashtable *ht, de_int64 key);
+int de_inthashtable_add_item(deark *c, struct de_inthashtable *ht, de_int64 key, void *value);
+int de_inthashtable_get_item(deark *c, struct de_inthashtable *ht, de_int64 key, void **pvalue);
 int de_inthashtable_item_exists(deark *c, struct de_inthashtable *ht, de_int64 key);
+int de_inthashtable_remove_item(deark *c, struct de_inthashtable *ht, de_int64 key, void **pvalue);
+int de_inthashtable_remove_any_item(deark *c, struct de_inthashtable *ht, de_int64 *pkey, void **pvalue);
 
 ///////////////////////////////////////////
 

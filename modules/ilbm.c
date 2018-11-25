@@ -97,7 +97,9 @@ static int do_bmhd(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 	d->found_bmhd = 1;
 	d->main_img.width = de_getui16be(pos1);
 	d->main_img.height = de_getui16be(pos1+2);
+	de_dbg_dimensions(c, d->main_img.width, d->main_img.height);
 	d->planes = (de_int64)de_getbyte(pos1+8);
+	de_dbg(c, "planes: %d", (int)d->planes);
 	d->main_img.masking_code = de_getbyte(pos1+9);
 	switch(d->main_img.masking_code) {
 	case 0: masking_name = "no transparency"; break;
@@ -106,17 +108,19 @@ static int do_bmhd(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 	case 3: masking_name = "lasso"; break;
 	default: masking_name = "unknown"; break;
 	}
+
 	d->compression = de_getbyte(pos1+10);
+	de_dbg(c, "compression: %d", (int)d->compression);
+
 	d->transparent_color = de_getui16be(pos1+12);
-	d->x_aspect = (de_int64)de_getbyte(pos1+14);
-	d->y_aspect = (de_int64)de_getbyte(pos1+15);
-	de_dbg(c, "dimensions: %d"DE_CHAR_TIMES"%d, planes: %d, compression: %d", (int)d->main_img.width,
-		(int)d->main_img.height, (int)d->planes, (int)d->compression);
-	de_dbg(c, "apect ratio: %d, %d", (int)d->x_aspect, (int)d->y_aspect);
 	de_dbg(c, "masking: %d (%s)", (int)d->main_img.masking_code, masking_name);
 	if(d->main_img.masking_code==2 || d->main_img.masking_code==3) {
 		de_dbg(c, " color key: %d", (int)d->transparent_color);
 	}
+
+	d->x_aspect = (de_int64)de_getbyte(pos1+14);
+	d->y_aspect = (de_int64)de_getbyte(pos1+15);
+	de_dbg(c, "apect ratio: %d, %d", (int)d->x_aspect, (int)d->y_aspect);
 
 	retval = 1;
 done:
@@ -829,6 +833,31 @@ static void do_multipalette(deark *c, lctx *d, de_uint32 chunktype)
 	d->errflag = 1;
 }
 
+static int my_preprocess_ilbm_chunk_fn(deark *c, struct de_iffctx *ictx)
+{
+	const char *name = NULL;
+
+	switch(ictx->chunkctx->chunk4cc.id) {
+	case CODE_BMHD: name="bitmap header"; break;
+	case CODE_BODY: name="image data"; break;
+	case CODE_CAMG: name="Amiga viewport mode"; break;
+	case CODE_CMAP: name="color map"; break;
+	case CODE_CRNG: name="color register range info"; break;
+	case CODE_DPI : name="dots/inch"; break;
+	case CODE_DRNG: name="color cycle"; break;
+	case CODE_GRAB: name="hotspot"; break;
+	case CODE_TINY: name="thumbnail"; break;
+	}
+
+	if(name) {
+		ictx->chunkctx->chunk_name = name;
+	}
+	else {
+		de_fmtutil_default_iff_chunk_identify(c, ictx);
+	}
+	return 1;
+}
+
 static int my_ilbm_chunk_handler(deark *c, struct de_iffctx *ictx)
 {
 	int quitflag = 0;
@@ -840,7 +869,7 @@ static int my_ilbm_chunk_handler(deark *c, struct de_iffctx *ictx)
 	de_dbg_indent_save(c, &saved_indent_level);
 
 	// Remember that we've seen at least one chunk of this type
-	de_inthashtable_add_item(c, d->chunks_seen, (de_int64)ictx->chunkctx->chunk4cc.id);
+	de_inthashtable_add_item(c, d->chunks_seen, (de_int64)ictx->chunkctx->chunk4cc.id, NULL);
 
 	// Pretend we can handle all nonstandard chunks
 	if(!de_fmtutil_is_standard_iff_chunk(c, ictx, ictx->chunkctx->chunk4cc.id)) {
@@ -858,7 +887,7 @@ static int my_ilbm_chunk_handler(deark *c, struct de_iffctx *ictx)
 	case CODE_BODY:
 	case CODE_ABIT:
 		is_vdat = 0;
-		if(!do_body(c, d, ictx, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen,
+		if(!do_body(c, d, ictx, ictx->chunkctx->dpos, ictx->chunkctx->dlen,
 			ictx->chunkctx->chunk4cc.id, &is_vdat)) {
 			d->errflag = 1;
 		}
@@ -873,34 +902,34 @@ static int my_ilbm_chunk_handler(deark *c, struct de_iffctx *ictx)
 
 	case CODE_VDAT:
 		if(ictx->level!=2) break;
-		do_vdat(c, d, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen);
+		do_vdat(c, d, ictx->chunkctx->dpos, ictx->chunkctx->dlen);
 		break;
 
 	case CODE_TINY:
-		do_tiny(c, d, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen);
+		do_tiny(c, d, ictx->chunkctx->dpos, ictx->chunkctx->dlen);
 		break;
 
 	case CODE_BMHD:
-		if(!do_bmhd(c, d, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen)) {
+		if(!do_bmhd(c, d, ictx->chunkctx->dpos, ictx->chunkctx->dlen)) {
 			d->errflag = 1;
 			goto done;
 		}
 		break;
 
 	case CODE_CMAP:
-		do_cmap(c, d, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen);
+		do_cmap(c, d, ictx->chunkctx->dpos, ictx->chunkctx->dlen);
 		break;
 
 	case CODE_CAMG:
-		do_camg(c, d, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen);
+		do_camg(c, d, ictx->chunkctx->dpos, ictx->chunkctx->dlen);
 		break;
 
 	case CODE_DPI:
-		do_dpi(c, d, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen);
+		do_dpi(c, d, ictx->chunkctx->dpos, ictx->chunkctx->dlen);
 		break;
 
 	case CODE_CCRT: // Graphicraft Color Cycling Range and Timing
-		tmp1 = de_geti16be(ictx->chunkctx->chunk_dpos);
+		tmp1 = de_geti16be(ictx->chunkctx->dpos);
 		de_dbg(c, "cycling direction: %d", (int)tmp1);
 		if(tmp1!=0) {
 			d->uses_color_cycling = 1;
@@ -908,9 +937,9 @@ static int my_ilbm_chunk_handler(deark *c, struct de_iffctx *ictx)
 		break;
 
 	case CODE_CRNG:
-		if(ictx->chunkctx->chunk_dlen<8) break;
-		tmp1 = de_getui16be(ictx->chunkctx->chunk_dpos+2);
-		tmp2 = de_getui16be(ictx->chunkctx->chunk_dpos+4);
+		if(ictx->chunkctx->dlen<8) break;
+		tmp1 = de_getui16be(ictx->chunkctx->dpos+2);
+		tmp2 = de_getui16be(ictx->chunkctx->dpos+4);
 		de_dbg(c, "CRNG flags: 0x%04x", (unsigned int)tmp2);
 		if(tmp2&0x1) {
 			d->uses_color_cycling = 1;
@@ -919,7 +948,7 @@ static int my_ilbm_chunk_handler(deark *c, struct de_iffctx *ictx)
 		break;
 
 	case CODE_DRNG:
-		tmp2 = de_getui16be(ictx->chunkctx->chunk_dpos+4);
+		tmp2 = de_getui16be(ictx->chunkctx->dpos+4);
 		de_dbg(c, "DRNG flags: 0x%04x", (unsigned int)tmp2);
 		if(tmp2&0x1) {
 			d->uses_color_cycling = 1;
@@ -927,9 +956,9 @@ static int my_ilbm_chunk_handler(deark *c, struct de_iffctx *ictx)
 		break;
 
 	case CODE_GRAB:
-		if(ictx->chunkctx->chunk_dlen<4) break;
-		tmp1 = de_getui16be(ictx->chunkctx->chunk_dpos);
-		tmp2 = de_getui16be(ictx->chunkctx->chunk_dpos+2);
+		if(ictx->chunkctx->dlen<4) break;
+		tmp1 = de_getui16be(ictx->chunkctx->dpos);
+		tmp2 = de_getui16be(ictx->chunkctx->dpos+2);
 		de_dbg(c, "hotspot: (%d, %d)", (int)tmp1, (int)tmp2);
 		break;
 
@@ -954,13 +983,8 @@ static int my_on_std_container_start_fn(deark *c, struct de_iffctx *ictx)
 {
 	lctx *d = (lctx*)ictx->userdata;
 
-	de_dbg2(c, "std_container_start(level=%d, type=%08x)", ictx->level,
-		(unsigned int)ictx->curr_container_contentstype4cc.id);
-
 	if(ictx->level==0 && ictx->curr_container_fmt4cc.id==CODE_FORM) {
-
 		d->formtype = ictx->curr_container_contentstype4cc.id;
-		//de_dbg(c, "FORM type: '%s'", ictx->curr_container_contentstype4cc.id_printable);
 
 		switch(ictx->main_contentstype4cc.id) {
 		case CODE_ILBM: de_declare_fmt(c, "IFF-ILBM"); break;
@@ -1006,12 +1030,13 @@ static void de_run_ilbm(deark *c, de_module_params *mparams)
 	if(s) d->opt_fixpal = de_atoi(s);
 
 	ictx->userdata = (void*)d;
+	ictx->preprocess_chunk_fn = my_preprocess_ilbm_chunk_fn;
 	ictx->handle_chunk_fn = my_ilbm_chunk_handler;
 	ictx->on_std_container_start_fn = my_on_std_container_start_fn;
 	ictx->on_container_end_fn = my_on_container_end_fn;
 	ictx->f = c->infile;
 	d->chunks_seen = de_inthashtable_create(c);
-	de_fmtutil_read_iff_format(c, ictx, 0,c->infile->len);
+	de_fmtutil_read_iff_format(c, ictx, 0, c->infile->len);
 	print_summary(c, d);
 
 	dbuf_close(d->vdat_unc_pixels);
@@ -1102,7 +1127,7 @@ static int my_anim_chunk_handler(deark *c, struct de_iffctx *ictx)
 
 	switch(ictx->chunkctx->chunk4cc.id) {
 	case CODE_ANHD:
-		do_anim_anhd(c, d, ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen);
+		do_anim_anhd(c, d, ictx->chunkctx->dpos, ictx->chunkctx->dlen);
 		break;
 
 	case CODE_FORM:

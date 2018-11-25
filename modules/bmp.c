@@ -177,19 +177,19 @@ static void set_default_bitfields(deark *c, lctx *d)
 	}
 }
 
-static void get_cstype_descr(struct de_fourcc *cstype4cc, char *s, size_t s_len)
+static void get_cstype_descr_dbgstr(struct de_fourcc *cstype4cc, char *s_dbgstr, size_t s_len)
 {
 	// The ID might be a FOURCC, or not.
 	if(cstype4cc->id>0xffffU) {
-		de_snprintf(s, s_len, "0x%08x ('%s')", (unsigned int)cstype4cc->id,
-			cstype4cc->id_printable);
+		de_snprintf(s_dbgstr, s_len, "0x%08x ('%s')", (unsigned int)cstype4cc->id,
+			cstype4cc->id_dbgstr);
 	}
 	else {
 		const char *name = "?";
 		switch(cstype4cc->id) {
 		case 0: name = "LCS_CALIBRATED_RGB"; break;
 		}
-		de_snprintf(s, s_len, "%u (%s)", (unsigned int)cstype4cc->id, name);
+		de_snprintf(s_dbgstr, s_len, "%u (%s)", (unsigned int)cstype4cc->id, name);
 	}
 }
 
@@ -370,10 +370,10 @@ static int read_infoheader(deark *c, lctx *d, de_int64 pos)
 	}
 
 	if(d->version==DE_BMPVER_WINV345 && d->infohdrsize>=108) {
-		char cstype_descr[80];
-		dbuf_read_fourcc(c->infile, pos+56, &d->cstype4cc, 1);
-		get_cstype_descr(&d->cstype4cc, cstype_descr, sizeof(cstype_descr));
-		de_dbg(c, "CSType: %s", cstype_descr);
+		char cstype_descr_dbgstr[80];
+		dbuf_read_fourcc(c->infile, pos+56, &d->cstype4cc, 4, DE_4CCFLAG_REVERSED);
+		get_cstype_descr_dbgstr(&d->cstype4cc, cstype_descr_dbgstr, sizeof(cstype_descr_dbgstr));
+		de_dbg(c, "CSType: %s", cstype_descr_dbgstr);
 	}
 
 	if(d->version==DE_BMPVER_WINV345 && d->infohdrsize>=124) {
@@ -587,19 +587,28 @@ static void do_image_16_32bit(deark *c, lctx *d, dbuf *bits, de_int64 bits_offse
 	de_bitmap_destroy(img);
 }
 
-static void do_image_rle_4_8(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset)
+static void do_image_rle_4_8_24(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset)
 {
 	de_int64 pos;
 	de_int64 xpos, ypos;
 	de_byte b1, b2;
 	de_byte b;
+	de_byte cr, cg, cb;
 	de_bitmap *img = NULL;
 	de_uint32 clr1, clr2;
 	de_int64 num_bytes;
 	de_int64 num_pixels;
 	de_int64 k;
+	int bypp;
 
-	img = bmp_bitmap_create(c, d, d->pal_is_grayscale?2:4);
+	if(d->pal_is_grayscale && d->compression_type!=CMPR_RLE24) {
+		bypp = 2;
+	}
+	else {
+		bypp = 4;
+	}
+
+	img = bmp_bitmap_create(c, d, bypp);
 
 	pos = bits_offset;
 	xpos = 0;
@@ -647,7 +656,19 @@ static void do_image_rle_4_8(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset
 					pixels_copied++;
 				}
 			}
-			else {
+			else if(d->compression_type==CMPR_RLE24) {
+				for(k=0; k<num_pixels; k++) {
+					cb = dbuf_getbyte_p(bits, &pos);
+					cg = dbuf_getbyte_p(bits, &pos);
+					cr = dbuf_getbyte_p(bits, &pos);
+					clr1 = DE_MAKE_RGB(cr, cg, cb);
+					de_bitmap_setpixel_rgba(img, xpos++, ypos, clr1);
+				}
+				if(num_pixels%2) {
+					pos++; // Pad to a multiple of 16 bits
+				}
+			}
+			else { // CMPR_RLE8
 				num_bytes = num_pixels;
 				if(num_bytes%2) num_bytes++; // Pad to a multiple of 16 bits
 				for(k=0; k<num_bytes; k++) {
@@ -668,7 +689,16 @@ static void do_image_rle_4_8(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset
 					de_bitmap_setpixel_rgba(img, xpos++, ypos, (k%2)?clr2:clr1);
 				}
 			}
-			else {
+			else if(d->compression_type==CMPR_RLE24) {
+				cb = b2;
+				cg = dbuf_getbyte_p(bits, &pos);
+				cr = dbuf_getbyte_p(bits, &pos);
+				clr1 = DE_MAKE_RGB(cr, cg, cb);
+				for(k=0; k<num_pixels; k++) {
+					de_bitmap_setpixel_rgba(img, xpos++, ypos, clr1);
+				}
+			}
+			else { // CMPR_RLE8
 				// b1 pixels of color b2
 				clr1 = d->pal[(unsigned int)b2];
 				for(k=0; k<num_pixels; k++) {
@@ -678,7 +708,7 @@ static void do_image_rle_4_8(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset
 		}
 	}
 
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file(img, NULL, DE_CREATEFLAG_OPT_IMAGE);
 	de_bitmap_destroy(img);
 }
 
@@ -717,10 +747,13 @@ static void do_image(deark *c, lctx *d)
 		do_image_16_32bit(c, d, c->infile, d->bits_offset);
 	}
 	else if(d->bitcount==8 && d->compression_type==CMPR_RLE8) {
-		do_image_rle_4_8(c, d, c->infile, d->bits_offset);
+		do_image_rle_4_8_24(c, d, c->infile, d->bits_offset);
 	}
 	else if(d->bitcount==4 && d->compression_type==CMPR_RLE4) {
-		do_image_rle_4_8(c, d, c->infile, d->bits_offset);
+		do_image_rle_4_8_24(c, d, c->infile, d->bits_offset);
+	}
+	else if(d->bitcount==24 && d->compression_type==CMPR_RLE24) {
+		do_image_rle_4_8_24(c, d, c->infile, d->bits_offset);
 	}
 	else if(d->compression_type==CMPR_JPEG) {
 		extract_embedded_image(c, d, "jpg");
@@ -754,9 +787,23 @@ static void de_run_bmp(deark *c, de_module_params *mparams)
 	}
 
 	switch(d->version) {
-	case DE_BMPVER_OS2V1: de_declare_fmt(c, "BMP, OS/2 v1 or Windows v2"); break;
+	case DE_BMPVER_OS2V1:
+		if(d->fsize==26) {
+			de_declare_fmt(c, "BMP, OS/2 v1");
+		}
+		else {
+			de_declare_fmt(c, "BMP, OS/2 v1 or Windows v2");
+		}
+		break;
 	case DE_BMPVER_OS2V2: de_declare_fmt(c, "BMP, OS/2 v2"); break;
-	case DE_BMPVER_WINV345: de_declare_fmt(c, "BMP, Windows v3+"); break;
+	case DE_BMPVER_WINV345:
+		switch(d->infohdrsize) {
+		case 40: de_declare_fmt(c, "BMP, Windows v3"); break;
+		case 108: de_declare_fmt(c, "BMP, Windows v4"); break;
+		case 124: de_declare_fmt(c, "BMP, Windows v5"); break;
+		default: de_declare_fmt(c, "BMP, Windows v3+");
+		}
+		break;
 	}
 
 	pos = 0;
@@ -845,7 +892,7 @@ static void de_run_dib(deark *c, de_module_params *mparams)
 		goto done;
 	}
 
-	if(mparams && mparams->codes && de_strchr(mparams->codes, 'X')) {
+	if(mparams && mparams->in_params.codes && de_strchr(mparams->in_params.codes, 'X')) {
 		createflags |= DE_CREATEFLAG_IS_AUX;
 	}
 

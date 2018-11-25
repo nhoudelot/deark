@@ -19,6 +19,13 @@ char de_get_hexchar(int n)
 	return '0';
 }
 
+static char de_get_hexcharUC(int n)
+{
+	static const char *hexcharsUC = "0123456789ABCDEF";
+	if(n>=0 && n<16) return hexcharsUC[n];
+	return '0';
+}
+
 de_byte de_decode_hex_digit(de_byte x, int *errorflag)
 {
 	if(errorflag) *errorflag = 0;
@@ -46,6 +53,28 @@ static const de_uint16 cp437table[256] = {
 	0x2568,0x2564,0x2565,0x2559,0x2558,0x2552,0x2553,0x256b,0x256a,0x2518,0x250c,0x2588,0x2584,0x258c,0x2590,0x2580,
 	0x03b1,0x00df,0x0393,0x03c0,0x03a3,0x03c3,0x00b5,0x03c4,0x03a6,0x0398,0x03a9,0x03b4,0x221e,0x03c6,0x03b5,0x2229,
 	0x2261,0x00b1,0x2265,0x2264,0x2320,0x2321,0x00f7,0x2248,0x00b0,0x2219,0x00b7,0x221a,0x207f,0x00b2,0x25a0,0x00a0
+};
+
+static const de_uint16 windows1250table[128] = {
+	0x20ac,0xffff,0x201a,0xffff,0x201e,0x2026,0x2020,0x2021,0xffff,0x2030,0x0160,0x2039,0x015a,0x0164,0x017d,0x0179,
+	0xffff,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0xffff,0x2122,0x0161,0x203a,0x015b,0x0165,0x017e,0x017a,
+	0x00a0,0x02c7,0x02d8,0x0141,0x00a4,0x0104,0x00a6,0x00a7,0x00a8,0x00a9,0x015e,0x00ab,0x00ac,0x00ad,0x00ae,0x017b,
+	0x00b0,0x00b1,0x02db,0x0142,0x00b4,0x00b5,0x00b6,0x00b7,0x00b8,0x0105,0x015f,0x00bb,0x013d,0x02dd,0x013e,0x017c,
+	0x0154,0x00c1,0x00c2,0x0102,0x00c4,0x0139,0x0106,0x00c7,0x010c,0x00c9,0x0118,0x00cb,0x011a,0x00cd,0x00ce,0x010e,
+	0x0110,0x0143,0x0147,0x00d3,0x00d4,0x0150,0x00d6,0x00d7,0x0158,0x016e,0x00da,0x0170,0x00dc,0x00dd,0x0162,0x00df,
+	0x0155,0x00e1,0x00e2,0x0103,0x00e4,0x013a,0x0107,0x00e7,0x010d,0x00e9,0x0119,0x00eb,0x011b,0x00ed,0x00ee,0x010f,
+	0x0111,0x0144,0x0148,0x00f3,0x00f4,0x0151,0x00f6,0x00f7,0x0159,0x016f,0x00fa,0x0171,0x00fc,0x00fd,0x0163,0x02d9
+};
+
+static const de_uint16 windows1251table[128] = {
+	0x0402,0x0403,0x201a,0x0453,0x201e,0x2026,0x2020,0x2021,0x20ac,0x2030,0x0409,0x2039,0x040a,0x040c,0x040b,0x040f,
+	0x0452,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0xffff,0x2122,0x0459,0x203a,0x045a,0x045c,0x045b,0x045f,
+	0x00a0,0x040e,0x045e,0x0408,0x00a4,0x0490,0x00a6,0x00a7,0x0401,0x00a9,0x0404,0x00ab,0x00ac,0x00ad,0x00ae,0x0407,
+	0x00b0,0x00b1,0x0406,0x0456,0x0491,0x00b5,0x00b6,0x00b7,0x0451,0x2116,0x0454,0x00bb,0x0458,0x0405,0x0455,0x0457,
+	0x0410,0x0411,0x0412,0x0413,0x0414,0x0415,0x0416,0x0417,0x0418,0x0419,0x041a,0x041b,0x041c,0x041d,0x041e,0x041f,
+	0x0420,0x0421,0x0422,0x0423,0x0424,0x0425,0x0426,0x0427,0x0428,0x0429,0x042a,0x042b,0x042c,0x042d,0x042e,0x042f,
+	0x0430,0x0431,0x0432,0x0433,0x0434,0x0435,0x0436,0x0437,0x0438,0x0439,0x043a,0x043b,0x043c,0x043d,0x043e,0x043f,
+	0x0440,0x0441,0x0442,0x0443,0x0444,0x0445,0x0446,0x0447,0x0448,0x0449,0x044a,0x044b,0x044c,0x044d,0x044e,0x044f
 };
 
 static const de_uint16 windows1252table[32] = {
@@ -111,6 +140,26 @@ static de_int32 de_cp437c_to_unicode(de_int32 a)
 	de_int32 n;
 	if(a<=0x7f) n = a;
 	else if(a>=0x080 && a<=0xff) n = (de_int32)cp437table[a];
+	else n = DE_CODEPOINT_INVALID;
+	if(n==0xffff) n = DE_CODEPOINT_INVALID;
+	return n;
+}
+
+static de_int32 de_windows1250_to_unicode(de_int32 a)
+{
+	de_int32 n;
+	if(a<=0x7f) n = a;
+	else if(a>=0x080 && a<=0xff) n = (de_int32)windows1250table[a-0x80];
+	else n = DE_CODEPOINT_INVALID;
+	if(n==0xffff) n = DE_CODEPOINT_INVALID;
+	return n;
+}
+
+static de_int32 de_windows1251_to_unicode(de_int32 a)
+{
+	de_int32 n;
+	if(a<=0x7f) n = a;
+	else if(a>=0x080 && a<=0xff) n = (de_int32)windows1251table[a-0x80];
 	else n = DE_CODEPOINT_INVALID;
 	if(n==0xffff) n = DE_CODEPOINT_INVALID;
 	return n;
@@ -185,6 +234,10 @@ de_int32 de_char_to_unicode(deark *c, de_int32 a, int encoding)
 		return de_windows1252_to_unicode(a);
 	case DE_ENCODING_MACROMAN:
 		return de_macroman_to_unicode(a);
+	case DE_ENCODING_WINDOWS1250:
+		return de_windows1250_to_unicode(a);
+	case DE_ENCODING_WINDOWS1251:
+		return de_windows1251_to_unicode(a);
 	case DE_ENCODING_PALM:
 		return de_palmcs_to_unicode(a);
 	case DE_ENCODING_DEC_SPECIAL_GRAPHICS:
@@ -484,6 +537,111 @@ de_uint32 de_palette_pcpaint_cga4(int palnum, int index)
 		return pcpaint_cga_pals[palnum][index];
 	}
 	return 0;
+}
+
+// Only codepoints 32-127 are included here.
+static const de_byte cga_8x8_font_data[96*8] = {
+	0,0,0,0,0,0,0,0,
+	48,120,120,48,48,0,48,0,
+	108,108,108,0,0,0,0,0,
+	108,108,254,108,254,108,108,0,
+	48,124,192,120,12,248,48,0,
+	0,198,204,24,48,102,198,0,
+	56,108,56,118,220,204,118,0,
+	96,96,192,0,0,0,0,0,
+	24,48,96,96,96,48,24,0,
+	96,48,24,24,24,48,96,0,
+	0,102,60,255,60,102,0,0,
+	0,48,48,252,48,48,0,0,
+	0,0,0,0,0,48,48,96,
+	0,0,0,252,0,0,0,0,
+	0,0,0,0,0,48,48,0,
+	6,12,24,48,96,192,128,0,
+	124,198,206,222,246,230,124,0,
+	48,112,48,48,48,48,252,0,
+	120,204,12,56,96,204,252,0,
+	120,204,12,56,12,204,120,0,
+	28,60,108,204,254,12,30,0,
+	252,192,248,12,12,204,120,0,
+	56,96,192,248,204,204,120,0,
+	252,204,12,24,48,48,48,0,
+	120,204,204,120,204,204,120,0,
+	120,204,204,124,12,24,112,0,
+	0,48,48,0,0,48,48,0,
+	0,48,48,0,0,48,48,96,
+	24,48,96,192,96,48,24,0,
+	0,0,252,0,0,252,0,0,
+	96,48,24,12,24,48,96,0,
+	120,204,12,24,48,0,48,0,
+	124,198,222,222,222,192,120,0,
+	48,120,204,204,252,204,204,0,
+	252,102,102,124,102,102,252,0,
+	60,102,192,192,192,102,60,0,
+	248,108,102,102,102,108,248,0,
+	254,98,104,120,104,98,254,0,
+	254,98,104,120,104,96,240,0,
+	60,102,192,192,206,102,62,0,
+	204,204,204,252,204,204,204,0,
+	120,48,48,48,48,48,120,0,
+	30,12,12,12,204,204,120,0,
+	230,102,108,120,108,102,230,0,
+	240,96,96,96,98,102,254,0,
+	198,238,254,254,214,198,198,0,
+	198,230,246,222,206,198,198,0,
+	56,108,198,198,198,108,56,0,
+	252,102,102,124,96,96,240,0,
+	120,204,204,204,220,120,28,0,
+	252,102,102,124,108,102,230,0,
+	120,204,96,48,24,204,120,0,
+	252,180,48,48,48,48,120,0,
+	204,204,204,204,204,204,252,0,
+	204,204,204,204,204,120,48,0,
+	198,198,198,214,254,238,198,0,
+	198,198,108,56,56,108,198,0,
+	204,204,204,120,48,48,120,0,
+	254,198,140,24,50,102,254,0,
+	120,96,96,96,96,96,120,0,
+	192,96,48,24,12,6,2,0,
+	120,24,24,24,24,24,120,0,
+	16,56,108,198,0,0,0,0,
+	0,0,0,0,0,0,0,255,
+	48,48,24,0,0,0,0,0,
+	0,0,120,12,124,204,118,0,
+	224,96,96,124,102,102,220,0,
+	0,0,120,204,192,204,120,0,
+	28,12,12,124,204,204,118,0,
+	0,0,120,204,252,192,120,0,
+	56,108,96,240,96,96,240,0,
+	0,0,118,204,204,124,12,248,
+	224,96,108,118,102,102,230,0,
+	48,0,112,48,48,48,120,0,
+	12,0,12,12,12,204,204,120,
+	224,96,102,108,120,108,230,0,
+	112,48,48,48,48,48,120,0,
+	0,0,204,254,254,214,198,0,
+	0,0,248,204,204,204,204,0,
+	0,0,120,204,204,204,120,0,
+	0,0,220,102,102,124,96,240,
+	0,0,118,204,204,124,12,30,
+	0,0,220,118,102,96,240,0,
+	0,0,124,192,120,12,248,0,
+	16,48,124,48,48,52,24,0,
+	0,0,204,204,204,204,118,0,
+	0,0,204,204,204,120,48,0,
+	0,0,198,214,254,254,108,0,
+	0,0,198,108,56,108,198,0,
+	0,0,204,204,204,124,12,248,
+	0,0,252,152,48,100,252,0,
+	28,48,48,224,48,48,28,0,
+	24,24,24,0,24,24,24,0,
+	224,48,48,28,48,48,224,0,
+	118,220,0,0,0,0,0,0,
+	0,16,56,108,198,198,254,0
+};
+
+const de_byte *de_get_8x8ascii_font_ptr(void)
+{
+	return cga_8x8_font_data;
 }
 
 static const de_byte vga_cp437_font_data[256*16] = {
@@ -854,13 +1012,13 @@ char de_byte_to_printable_char(de_byte b)
 // rarely be used. See the comment in the header file.
 // s1 is not NUL terminated, but s2 will be.
 // s2_size includes the NUL terminator.
+// Supported conv_flags: DE_CONVFLAG_STOP_AT_NUL, DE_CONVFLAG_ALLOW_HL
 // src_encoding: Only DE_ENCODING_ASCII is supported.
 void de_bytes_to_printable_sz(const de_byte *s1, de_int64 s1_len,
 	char *s2, de_int64 s2_size, unsigned int conv_flags, int src_encoding)
 {
 	de_int64 i;
 	de_int64 s2_pos = 0;
-	char ch;
 
 	if(src_encoding!=DE_ENCODING_ASCII) {
 		s2[0] = '\0';
@@ -868,19 +1026,35 @@ void de_bytes_to_printable_sz(const de_byte *s1, de_int64 s1_len,
 	}
 
 	for(i=0; i<s1_len; i++) {
+		int is_printable = 0;
+
 		if(s1[i]=='\0' && (conv_flags & DE_CONVFLAG_STOP_AT_NUL)) {
 			break;
 		}
 
 		if(s1[i]>=32 && s1[i]<=126) {
-			ch = (char)s1[i];
-		}
-		else {
-			ch = '_';
+			is_printable = 1;
 		}
 
-		if(s2_pos < s2_size-1) {
-			s2[s2_pos++] = ch;
+		if(is_printable) {
+			if(s2_pos < s2_size-1) {
+				s2[s2_pos++] = (char)s1[i];
+			}
+		}
+		else if(conv_flags & DE_CONVFLAG_ALLOW_HL) {
+			if(s2_pos < s2_size-6) {
+				s2[s2_pos++] = 0x01; // DE_CODEPOINT_HL
+				s2[s2_pos++] = '<';
+				s2[s2_pos++] = de_get_hexcharUC((int)(s1[i]/16));
+				s2[s2_pos++] = de_get_hexcharUC((int)(s1[i]%16));
+				s2[s2_pos++] = '>';
+				s2[s2_pos++] = 0x02; // DE_CODEPOINT_UNHL
+			}
+		}
+		else {
+			if(s2_pos < s2_size-1) {
+				s2[s2_pos++] = '_';
+			}
 		}
 	}
 
@@ -936,23 +1110,147 @@ void de_write_codepoint_to_html(deark *c, dbuf *f, de_int32 ch)
 	}
 }
 
+struct de_encmap_item {
+	unsigned int flags;
+	int n;
+	const char *encname;
+};
+
+static const struct de_encmap_item de_encmap_arr[] = {
+	{ 0x01, DE_ENCODING_ASCII, "ascii" },
+	{ 0x01, DE_ENCODING_UTF8, "utf8" },
+	{ 0x01, DE_ENCODING_LATIN1, "latin1" },
+	{ 0x01, DE_ENCODING_CP437_C, "cp437" },
+	{ 0x01, DE_ENCODING_WINDOWS1250, "windows1250" },
+	{ 0x01, DE_ENCODING_WINDOWS1251, "windows1251"},
+	{ 0x01, DE_ENCODING_WINDOWS1252, "windows1252" },
+	{ 0x01, DE_ENCODING_MACROMAN, "macroman" }
+};
+
 int de_encoding_name_to_code(const char *encname)
 {
-	struct encmap { const char *encname; int n; };
-	struct encmap encmap_arr[] = {
-		{ "ascii", DE_ENCODING_ASCII },
-		{ "utf8", DE_ENCODING_UTF8 },
-		{ "latin1", DE_ENCODING_LATIN1 },
-		{ "cp437", DE_ENCODING_CP437_C },
-		{ "windows1252", DE_ENCODING_WINDOWS1252 },
-		{ "macroman", DE_ENCODING_MACROMAN }
-	};
 	size_t k;
 
-	for(k=0; k<DE_ITEMS_IN_ARRAY(encmap_arr); k++) {
-		if(!de_strcasecmp(encname, encmap_arr[k].encname)) {
-			return encmap_arr[k].n;
+	for(k=0; k<DE_ITEMS_IN_ARRAY(de_encmap_arr); k++) {
+		if(!de_strcasecmp(encname, de_encmap_arr[k].encname)) {
+			return de_encmap_arr[k].n;
 		}
 	}
 	return DE_ENCODING_UNKNOWN;
+}
+
+struct de_encmapwin_item {
+	unsigned int flags; // 0x1=supported
+	int wincodepage;
+	int enc;
+	const char *encname;
+	const char *encname_note;
+};
+
+static const struct de_encmapwin_item de_encmapwin_arr[] = {
+	{ 0x01, 1200, DE_ENCODING_UTF16LE, "UTF-16LE", NULL },
+	{ 0x01, 1250, DE_ENCODING_WINDOWS1250, "Windows-1250", "Central/Eastern European" },
+	{ 0x01, 1251, DE_ENCODING_WINDOWS1251, "Windows-1251", "Cyrillic" },
+	{ 0x01, 1252, DE_ENCODING_WINDOWS1252, "Windows-1252", NULL },
+	{ 0x01, 10000, DE_ENCODING_MACROMAN, "MacRoman", NULL },
+	{ 0x01, 65001, DE_ENCODING_UTF8, "UTF-8", NULL },
+	{ 0x00, 874, DE_ENCODING_UNKNOWN, "Windows-874", "Thai" },
+	{ 0x00, 932, DE_ENCODING_UNKNOWN, "Windows-932", "Japanese" },
+	{ 0x00, 936, DE_ENCODING_UNKNOWN, "Windows-936", "simplified Chinese" },
+	{ 0x00, 1253, DE_ENCODING_UNKNOWN, "Windows-1253", "Greek" },
+	{ 0x00, 1254, DE_ENCODING_UNKNOWN, "Windows-1254", "Turkish" },
+	{ 0x00, 1255, DE_ENCODING_UNKNOWN, "Windows-1255", "Hebrew" },
+	{ 0x00, 1256, DE_ENCODING_UNKNOWN, "Windows-1256", "Arabic" },
+	{ 0x00, 1257, DE_ENCODING_UNKNOWN, "Windows-1257", "Baltic" },
+	{ 0x00, 1258, DE_ENCODING_UNKNOWN, "Windows-1258", "Vietnamese" }
+};
+
+// Returns a DE_ENCODING_* code.
+// Returns DE_ENCODING_UNKNOWN if unsupported or unknown.
+// encname can be NULL.
+// flags:
+//  0x1: If encoding is known but unsupported, append "(unsupported)" to the
+//    description.
+int de_windows_codepage_to_encoding(deark *c, int wincodepage,
+	char *encname, size_t encname_len, unsigned int flags)
+{
+	size_t k;
+	const struct de_encmapwin_item *cpinfo = NULL;
+
+	for(k=0; k<DE_ITEMS_IN_ARRAY(de_encmapwin_arr); k++) {
+		if(de_encmapwin_arr[k].wincodepage == wincodepage) {
+			cpinfo = &de_encmapwin_arr[k];
+			break;
+		}
+	}
+
+	if(cpinfo) {
+		// Code page is known, though not necessarily supported.
+		if(encname) {
+			char note_tmp[80];
+			if(cpinfo->encname_note) {
+				de_snprintf(note_tmp, sizeof(note_tmp), " (%s)", cpinfo->encname_note);
+			}
+			else {
+				note_tmp[0] = '\0';
+			}
+			de_snprintf(encname, encname_len, "%s%s%s", cpinfo->encname, note_tmp,
+				((cpinfo->flags&0x1)==0 && (flags&0x1)!=0)?" (unsupported)":"");
+		}
+		return (cpinfo->flags&0x1) ? cpinfo->enc : DE_ENCODING_UNKNOWN;
+	}
+
+	if(encname) {
+		de_strlcpy(encname, "?", encname_len);
+	}
+	return DE_ENCODING_UNKNOWN;
+}
+
+void de_decode_base16(deark *c, dbuf *inf, de_int64 pos1, de_int64 len,
+	dbuf *outf, unsigned int flags)
+{
+	de_int64 pos = pos1;
+	de_byte b;
+	int bad_warned = 0;
+	struct base16_ctx {
+		int cbuf_count;
+		de_byte cbuf[5];
+	};
+	struct base16_ctx *d = NULL;
+
+	d = de_malloc(c, sizeof(struct base16_ctx));
+	pos = pos1;
+	d->cbuf_count = 0;
+	while(pos<pos1+len) {
+		b = dbuf_getbyte_p(inf, &pos);
+		if(b>='0' && b<='9') {
+			d->cbuf[d->cbuf_count++] = b-48;
+		}
+		else if(b>='A' && b<='F') {
+			d->cbuf[d->cbuf_count++] = b-55;
+		}
+		else if(b>='a' && b<='f') {
+			d->cbuf[d->cbuf_count++] = b-87;
+		}
+		else if(b==9 || b==10 || b==13 || b==32) {
+			; // ignore whitespace
+		}
+		else {
+			if(!bad_warned) {
+				de_warn(c, "Bad hex character(s) found (offset %d)", (int)pos);
+				bad_warned = 1;
+			}
+		}
+
+		if(d->cbuf_count>=2) {
+			dbuf_writebyte(outf, (d->cbuf[0]<<4)|(d->cbuf[1]));
+			d->cbuf_count=0;
+		}
+	}
+
+	if(d->cbuf_count>0) {
+		de_warn(c, "Unexpected end of hex data");
+	}
+
+	de_free(c, d);
 }

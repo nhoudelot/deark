@@ -15,11 +15,9 @@ DE_DECLARE_MODULE(de_module_cfb);
 #define OBJTYPE_STREAM       0x02
 #define OBJTYPE_ROOT_STORAGE 0x05
 
-static const char *thumbsdb_catalog_streamname = "Catalog";
-static const char *summaryinformation_streamname = "\x05" "SummaryInformation";
-
 struct dir_entry_info {
 	de_byte entry_type;
+
 	int is_mini_stream;
 	de_int64 stream_size;
 	de_int64 normal_sec_id; // First SecID, valid if is_mini_stream==0
@@ -27,20 +25,22 @@ struct dir_entry_info {
 	struct de_stringreaderdata *fname_srd;
 	de_byte clsid[16];
 	struct de_timestamp mod_time;
-};
 
-struct dir_entry_extra_info_struct {
-	de_byte entry_type;
+	const char *entry_type_name;
+	de_int64 name_len_raw;
+	de_byte node_color;
+
 	de_int32 child_id;
 	de_int32 sibling_id[2];
 	de_int32 parent_id; // If parent_id==0, entry is in root dir.
-	de_ucstring *fname; // Used by non-root STORAGE objects.
 	de_ucstring *path; // Full dir path. Used by non-root STORAGE objects.
+
+	de_byte is_thumbsdb_catalog;
 };
 
-struct catalog_entry {
+struct thumbsdb_catalog_entry {
 	de_uint32 id;
-	de_ucstring *fname;
+	struct de_stringreaderdata *fname_srd;
 	struct de_timestamp mod_time;
 };
 
@@ -48,8 +48,11 @@ typedef struct localctx_struct {
 #define SUBFMT_AUTO       0
 #define SUBFMT_RAW        1
 #define SUBFMT_THUMBSDB   2
+#define SUBFMT_TIFF37680  3
 	int subformat_req;
 	int subformat_final;
+	int extract_raw_streams;
+	int decode_streams;
 	de_int64 minor_ver, major_ver;
 	de_int64 sec_size;
 	//de_int64 num_dir_sectors;
@@ -80,11 +83,11 @@ typedef struct localctx_struct {
 
 	dbuf *minifat; // mini sector allocation table
 	dbuf *dir;
-	struct dir_entry_extra_info_struct *dir_entry_extra_info; // array[num_dir_entries]
+	struct dir_entry_info *dir_entry; // array[num_dir_entries]
 	dbuf *mini_sector_stream;
 
 	de_int64 thumbsdb_catalog_num_entries;
-	struct catalog_entry *thumbsdb_catalog;
+	struct thumbsdb_catalog_entry *thumbsdb_catalog;
 
 	int could_be_thumbsdb;
 	int thumbsdb_old_names_found;
@@ -102,6 +105,7 @@ static const struct clsid_id_struct known_clsids[] = {
 	{{0x00,0x02,0x08,0x20,0x00,0x00,0x00,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}, "Excel?" },
 	{{0x00,0x02,0x09,0x06,0x00,0x00,0x00,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}, "MS Word?"},
 	{{0x00,0x02,0x0d,0x0b,0x00,0x00,0x00,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}, "Outlook item?"},
+	{{0x00,0x02,0x12,0x01,0x00,0x00,0x00,0x00,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x46}, "MS Publisher?" },
 	{{0x00,0x06,0xf0,0x46,0x00,0x00,0x00,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}, "Outlook item?"},
 	{{0x00,0x0c,0x10,0x84,0x00,0x00,0x00,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}, "MSI?"},
 	{{0x1c,0xdd,0x8c,0x7b,0x81,0xc0,0x45,0xa0,0x9f,0xed,0x04,0x14,0x31,0x44,0xcc,0x1e}, "3ds Max?"},
@@ -517,7 +521,7 @@ static de_int64 stream_name_to_catalog_id(deark *c, lctx *d, struct dir_entry_in
 
 // Returns an index into d->thumbsdb_catalog.
 // Returns -1 if not found.
-static de_int64 lookup_catalog_entry(deark *c, lctx *d, struct dir_entry_info *dei)
+static de_int64 lookup_thumbsdb_catalog_entry(deark *c, lctx *d, struct dir_entry_info *dei)
 {
 	de_int64 i;
 	de_int64 id;
@@ -535,129 +539,107 @@ static de_int64 lookup_catalog_entry(deark *c, lctx *d, struct dir_entry_info *d
 	return -1;
 }
 
-static void extract_stream_to_file(deark *c, lctx *d, de_int64 dir_entry_idx, struct dir_entry_info *dei)
+// Special handling of Thumbs.db files.
+// Caller sets fi and tmpfn to default values. This function may modify them.
+// firstpart = caller-supplied dbuf containing the first 256 or so bytes of the stream
+static void do_extract_stream_to_file_thumbsdb(deark *c, lctx *d, struct dir_entry_info *dei,
+	de_finfo *fi, de_ucstring *tmpfn, dbuf *firstpart)
 {
-	de_int64 startpos;
-	de_int64 final_streamsize;
+	de_int64 hdrsize;
+	de_int64 catalog_idx;
+	const char *ext;
+	dbuf *outf = NULL;
 	de_int64 ver;
 	de_int64 reported_size;
-	int saved_indent_level;
-	dbuf *outf = NULL;
-	dbuf *tmpdbuf = NULL;
-	de_finfo *fi = NULL;
-	de_ucstring *tmpfn = NULL;
-	struct dir_entry_extra_info_struct *de_ei;
+	de_int64 startpos;
+	de_int64 final_streamsize;
 
-	de_dbg_indent_save(c, &saved_indent_level);
+	if(dei->is_thumbsdb_catalog) {
+		// We've already read the catalog.
+		goto done;
+	}
+
+	de_dbg(c, "reading Thumbs.db stream");
+	de_dbg_indent(c, 1);
+
 	startpos = 0;
-	de_ei = &d->dir_entry_extra_info[dir_entry_idx];
 	final_streamsize = dei->stream_size;
 
-	// By default, use the "stream name" as the filename.
-	tmpfn = ucstring_create(c);
+	// A Thumbs.db stream typically has a header, followed by an embedded JPEG
+	// (or something) file.
 
-	if(de_ei->parent_id>0 && d->dir_entry_extra_info[de_ei->parent_id].path) {
-		ucstring_append_ucstring(tmpfn, d->dir_entry_extra_info[de_ei->parent_id].path);
-		ucstring_append_sz(tmpfn, "/", DE_ENCODING_ASCII);
+	catalog_idx = lookup_thumbsdb_catalog_entry(c, d, dei);
+
+	if(catalog_idx>=0) {
+		if(d->thumbsdb_catalog[catalog_idx].mod_time.is_valid) {
+			fi->mod_time = d->thumbsdb_catalog[catalog_idx].mod_time; // struct copy
+		}
 	}
 
-	ucstring_append_ucstring(tmpfn, dei->fname_srd->str);
+	hdrsize = dbuf_getui32le(firstpart, 0);
+	de_dbg(c, "header size: %d", (int)hdrsize);
 
-	fi = de_finfo_create(c);
+	ver = dbuf_getui32le(firstpart, 4);
+	de_dbg(c, "version: %d", (int)ver);
 
-	// By default, use the mod time from the directory entry.
-	if(dei->mod_time.is_valid) {
-		fi->mod_time = dei->mod_time; // struct copy
-	}
+	// 0x0c = "Original format" Thumbs.db
+	// 0x18 = "Windows 7 format"
 
-	if(d->subformat_final==SUBFMT_THUMBSDB) {
-		de_int64 hdrsize;
-		de_int64 catalog_idx;
-		const char *ext;
+	if((hdrsize==0x0c || hdrsize==0x18) && dei->stream_size>hdrsize) {
+		de_byte sig1[4];
+		de_byte sig2[4];
 
-		// Special handling of Thumbs.db files.
+		reported_size = dbuf_getui32le(firstpart, 8);
+		de_dbg(c, "reported size: %d", (int)reported_size);
 
-		if(!de_strcmp(dei->fname_srd->sz_utf8, thumbsdb_catalog_streamname)) {
-			// We've already read the catalog.
-			goto done;
-		}
+		startpos = hdrsize;
+		final_streamsize -= hdrsize;
+		de_dbg(c, "calculated size: %d", (int)final_streamsize);
 
-		de_dbg(c, "reading Thumbs.db stream");
-		de_dbg_indent(c, 1);
+		if(catalog_idx>=0 && c->filenames_from_file) {
+			de_dbg(c, "name from catalog: \"%s\"",
+				ucstring_getpsz(d->thumbsdb_catalog[catalog_idx].fname_srd->str));
 
-		// A Thumbs.db stream typically has a header, followed by an embedded JPEG
-		// (or something) file.
+			// Replace the default name with the name from the catalog.
+			ucstring_empty(tmpfn);
 
-		catalog_idx = lookup_catalog_entry(c, d, dei);
-
-		if(catalog_idx>=0) {
-			if(d->thumbsdb_catalog[catalog_idx].mod_time.is_valid) {
-				fi->mod_time = d->thumbsdb_catalog[catalog_idx].mod_time; // struct copy
-			}
-		}
-
-		// Read the first part of the stream. 32 bytes should be enough to get
-		// the header, and enough of the payload to choose a file extension.
-		tmpdbuf = dbuf_create_membuf(c, 64, 0);
-		copy_any_stream_to_dbuf(c, d, dei, 0, 64, tmpdbuf);
-
-		hdrsize = dbuf_getui32le(tmpdbuf, 0);
-		de_dbg(c, "header size: %d", (int)hdrsize);
-
-		ver = dbuf_getui32le(tmpdbuf, 4);
-		de_dbg(c, "version: %d", (int)ver);
-
-		// 0x0c = "Original format" Thumbs.db
-		// 0x18 = "Windows 7 format"
-
-		if((hdrsize==0x0c || hdrsize==0x18) && dei->stream_size>hdrsize) {
-			de_byte sig1[4];
-			de_byte sig2[4];
-
-			reported_size = dbuf_getui32le(tmpdbuf, 8);
-			de_dbg(c, "reported size: %d", (int)reported_size);
-
-			startpos = hdrsize;
-			final_streamsize -= hdrsize;
-			de_dbg(c, "calculated size: %d", (int)final_streamsize);
-
-			if(catalog_idx>=0 && c->filenames_from_file) {
-				de_dbg(c, "name from catalog: \"%s\"",
-					ucstring_getpsz(d->thumbsdb_catalog[catalog_idx].fname));
-
-				// Replace the default name with the name from the catalog.
-				ucstring_empty(tmpfn);
-				ucstring_append_ucstring(tmpfn, d->thumbsdb_catalog[catalog_idx].fname);
-			}
-
-			dbuf_read(tmpdbuf, sig1, hdrsize, 4);
-			dbuf_read(tmpdbuf, sig2, hdrsize+16, 4);
-
-			if(sig1[0]==0xff && sig1[1]==0xd8) ext = "jpg";
-			else if(sig1[0]==0x89 && sig1[1]==0x50) ext = "png";
-			else if(sig1[0]==0x01 && sig1[1]==0x00 &&
-				sig2[0]==0xff && sig2[1]==0xd8)
+			if(!de_strcasecmp(d->thumbsdb_catalog[catalog_idx].fname_srd->sz_utf8,
+				"{A42CD7B6-E9B9-4D02-B7A6-288B71AD28BA}"))
 			{
-				// Looks like a nonstandard Microsoft RGBA JPEG.
-				// These seem to have an additional 16-byte header, before the
-				// JPEG data starts. I'm not sure if I should keep it, but it
-				// doesn't look like it contains any vital information, so
-				// I'll strip if off.
-				ext = "msrgbajpg";
-				startpos += 16;
-				final_streamsize -= 16;
+				ucstring_append_sz(tmpfn, "_folder", DE_ENCODING_LATIN1);
 			}
-			else ext = "bin";
-
-			ucstring_printf(tmpfn, DE_ENCODING_ASCII, ".thumb.%s", ext);
-		}
-		else {
-			de_warn(c, "Unidentified Thumbs.db stream \"%s\"",
-				ucstring_getpsz(dei->fname_srd->str));
+			else {
+				ucstring_append_ucstring(tmpfn, d->thumbsdb_catalog[catalog_idx].fname_srd->str);
+			}
 		}
 
-		de_dbg_indent(c, -1);
+		dbuf_read(firstpart, sig1, hdrsize, 4);
+		dbuf_read(firstpart, sig2, hdrsize+16, 4);
+
+		if(sig1[0]==0xff && sig1[1]==0xd8) ext = "jpg";
+		else if(sig1[0]==0x89 && sig1[1]==0x50) ext = "png";
+		else if(sig1[0]==0x01 && sig1[1]==0x00 &&
+			sig2[0]==0xff && sig2[1]==0xd8)
+		{
+			// Looks like a nonstandard Microsoft RGBA JPEG.
+			// These seem to have an additional 16-byte header, before the
+			// JPEG data starts. I'm not sure if I should keep it, but it
+			// doesn't look like it contains any vital information, so
+			// I'll strip if off.
+			ext = "msrgbajpg";
+			startpos += 16;
+			final_streamsize -= 16;
+		}
+		else ext = "bin";
+
+		ucstring_printf(tmpfn, DE_ENCODING_ASCII, ".thumb.%s", ext);
 	}
+	else {
+		de_warn(c, "Unidentified Thumbs.db stream \"%s\"",
+			ucstring_getpsz(dei->fname_srd->str));
+	}
+
+	de_dbg_indent(c, -1);
 
 	de_finfo_set_name_from_ucstring(c, fi, tmpfn);
 	fi->original_filename_flag = 1;
@@ -666,25 +648,279 @@ static void extract_stream_to_file(deark *c, lctx *d, de_int64 dir_entry_idx, st
 	copy_any_stream_to_dbuf(c, d, dei, startpos, final_streamsize, outf);
 
 done:
-	de_dbg_indent_restore(c, saved_indent_level);
-	dbuf_close(tmpdbuf);
 	dbuf_close(outf);
-	ucstring_destroy(tmpfn);
-	de_finfo_destroy(c, fi);
 }
 
-static void read_timestamp(deark *c, lctx *d, dbuf *f, de_int64 pos,
+struct officeart_rectype {
+	de_uint16 rectype;
+	de_uint16 flags;
+	const char *name;
+	void *reserved;
+};
+
+static const struct officeart_rectype officeart_rectype_arr[] = {
+	{ 0xf000, 0, "DggContainer", NULL },
+	{ 0xf001, 0, "BStoreContainer", NULL },
+	{ 0xf006, 0, "FDGGBlock", NULL },
+	{ 0xf007, 0, "FBSE", NULL },
+	{ 0xf00b, 0, "FOPT", NULL },
+	{ 0xf01a, 0, "BlipEMF", NULL },
+	{ 0xf01b, 0, "BlipWMF", NULL },
+	{ 0xf01c, 0, "BlipPICT", NULL },
+	{ 0xf01d, 0, "BlipJPEG", NULL },
+	{ 0xf01e, 0, "BlipPNG", NULL },
+	{ 0xf01f, 0, "BlipDIB", NULL },
+	{ 0xf029, 0, "BlipTIFF", NULL },
+	{ 0xf02a, 0, "BlipJPEG", NULL },
+	{ 0xf11a, 0, "ColorMRUContainer", NULL },
+	{ 0xf11e, 0, "SplitMenuColorContainer", NULL },
+	{ 0xf122, 0, "TertiaryFOPT", NULL }
+};
+
+static const char *get_officeart_rectype_name(unsigned int t)
+{
+	size_t k;
+
+	for(k=0; k<DE_ITEMS_IN_ARRAY(officeart_rectype_arr); k++) {
+		if((unsigned int)officeart_rectype_arr[k].rectype == t) {
+			return officeart_rectype_arr[k].name;
+		}
+	}
+	return "?";
+}
+
+struct officeartctx {
+#define OACTX_STACKSIZE 10
+	de_int64 container_end_stack[OACTX_STACKSIZE];
+	size_t container_end_stackptr;
+
+	// Passed to do_OfficeArtStream_record():
+	de_int64 record_pos;
+
+	// Returned from do_OfficeArtStream_record():
+	de_int64 record_bytes_consumed;
+	int is_container;
+	de_int64 container_endpos; // valid if (is_container)
+};
+
+static int do_OfficeArtStream_record(deark *c, lctx *d, struct officeartctx *oactx,
+	struct dir_entry_info *dei)
+{
+	unsigned int rectype;
+	unsigned int recinstance;
+	unsigned int recver;
+	unsigned int n;
+	de_int64 reclen;
+	de_int64 pos = 0; // relative to the beginning of firstpart
+	de_int64 nbytes_to_copy;
+	de_int64 extra_bytes = 0;
+	dbuf *firstpart = NULL;
+	dbuf *outf = NULL;
+	const char *ext = "bin";
+	int has_metafileHeader = 0;
+	int has_zlib_cmpr = 0;
+	int is_dib = 0;
+	int is_pict = 0;
+	int retval = 0;
+	int is_blip = 0;
+	int saved_indent_level;
+	de_int64 pos1 = oactx->record_pos;
+
+	oactx->record_bytes_consumed = 0;
+	oactx->is_container = 0;
+	oactx->container_endpos = 0;
+
+	de_dbg_indent_save(c, &saved_indent_level);
+
+	firstpart = dbuf_create_membuf(c, 128, 0x1);
+
+	nbytes_to_copy = 128;
+	if(pos1+128 > dei->stream_size) nbytes_to_copy = dei->stream_size - pos1;
+	copy_any_stream_to_dbuf(c, d, dei, pos1, nbytes_to_copy, firstpart);
+
+	n = (unsigned int)dbuf_getui16le_p(firstpart, &pos);
+	recver = n&0x0f;
+	if(recver==0x0f) oactx->is_container = 1;
+	recinstance = n>>4;
+
+	rectype = (unsigned int)dbuf_getui16le_p(firstpart, &pos);
+	if((rectype&0xf000)!=0xf000) {
+		// Assume this is the end of data, not necessarily an error.
+		goto done;
+	}
+
+	reclen = dbuf_getui32le_p(firstpart, &pos);
+
+	de_dbg(c, "record at [%"INT64_FMT"], ver=0x%x, inst=0x%03x, type=0x%04x (%s), dlen=%"INT64_FMT,
+		pos1, recver, recinstance,
+		rectype, get_officeart_rectype_name(rectype), reclen);
+	de_dbg_indent(c, 1);
+
+	if(pos1 + pos + reclen > dei->stream_size) goto done;
+	if(oactx->is_container) {
+		// A container is described as *being* its header record. It does have
+		// a recLen, but it should be safe to ignore it if all we care about is
+		// reading the records at a low level.
+		oactx->record_bytes_consumed = 8;
+		oactx->container_endpos = oactx->record_pos + 8 + reclen;
+	}
+	else {
+		oactx->record_bytes_consumed = pos + reclen;
+	}
+	retval = 1;
+
+	if(rectype>=0xf018 && rectype<=0xf117) is_blip = 1;
+	if(!is_blip) goto done;
+
+	if(rectype==0xf01a) {
+		ext = "emf";
+		if(recinstance==0x3d4) extra_bytes=50;
+		else if(recinstance==0x3d5) extra_bytes=66;
+		if(extra_bytes) has_metafileHeader=1;
+	}
+	else if(rectype==0xf01b) {
+		ext = "wmf";
+		if(recinstance==0x216) extra_bytes=50;
+		else if(recinstance==0x217) extra_bytes=66;
+		if(extra_bytes) has_metafileHeader=1;
+	}
+	else if(rectype==0xf01c) {
+		ext = "pict";
+		if(recinstance==0x542) extra_bytes=50;
+		else if(recinstance==0x543) extra_bytes=66;
+		if(extra_bytes) has_metafileHeader=1;
+		is_pict = 1;
+	}
+	else if(rectype==0xf01d) {
+		ext = "jpg";
+		if(recinstance==0x46a || recinstance==0x6e2) extra_bytes = 17;
+		else if(recinstance==0x46b || recinstance==0x6e3) extra_bytes = 33;
+	}
+	else if(rectype==0xf01e) {
+		ext = "png";
+		if(recinstance==0x6e0) extra_bytes = 17;
+		else if(recinstance==0x6e1) extra_bytes = 33;
+	}
+	else if(rectype==0xf01f) {
+		ext = "dib";
+		if(recinstance==0x7a8) extra_bytes = 17;
+		else if(recinstance==0x7a9) extra_bytes = 33;
+		if(extra_bytes) is_dib=1;
+	}
+	else if(rectype==0xf029) {
+		ext = "tif";
+		if(recinstance==0x6e4) extra_bytes = 17;
+		else if(recinstance==0x6e5) extra_bytes = 33;
+	}
+
+	if(extra_bytes==0) {
+		de_warn(c, "Unsupported OfficeArtBlip format (recInstance=0x%03x, recType=0x%04x)",
+			recinstance, rectype);
+		goto done;
+	}
+
+	if(has_metafileHeader) {
+		// metafileHeader starts at pos+extra_bytes-34
+		de_byte cmpr = dbuf_getbyte(firstpart, pos+extra_bytes-2);
+		// 0=DEFLATE, 0xfe=NONE
+		de_dbg(c, "compression type: %u", (unsigned int)cmpr);
+		has_zlib_cmpr = (cmpr==0);
+	}
+
+	pos += extra_bytes;
+
+	if(is_dib) {
+		dbuf *raw_stream;
+		raw_stream = dbuf_create_membuf(c, 0, 0);
+		copy_any_stream_to_dbuf(c, d, dei, pos1+pos, reclen-extra_bytes, raw_stream);
+		de_run_module_by_id_on_slice2(c, "dib", "X", raw_stream, 0, raw_stream->len);
+		dbuf_close(raw_stream);
+		goto done;
+	}
+
+	outf = dbuf_create_output_file(c, ext, NULL, DE_CREATEFLAG_IS_AUX);
+	if(is_pict) {
+		dbuf_write_zeroes(outf, 512);
+	}
+
+	if(has_zlib_cmpr) {
+		dbuf *raw_stream;
+		raw_stream = dbuf_create_membuf(c, 0, 0);
+		copy_any_stream_to_dbuf(c, d, dei, pos1+pos, reclen-extra_bytes, raw_stream);
+		de_uncompress_zlib(raw_stream, 0, raw_stream->len, outf);
+		dbuf_close(raw_stream);
+	}
+	else {
+		copy_any_stream_to_dbuf(c, d, dei, pos1+pos, reclen-extra_bytes, outf);
+	}
+
+done:
+	de_dbg_indent_restore(c, saved_indent_level);
+	dbuf_close(outf);
+	dbuf_close(firstpart);
+	return retval;
+}
+
+// Refer to Microsoft's "[MS-ODRAW]" document.
+static void do_OfficeArtStream(deark *c, lctx *d, struct dir_entry_info *dei)
+{
+	struct officeartctx * oactx = NULL;
+	int saved_indent_level;
+
+	de_dbg_indent_save(c, &saved_indent_level);
+	oactx = de_malloc(c, sizeof(struct officeartctx));
+	de_dbg(c, "OfficeArt stream, len=%"INT64_FMT, dei->stream_size);
+
+	oactx->record_pos = 0;
+	while(1) {
+		de_int64 ret;
+
+		if(oactx->record_pos >= dei->stream_size-8) break;
+
+		// Have we reached the end of any containers?
+		while(oactx->container_end_stackptr>0 &&
+			oactx->record_pos>=oactx->container_end_stack[oactx->container_end_stackptr-1])
+		{
+			oactx->container_end_stackptr--;
+			de_dbg_indent(c, -1);
+		}
+
+		ret = do_OfficeArtStream_record(c, d, oactx, dei);
+		if(!ret || oactx->record_bytes_consumed<=0) break;
+
+		oactx->record_pos += oactx->record_bytes_consumed;
+
+		// Is a new container open?
+		if(oactx->is_container && oactx->container_end_stackptr<OACTX_STACKSIZE) {
+			oactx->container_end_stack[oactx->container_end_stackptr++] = oactx->container_endpos;
+			de_dbg_indent(c, 1);
+		}
+	}
+
+	de_free(c, oactx);
+	de_dbg_indent_restore(c, saved_indent_level);
+}
+
+static void dbg_timestamp(deark *c, struct de_timestamp *ts, const char *field_name)
+{
+	char timestamp_buf[64];
+
+	if(ts->is_valid) {
+		de_timestamp_to_string(ts, timestamp_buf, sizeof(timestamp_buf), 1);
+		de_dbg(c, "%s: %s", field_name, timestamp_buf);
+	}
+}
+
+static void read_and_cvt_and_dbg_timestamp(deark *c, dbuf *f, de_int64 pos,
 	struct de_timestamp *ts, const char *field_name)
 {
 	de_int64 ts_as_FILETIME;
-	char timestamp_buf[64];
 
 	de_memset(ts, 0, sizeof(struct de_timestamp));
 	ts_as_FILETIME = dbuf_geti64le(f, pos);
 	if(ts_as_FILETIME!=0) {
 		de_FILETIME_to_timestamp(ts_as_FILETIME, ts);
-		de_timestamp_to_string(ts, timestamp_buf, sizeof(timestamp_buf), 1);
-		de_dbg(c, "%s: %s", field_name, timestamp_buf);
+		dbg_timestamp(c, ts, field_name);
 	}
 }
 
@@ -721,7 +957,8 @@ static int read_thumbsdb_catalog(deark *c, lctx *d, struct dir_entry_info *dei)
 	if(d->thumbsdb_catalog_num_entries>2048)
 		d->thumbsdb_catalog_num_entries = 2048;
 
-	d->thumbsdb_catalog = de_malloc(c, d->thumbsdb_catalog_num_entries * sizeof(struct catalog_entry));
+	d->thumbsdb_catalog = de_malloc(c, d->thumbsdb_catalog_num_entries *
+		sizeof(struct thumbsdb_catalog_entry));
 
 	pos = item_len;
 
@@ -736,13 +973,11 @@ static int read_thumbsdb_catalog(deark *c, lctx *d, struct dir_entry_info *dei)
 		d->thumbsdb_catalog[i].id = (de_uint32)dbuf_getui32le(catf, pos+4);
 		de_dbg(c, "id: %u", (unsigned int)d->thumbsdb_catalog[i].id);
 
-		read_timestamp(c, d, catf, pos+8, &d->thumbsdb_catalog[i].mod_time, "timestamp");
+		read_and_cvt_and_dbg_timestamp(c, catf, pos+8, &d->thumbsdb_catalog[i].mod_time, "timestamp");
 
-		d->thumbsdb_catalog[i].fname = ucstring_create(c);
-
-		dbuf_read_to_ucstring(catf, pos+16, item_len-20, d->thumbsdb_catalog[i].fname,
-			0, DE_ENCODING_UTF16LE);
-		de_dbg(c, "name: \"%s\"", ucstring_getpsz(d->thumbsdb_catalog[i].fname));
+		d->thumbsdb_catalog[i].fname_srd = dbuf_read_string(catf, pos+16, item_len-20, item_len-20,
+			DE_CONVFLAG_WANT_UTF8, DE_ENCODING_UTF16LE);
+		de_dbg(c, "name: \"%s\"", ucstring_getpsz(d->thumbsdb_catalog[i].fname_srd->str));
 
 		de_dbg_indent(c, -1);
 
@@ -759,204 +994,30 @@ done:
 	return retval;
 }
 
-struct summaryinfo_struct {
-	dbuf *f; // The full data stream
-	de_int64 tbloffset;
-	int encoding;
-};
-
-struct prop_info_struct {
-	de_int64 type;
-	const char *name;
-	de_int64 data_offs;
-	de_int64 data_type;
-};
-
-// Sets pinfo->name based on pinfo->type.
-static void get_prop_name(deark *c, lctx *d, struct prop_info_struct *pinfo)
+static void do_cfb_olepropertyset(deark *c, lctx *d, struct dir_entry_info *dei,
+	int is_summaryinfo, int is_root)
 {
-#define PINFO_EDITING_TIME 10
-	static const char *names[20] = {
-		"", "Code page", "Title", "Subject",
-		"Author", "Keywords", "Comments", "Template",
-		"Last saved by", "Revision number", "Editing time", "Last printed",
-		"Create time", "Saved time", "Number of pages", "Number of words",
-		"Number of chars", "Thumbnail", "App name", "Security" };
-
-	if(pinfo->type>=1 && pinfo->type<=19) {
-		pinfo->name = names[pinfo->type];
-	}
-	else {
-		pinfo->name = "?";
-	}
-}
-
-static void do_prop_clipboard(deark *c, lctx *d, struct summaryinfo_struct *si,
-	struct prop_info_struct *pinfo)
-{
-	de_uint32 cbtype;
-	de_int64 cbsize_reported;
-	de_int64 cbsize_payload;
-	de_int64 cbdatapos;
-
-	cbsize_reported = dbuf_getui32le(si->f, si->tbloffset+pinfo->data_offs+4);
-	de_dbg(c, "clipboard data size: %d", (int)cbsize_reported);
-
-	cbtype = (de_uint32)dbuf_getui32le(si->f, si->tbloffset+pinfo->data_offs+12);
-	de_dbg(c, "clipboard data type: 0x%08x", (unsigned int)cbtype);
-
-	cbdatapos = si->tbloffset+pinfo->data_offs+16;
-	cbsize_payload = cbsize_reported-8;
-	if(cbdatapos + cbsize_payload > si->f->len) goto done;
-
-	if(cbtype==3) { // CF_METAFILEPICT
-		dbuf_create_file_from_slice(si->f, cbdatapos+8, cbsize_payload-8,
-			"wmf", NULL, DE_CREATEFLAG_IS_AUX);
-	}
-	else if(cbtype==8) { // CF_DIB
-		de_run_module_by_id_on_slice2(c, "dib", "X", si->f,
-			cbdatapos, cbsize_payload);
-	}
-	else if(cbtype==0x54434950U) { // "PICT"
-		dbuf *outf = NULL;
-		outf = dbuf_create_output_file(c, "pict", NULL, DE_CREATEFLAG_IS_AUX);
-		dbuf_write_zeroes(outf, 512);
-		dbuf_copy(si->f, cbdatapos, cbsize_payload, outf);
-		dbuf_close(outf);
-	}
-
-done:
-	;
-}
-
-static int do_prop_FILETIME(deark *c, lctx *d, struct summaryinfo_struct *si,
-	struct prop_info_struct *pinfo)
-{
-	struct de_timestamp ts;
-
-	if(pinfo->type==PINFO_EDITING_TIME) {
-		// The "Editing time" property typically has a data type of FILETIME,
-		// but it is not actually a FILETIME (I assume it's an *amount* of time).
-		return 0;
-	}
-
-	read_timestamp(c, d, si->f, si->tbloffset+pinfo->data_offs+4, &ts, pinfo->name);
-	return 1;
-}
-
-// Read the value for one property.
-static void do_prop_data(deark *c, lctx *d, struct summaryinfo_struct *si,
-	struct prop_info_struct *pinfo)
-{
-	de_int64 n;
-	de_ucstring *s = NULL;
-
-	pinfo->data_type = dbuf_getui32le(si->f, si->tbloffset+pinfo->data_offs);
-
-	switch(pinfo->data_type) {
-	case 0x02: // int16
-		n = dbuf_geti16le(si->f, si->tbloffset+pinfo->data_offs+4);
-		de_dbg(c, "%s: %d", pinfo->name, (int)n);
-
-		if(pinfo->type==0x01) { // code page
-			// I've seen some files in which the Code Page property appears
-			// *after* some string properties. I don't know how to interpret
-			// that, but for now, I'm not going to apply it retroactively.
-
-			// AFAICT this is a *signed* 16-bit int, which means the maximum
-			// value is 32767, even though code pages can go up to 65535.
-			// Apparently, code pages over 32767 are stored as negative numbers.
-			switch(n) {
-			case 1252: si->encoding = DE_ENCODING_WINDOWS1252; break;
-			case 10000: si->encoding = DE_ENCODING_MACROMAN; break;
-			case -535: si->encoding = DE_ENCODING_UTF8; break;
-			default: si->encoding = DE_ENCODING_ASCII;
-			}
-		}
-
-		break;
-	case 0x03: // int32
-		n = dbuf_geti32le(si->f, si->tbloffset+pinfo->data_offs+4);
-		de_dbg(c, "%s: %d", pinfo->name, (int)n);
-		break;
-	case 0x1e: // string with length prefix
-		s = ucstring_create(c);
-		n = dbuf_geti32le(si->f, si->tbloffset+pinfo->data_offs+4);
-		dbuf_read_to_ucstring_n(si->f, si->tbloffset+pinfo->data_offs+8, n, DE_DBG_MAX_STRLEN, s,
-			DE_CONVFLAG_STOP_AT_NUL, si->encoding);
-		de_dbg(c, "%s: \"%s\"", pinfo->name, ucstring_getpsz(s));
-		break;
-	case 0x40:
-		do_prop_FILETIME(c, d, si, pinfo);
-		break;
-	case 0x47:
-		do_prop_clipboard(c, d, si, pinfo);
-		break;
-	default:
-		de_dbg(c, "[data type 0x%04x not supported]", (unsigned int)pinfo->data_type);
-	}
-
-	ucstring_destroy(s);
-}
-
-static void do_SummaryInformation(deark *c, lctx *d, struct dir_entry_info *dei, int is_root)
-{
-	struct summaryinfo_struct si;
-	de_int64 n;
-	de_int64 nproperties;
+	dbuf *f = NULL;
 	int saved_indent_level;
-	struct prop_info_struct pinfo;
-	int i;
 
-	de_memset(&si, 0, sizeof(struct summaryinfo_struct));
-	si.encoding = DE_ENCODING_ASCII;
+	if(dei->stream_size>1000000) goto done;
+	f = dbuf_create_membuf(c, dei->stream_size, 1);
+	copy_any_stream_to_dbuf(c, d, dei, 0, dei->stream_size, f);
 
 	de_dbg_indent_save(c, &saved_indent_level);
-	de_dbg(c, "SummaryInformation (%s)", is_root?"root":"non-root");
-	de_dbg_indent(c, 1);
-	if(dei->stream_size>1000000) goto done;
-
-	si.f = dbuf_create_membuf(c, dei->stream_size, 1);
-	copy_any_stream_to_dbuf(c, d, dei, 0, dei->stream_size, si.f);
-
-	// expecting 48 (or more?) bytes of header info.
-	n = dbuf_getui16le(si.f, 0);
-	de_dbg(c, "byte order code: 0x%04x", (unsigned int)n);
-	if(n != 0xfffe) goto done;
-	n = dbuf_getui16le(si.f, 4);
-	de_dbg(c, "OS ver: 0x%04x", (unsigned int)n);
-	n = dbuf_getui16le(si.f, 6);
-	de_dbg(c, "OS: 0x%04x", (unsigned int)n);
-
-	si.tbloffset = dbuf_getui32le(si.f, 44);
-	de_dbg(c, "table offset: %d", (int)si.tbloffset);
-
-	// I think this is the length of the data section
-	n = dbuf_getui32le(si.f, si.tbloffset);
-	de_dbg(c, "property data length: %d", (int)n);
-
-	nproperties = dbuf_getui32le(si.f, si.tbloffset+4);
-	de_dbg(c, "number of properties: %d", (int)nproperties);
-	if(nproperties>200) goto done;
-
-	for(i=0; i<nproperties; i++) {
-		de_memset(&pinfo, 0, sizeof(struct prop_info_struct));
-
-		pinfo.type = dbuf_getui32le(si.f, si.tbloffset+8 + 8*i);
-		pinfo.data_offs = dbuf_getui32le(si.f, si.tbloffset+8 + 8*i + 4);
-		get_prop_name(c, d, &pinfo);
-
-		de_dbg(c, "prop[%d]: type=0x%04x (%s), data_offs=%d", (int)i,
-			(unsigned int)pinfo.type, pinfo.name,
-			(int)pinfo.data_offs);
-		de_dbg_indent(c, 1);
-		do_prop_data(c, d, &si, &pinfo);
-		de_dbg_indent(c, -1);
+	if(is_summaryinfo) {
+		de_dbg(c, "SummaryInformation (%s)", is_root?"root":"non-root");
+	}
+	else {
+		de_dbg(c, "property set stream");
 	}
 
+	de_dbg_indent(c, 1);
+	de_run_module_by_id_on_slice(c, "olepropset", NULL, f, 0, f->len);
+	de_dbg_indent(c, -1);
+
 done:
-	de_dbg_indent_restore(c, saved_indent_level);
-	dbuf_close(si.f);
+	dbuf_close(f);
 }
 
 static void read_mini_sector_stream(deark *c, lctx *d, de_int64 first_sec_id, de_int64 stream_size)
@@ -1056,18 +1117,18 @@ static void do_dump_dir_structure(deark *c, lctx *d)
 	de_int64 i;
 	for(i=0; i<d->num_dir_entries; i++) {
 		de_dbg(c, "[%d] t=%d p=%d c=%d s=%d,%d", (int)i,
-			(int)d->dir_entry_extra_info[i].entry_type,
-			(int)d->dir_entry_extra_info[i].parent_id,
-			(int)d->dir_entry_extra_info[i].child_id,
-			(int)d->dir_entry_extra_info[i].sibling_id[0],
-			(int)d->dir_entry_extra_info[i].sibling_id[1]);
-		if(d->dir_entry_extra_info[i].fname) {
+			(int)d->dir_entry[i].entry_type,
+			(int)d->dir_entry[i].parent_id,
+			(int)d->dir_entry[i].child_id,
+			(int)d->dir_entry[i].sibling_id[0],
+			(int)d->dir_entry[i].sibling_id[1]);
+		if(d->dir_entry[i].fname_srd && d->dir_entry[i].fname_srd->str) {
 			de_dbg(c, "  fname: \"%s\"",
-				ucstring_getpsz(d->dir_entry_extra_info[i].fname));
+				ucstring_getpsz(d->dir_entry[i].fname_srd->str));
 		}
-		if(d->dir_entry_extra_info[i].path) {
+		if(d->dir_entry[i].path) {
 			de_dbg(c, "  path: \"%s\"",
-				ucstring_getpsz(d->dir_entry_extra_info[i].path));
+				ucstring_getpsz(d->dir_entry[i].path));
 		}
 	}
 }
@@ -1076,36 +1137,36 @@ static void do_dump_dir_structure(deark *c, lctx *d)
 static void do_mark_dir_entries_recursively(deark *c, lctx *d, de_int32 parent_id,
 	de_int32 dir_entry_idx, int level)
 {
-	struct dir_entry_extra_info_struct *e;
+	struct dir_entry_info *dei;
 	int k;
 
 	if(dir_entry_idx<0 || (de_int64)dir_entry_idx>=d->num_dir_entries) return;
 
-	e = &d->dir_entry_extra_info[dir_entry_idx];
+	dei = &d->dir_entry[dir_entry_idx];
 
-	if(e->entry_type!=OBJTYPE_STORAGE && e->entry_type!=OBJTYPE_STREAM) return;
+	if(dei->entry_type!=OBJTYPE_STORAGE && dei->entry_type!=OBJTYPE_STREAM) return;
 
-	e->parent_id = parent_id;
+	dei->parent_id = parent_id;
 
-	if(e->entry_type==OBJTYPE_STORAGE && e->fname && !e->path) {
+	if(dei->entry_type==OBJTYPE_STORAGE && dei->fname_srd && dei->fname_srd->str && !dei->path) {
 		// Set the full pathname
-		e->path = ucstring_create(c);
-		if(parent_id>0 && d->dir_entry_extra_info[parent_id].path) {
-			ucstring_append_ucstring(e->path, d->dir_entry_extra_info[parent_id].path);
-			ucstring_append_sz(e->path, "/", DE_ENCODING_ASCII);
+		dei->path = ucstring_create(c);
+		if(parent_id>0 && d->dir_entry[parent_id].path) {
+			ucstring_append_ucstring(dei->path, d->dir_entry[parent_id].path);
+			ucstring_append_sz(dei->path, "/", DE_ENCODING_ASCII);
 		}
-		ucstring_append_ucstring(e->path, e->fname);
+		ucstring_append_ucstring(dei->path, dei->fname_srd->str);
 	}
 
 	if(level>50) return;
 	for(k=0; k<2; k++) {
-		do_mark_dir_entries_recursively(c, d, parent_id, e->sibling_id[k], level+1);
+		do_mark_dir_entries_recursively(c, d, parent_id, dei->sibling_id[k], level+1);
 	}
 
-	if(e->entry_type==OBJTYPE_STORAGE) {
+	if(dei->entry_type==OBJTYPE_STORAGE) {
 		// This is a "subdirectory" entry, so examine its children (starting with the
 		// one that we know about).
-		do_mark_dir_entries_recursively(c, d, dir_entry_idx, e->child_id, level+1);
+		do_mark_dir_entries_recursively(c, d, dir_entry_idx, dei->child_id, level+1);
 	}
 }
 
@@ -1117,10 +1178,10 @@ static void do_analyze_dir_structure(deark *c, lctx *d)
 	if(d->num_dir_entries<1) goto done;
 
 	// The first entry should be the root entry.
-	if(d->dir_entry_extra_info[0].entry_type!=OBJTYPE_ROOT_STORAGE) goto done;
+	if(d->dir_entry[0].entry_type!=OBJTYPE_ROOT_STORAGE) goto done;
 
 	// Its child is one of the entries in the root directory. Start with it.
-	do_mark_dir_entries_recursively(c, d, 0, d->dir_entry_extra_info[0].child_id, 0);
+	do_mark_dir_entries_recursively(c, d, 0, d->dir_entry[0].child_id, 0);
 
 	//do_dump_dir_structure(c, d);
 done:
@@ -1136,13 +1197,13 @@ static void do_before_pass_1(deark *c, lctx *d)
 	// Stores some extra information for each directory entry, and a copy of
 	// some information for convenience.
 	// (The original entry is still available at d->dir[128*n].)
-	d->dir_entry_extra_info = de_malloc(c, d->num_dir_entries * sizeof(struct dir_entry_extra_info_struct));
+	d->dir_entry = de_malloc(c, d->num_dir_entries * sizeof(struct dir_entry_info));
 
 	// Set defaults for each entry
 	for(i=0; i<d->num_dir_entries; i++) {
-		d->dir_entry_extra_info[i].child_id = -1;
-		d->dir_entry_extra_info[i].sibling_id[0] = -1;
-		d->dir_entry_extra_info[i].sibling_id[1] = -1;
+		d->dir_entry[i].child_id = -1;
+		d->dir_entry[i].sibling_id[0] = -1;
+		d->dir_entry[i].sibling_id[1] = -1;
 	}
 }
 
@@ -1230,7 +1291,7 @@ static void do_per_dir_entry_format_detection(deark *c, lctx *d, struct dir_entr
 		return;
 	}
 
-	if(!de_strcmp(dei->fname_srd->sz_utf8, thumbsdb_catalog_streamname)) {
+	if(dei->is_thumbsdb_catalog) {
 		d->thumbsdb_catalog_found++;
 		return;
 	}
@@ -1263,78 +1324,177 @@ static void identify_clsid(deark *c, lctx *d, const de_byte *clsid, char *buf, s
 	de_snprintf(buf, buflen, " (%s)", name);
 }
 
-// Read and process a directory entry from the d->dir stream
-static void do_dir_entry(deark *c, lctx *d, de_int64 dir_entry_idx, de_int64 dir_entry_offs,
-	int pass)
+static void do_process_stream(deark *c, lctx *d, struct dir_entry_info *dei)
 {
-	de_int64 name_len_raw;
-	de_int64 name_len_bytes;
+	int saved_indent_level;
+	de_finfo *fi_raw = NULL; // Use this if we extract the raw stream
+	de_finfo *fi_tmp = NULL; // Can be used by format-specific code
+	de_ucstring *fn_raw = NULL; // Use this if we extract the raw stream
+	de_ucstring *fn_tmp = NULL; // Can be used by format-specific code
+	dbuf *firstpart = NULL;
+	int is_thumbsdb_stream = 0;
+	int is_OfficeArtStream = 0;
+	int is_summaryinfo = 0;
+	int is_propset = 0;
+	int is_root = (dei->parent_id==0);
+
+	de_dbg_indent_save(c, &saved_indent_level);
+
+	// By default, use the "stream name" as the filename.
+	fn_raw = ucstring_create(c);
+
+	if(dei->parent_id>0 && d->dir_entry[dei->parent_id].path) {
+		ucstring_append_ucstring(fn_raw, d->dir_entry[dei->parent_id].path);
+		ucstring_append_sz(fn_raw, "/", DE_ENCODING_ASCII);
+	}
+
+	ucstring_append_ucstring(fn_raw, dei->fname_srd->str);
+	fn_tmp = ucstring_clone(fn_raw);
+
+	fi_raw = de_finfo_create(c);
+	fi_tmp = de_finfo_create(c);
+
+	// By default, use the mod time from the directory entry.
+	if(dei->mod_time.is_valid) {
+		fi_raw->mod_time = dei->mod_time; // struct copy
+		fi_tmp->mod_time = dei->mod_time; // struct copy
+	}
+
+	if(d->extract_raw_streams) {
+		dbuf *outf = NULL;
+
+		de_finfo_set_name_from_ucstring(c, fi_raw, fn_raw);
+		fi_raw->original_filename_flag = 1;
+
+		outf = dbuf_create_output_file(c, NULL, fi_raw, 0);
+		copy_any_stream_to_dbuf(c, d, dei, 0, dei->stream_size, outf);
+		dbuf_close(outf);
+	}
+
+	if(!d->decode_streams) goto done;
+
+	// Read the first part of the stream, to use for format detection.
+	firstpart = dbuf_create_membuf(c, 256, 0x1);
+	copy_any_stream_to_dbuf(c, d, dei, 0,
+		(dei->stream_size>256)?256:dei->stream_size, firstpart);
+
+
+	// Stream type detection
+
+	// FIXME? The stream detection happens even if d->subformat_req==SUBFMT_RAW.
+	// We probably should have different detection logic in that case.
+
+	if(!de_strcasecmp(dei->fname_srd->sz_utf8, "\x05" "SummaryInformation")) {
+		is_propset = 1;
+		is_summaryinfo = 1;
+	}
+	else if(!de_strncmp(dei->fname_srd->sz_utf8, "\x05", 1)) {
+		// TODO: Is there a good way to tell whether a stream is a property set?
+		is_propset = 1;
+	}
+	else if(d->subformat_final==SUBFMT_TIFF37680 &&
+		!de_strcasecmp(dei->fname_srd->sz_utf8, "CONTENTS"))
+	{
+		// TODO: This is not the only place to find a "CONTENTS" stream.
+		is_propset = 1;
+	}
+	else if(d->subformat_final==SUBFMT_THUMBSDB) {
+		is_thumbsdb_stream = 1;
+	}
+	else if(!de_strcasecmp(dei->fname_srd->sz_utf8, "Pictures")) {
+		// This stream often appears in PPT documents.
+		is_OfficeArtStream = 1;
+	}
+	else if(!de_strcasecmp(dei->fname_srd->sz_utf8, "EscherStm")) {
+		is_OfficeArtStream = 1;
+	}
+	else if(!de_strcasecmp(dei->fname_srd->sz_utf8, "EscherDelayStm")) {
+		// Found in MS Publisher, and probably other formats.
+		is_OfficeArtStream = 1;
+	}
+
+	if(is_OfficeArtStream) {
+		unsigned int rectype;
+		rectype = (unsigned int)dbuf_getui16le(firstpart, 2);
+		if((rectype&0xf000)!=0xf000) {
+			is_OfficeArtStream = 0;
+		}
+	}
+
+	// End of stream type detection
+
+	if(is_propset) {
+		do_cfb_olepropertyset(c, d, dei, is_summaryinfo, is_root);
+	}
+	else if(is_thumbsdb_stream) {
+		do_extract_stream_to_file_thumbsdb(c, d, dei, fi_tmp, fn_tmp, firstpart);
+	}
+	else if(is_OfficeArtStream) {
+		do_OfficeArtStream(c, d, dei);
+	}
+
+done:
+	de_dbg_indent_restore(c, saved_indent_level);
+	dbuf_close(firstpart);
+	ucstring_destroy(fn_raw);
+	ucstring_destroy(fn_tmp);
+	de_finfo_destroy(c, fi_raw);
+	de_finfo_destroy(c, fi_tmp);
+}
+
+// Read and process a directory entry from the d->dir stream
+// Pass 1:
+//  Collect information about the streams.
+//  Read the Root Object.
+//  Read the minisec stream.
+//  Process some other special streams (e.g. Thumbsdb Catalog).
+//  Do some things related to format detection.
+static void do_dir_entry_pass1(deark *c, lctx *d, de_int64 dir_entry_idx, de_int64 dir_entry_offs)
+{
 	de_int64 raw_sec_id;
+	de_int64 name_len_bytes;
 	struct dir_entry_info *dei = NULL;
-	int is_thumbsdb_catalog = 0;
-	const char *tname;
-	de_int64 node_color;
 	char clsid_string[50];
 	char buf[80];
 
-	dei = de_malloc(c, sizeof(struct dir_entry_info));
+	if(!d->dir_entry) return; // error
+	dei = &d->dir_entry[dir_entry_idx];
 
 	dei->entry_type = dbuf_getbyte(d->dir, dir_entry_offs+66);
 	switch(dei->entry_type) {
-	case OBJTYPE_EMPTY: tname="empty"; break;
-	case OBJTYPE_STORAGE: tname="storage object"; break;
-	case OBJTYPE_STREAM: tname="stream"; break;
-	case OBJTYPE_ROOT_STORAGE: tname="root storage object"; break;
-	default: tname="?";
+	case OBJTYPE_EMPTY: dei->entry_type_name="empty"; break;
+	case OBJTYPE_STORAGE: dei->entry_type_name="storage object"; break;
+	case OBJTYPE_STREAM: dei->entry_type_name="stream"; break;
+	case OBJTYPE_ROOT_STORAGE: dei->entry_type_name="root storage object"; break;
+	default: dei->entry_type_name="?";
 	}
-	de_dbg(c, "type: 0x%02x (%s)", (unsigned int)dei->entry_type, tname);
-
-	if(pass==1) d->dir_entry_extra_info[dir_entry_idx].entry_type = dei->entry_type;
+	de_dbg(c, "type: 0x%02x (%s)", (unsigned int)dei->entry_type, dei->entry_type_name);
 
 	if(dei->entry_type==OBJTYPE_EMPTY) goto done;
 
-	if(pass==2 && dei->entry_type==OBJTYPE_ROOT_STORAGE) goto done;
+	dei->name_len_raw = dbuf_getui16le(d->dir, dir_entry_offs+64);
+	de_dbg2(c, "name len: %d bytes", (int)dei->name_len_raw);
 
-	name_len_raw = dbuf_getui16le(d->dir, dir_entry_offs+64);
-	de_dbg2(c, "name len: %d bytes", (int)name_len_raw);
-	name_len_bytes = name_len_raw-2; // Ignore the trailing U+0000
+	name_len_bytes = dei->name_len_raw-2; // Ignore the trailing U+0000
 	if(name_len_bytes<0) name_len_bytes = 0;
 
 	dei->fname_srd = dbuf_read_string(d->dir, dir_entry_offs, name_len_bytes, name_len_bytes,
 		DE_CONVFLAG_WANT_UTF8, DE_ENCODING_UTF16LE);
 
 	de_dbg(c, "name: \"%s\"", ucstring_getpsz(dei->fname_srd->str));
-	if(pass==1 && dei->entry_type==OBJTYPE_STORAGE &&
-		!d->dir_entry_extra_info[dir_entry_idx].fname)
-	{
-		// Save a copy of directory names, so we can construct the path later.
-		d->dir_entry_extra_info[dir_entry_idx].fname = ucstring_clone(dei->fname_srd->str);
-	}
 
-	if(pass==2) {
-		de_dbg(c, "parent: %d",
-			(int)d->dir_entry_extra_info[dir_entry_idx].parent_id);
-	}
-
-	node_color = dbuf_getbyte(d->dir, dir_entry_offs+67);
-	de_dbg(c, "node color: %u", (unsigned int)node_color);
+	dei->node_color = dbuf_getbyte(d->dir, dir_entry_offs+67);
+	de_dbg(c, "node color: %u", (unsigned int)dei->node_color);
 
 	if(dei->entry_type==OBJTYPE_STORAGE || dei->entry_type==OBJTYPE_STREAM) {
-		de_int32 sibling_id[2];
-		sibling_id[0] = (de_int32)dbuf_geti32le(d->dir, dir_entry_offs+68);
-		sibling_id[1] = (de_int32)dbuf_geti32le(d->dir, dir_entry_offs+72);
-		de_dbg(c, "sibling StreamIDs: %d, %d", (int)sibling_id[0], (int)sibling_id[1]);
-		if(pass==1) {
-			d->dir_entry_extra_info[dir_entry_idx].sibling_id[0] = sibling_id[0];
-			d->dir_entry_extra_info[dir_entry_idx].sibling_id[1] = sibling_id[1];
-		}
+		dei->sibling_id[0] = (de_int32)dbuf_geti32le(d->dir, dir_entry_offs+68);
+		dei->sibling_id[1] = (de_int32)dbuf_geti32le(d->dir, dir_entry_offs+72);
+		de_dbg(c, "sibling StreamIDs: %d, %d", (int)dei->sibling_id[0], (int)dei->sibling_id[1]);
 	}
 
 	if(dei->entry_type==OBJTYPE_STORAGE || dei->entry_type==OBJTYPE_ROOT_STORAGE) {
-		de_int32 child_id;
-		child_id = (de_int32)dbuf_geti32le(d->dir, dir_entry_offs+76);
-		de_dbg(c, "child StreamID: %d", (int)child_id);
-		if(pass==1) d->dir_entry_extra_info[dir_entry_idx].child_id = child_id;
+		dei->child_id = (de_int32)dbuf_geti32le(d->dir, dir_entry_offs+76);
+		de_dbg(c, "child StreamID: %d", (int)dei->child_id);
 	}
 
 	if(dei->entry_type==OBJTYPE_STORAGE || dei->entry_type==OBJTYPE_ROOT_STORAGE) {
@@ -1351,7 +1511,7 @@ static void do_dir_entry(deark *c, lctx *d, de_int64 dir_entry_idx, de_int64 dir
 			clsid_string, buf);
 	}
 
-	read_timestamp(c, d, d->dir, dir_entry_offs+108, &dei->mod_time, "mod time");
+	read_and_cvt_and_dbg_timestamp(c, d->dir, dir_entry_offs+108, &dei->mod_time, "mod time");
 
 	raw_sec_id = dbuf_geti32le(d->dir, dir_entry_offs+116);
 
@@ -1361,8 +1521,8 @@ static void do_dir_entry(deark *c, lctx *d, de_int64 dir_entry_idx, de_int64 dir
 	else {
 		dei->stream_size = dbuf_geti64le(d->dir, dir_entry_offs+120);
 	}
+	de_dbg(c, "stream size: %"INT64_FMT, dei->stream_size);
 
-	de_dbg(c, "stream size: %"INT64_FMT"", dei->stream_size);
 	dei->is_mini_stream = (dei->entry_type==OBJTYPE_STREAM) && (dei->stream_size < d->std_stream_min_size);
 
 	if(dei->is_mini_stream) {
@@ -1375,38 +1535,52 @@ static void do_dir_entry(deark *c, lctx *d, de_int64 dir_entry_idx, de_int64 dir
 		de_dbg(c, "first SecID: %d (%s)", (int)dei->normal_sec_id, buf);
 	}
 
-	if(pass==1) {
-		do_per_dir_entry_format_detection(c, d, dei);
-	}
-
 	if((d->subformat_req==SUBFMT_THUMBSDB || d->subformat_req==SUBFMT_AUTO) &&
-		!de_strcmp(dei->fname_srd->sz_utf8, thumbsdb_catalog_streamname))
+		!de_strcmp(dei->fname_srd->sz_utf8, "Catalog"))
 	{
-		is_thumbsdb_catalog = 1;
+		dei->is_thumbsdb_catalog = 1;
 	}
 
-	if(pass==2 && dei->entry_type==OBJTYPE_STREAM) {
-		extract_stream_to_file(c, d, dir_entry_idx, dei);
+	do_per_dir_entry_format_detection(c, d, dei);
 
-		// It's against our ground rules to both extract a file, and also analyze it,
-		// but there's no good alternative in this case.
-
-		if(!de_strcmp(dei->fname_srd->sz_utf8, summaryinformation_streamname)) {
-			do_SummaryInformation(c, d, dei, (d->dir_entry_extra_info[dir_entry_idx].parent_id==0));
-		}
-	}
-	else if(pass==1 && is_thumbsdb_catalog) {
+	if(dei->is_thumbsdb_catalog && d->decode_streams) {
 		read_thumbsdb_catalog(c, d, dei);
 	}
-	else if(pass==1 && dei->entry_type==OBJTYPE_ROOT_STORAGE) {
+	else if(dei->entry_type==OBJTYPE_ROOT_STORAGE) {
+		// Note: The Root Storage object is required to be the first entry, so we
+		// don't need an extra pass to process it.
 		read_mini_sector_stream(c, d, dei->normal_sec_id, dei->stream_size);
 	}
 
 done:
-	if(dei) {
-		de_destroy_stringreaderdata(c, dei->fname_srd);
-		de_free(c, dei);
+	;
+}
+
+// Pass 2: Process most of the streams.
+static void do_dir_entry_pass2(deark *c, lctx *d, de_int64 dir_entry_idx)
+{
+	struct dir_entry_info *dei = NULL;
+
+	if(!d->dir_entry) return; // error
+	dei = &d->dir_entry[dir_entry_idx];
+
+	de_dbg(c, "type: 0x%02x (%s)", (unsigned int)dei->entry_type, dei->entry_type_name);
+
+	if(dei->entry_type==OBJTYPE_EMPTY) goto done;
+	if(dei->entry_type==OBJTYPE_ROOT_STORAGE) goto done;
+
+	if(dei->fname_srd)
+		de_dbg(c, "name: \"%s\"", ucstring_getpsz(dei->fname_srd->str));
+
+	// In pass 1, we didn't know the parent yet, so print it now.
+	de_dbg(c, "parent: %d", (int)dei->parent_id);
+
+	if(dei->entry_type==OBJTYPE_STREAM) {
+		do_process_stream(c, d, dei);
 	}
+
+done:
+	;
 }
 
 // Pass 1: Detect the file format, and read the mini sector stream.
@@ -1424,33 +1598,20 @@ static void do_directory(deark *c, lctx *d, int pass)
 		de_dbg(c, "directory entry, StreamID=%d", (int)i);
 
 		de_dbg_indent(c, 1);
-		do_dir_entry(c, d, i, dir_entry_offs, pass);
+		if(pass==1) {
+			do_dir_entry_pass1(c, d, i, dir_entry_offs);
+		}
+		else {
+			do_dir_entry_pass2(c, d, i);
+		}
 		de_dbg_indent(c, -1);
 	}
 
 	de_dbg_indent(c, -1);
 }
 
-static void de_run_cfb(deark *c, de_module_params *mparams)
+static void de_run_cfb_internal(deark *c, lctx *d)
 {
-	lctx *d = NULL;
-	const char *cfbfmt_opt;
-
-	d = de_malloc(c, sizeof(lctx));
-
-	cfbfmt_opt = de_get_ext_option(c, "cfb:fmt");
-	if(cfbfmt_opt) {
-		if(!de_strcmp(cfbfmt_opt, "auto")) {
-			d->subformat_req = SUBFMT_AUTO;
-		}
-		else if(!de_strcmp(cfbfmt_opt, "thumbsdb")) {
-			d->subformat_req = SUBFMT_THUMBSDB;
-		}
-		else { // "raw"
-			d->subformat_req = SUBFMT_RAW;
-		}
-	}
-
 	do_init_format_detection(c, d);
 
 	if(!do_header(c, d)) {
@@ -1474,30 +1635,69 @@ static void de_run_cfb(deark *c, de_module_params *mparams)
 	do_directory(c, d, 2);
 
 done:
-	if(d) {
-		dbuf_close(d->difat);
-		dbuf_close(d->fat);
-		dbuf_close(d->minifat);
-		dbuf_close(d->dir);
-		if(d->dir_entry_extra_info) {
-			de_int64 k;
-			for(k=0; k<d->num_dir_entries; k++) {
-				ucstring_destroy(d->dir_entry_extra_info[k].fname);
-				ucstring_destroy(d->dir_entry_extra_info[k].path);
-			}
-			de_free(c, d->dir_entry_extra_info);
+	dbuf_close(d->difat);
+	dbuf_close(d->fat);
+	dbuf_close(d->minifat);
+	dbuf_close(d->dir);
+	if(d->dir_entry) {
+		de_int64 k;
+		for(k=0; k<d->num_dir_entries; k++) {
+			de_destroy_stringreaderdata(c, d->dir_entry[k].fname_srd);
+			ucstring_destroy(d->dir_entry[k].path);
 		}
-		dbuf_close(d->mini_sector_stream);
-		if(d->thumbsdb_catalog) {
-			de_int64 k;
-			for(k=0; k<d->thumbsdb_catalog_num_entries; k++) {
-				ucstring_destroy(d->thumbsdb_catalog[k].fname);
-			}
-			de_free(c, d->thumbsdb_catalog);
-			d->thumbsdb_catalog = NULL;
-		}
-		de_free(c, d);
+		de_free(c, d->dir_entry);
 	}
+	dbuf_close(d->mini_sector_stream);
+	if(d->thumbsdb_catalog) {
+		de_int64 k;
+		for(k=0; k<d->thumbsdb_catalog_num_entries; k++) {
+			de_destroy_stringreaderdata(c, d->thumbsdb_catalog[k].fname_srd);
+		}
+		de_free(c, d->thumbsdb_catalog);
+		d->thumbsdb_catalog = NULL;
+	}
+}
+
+static void de_run_cfb(deark *c, de_module_params *mparams)
+{
+	lctx *d = NULL;
+	const char *cfbfmt_opt;
+
+	d = de_malloc(c, sizeof(lctx));
+	d->decode_streams = 1;
+	d->subformat_req = SUBFMT_AUTO;
+
+	if(de_get_ext_option(c, "cfb:extractstreams")) {
+		d->extract_raw_streams = 1;
+		d->decode_streams = 0;
+	}
+
+	if(mparams && mparams->in_params.codes) {
+		if(de_strchr(mparams->in_params.codes, 'T')) { // TIFF tag 37680 mode
+			d->subformat_req = SUBFMT_TIFF37680;
+		}
+	}
+
+	if(d->subformat_req == SUBFMT_AUTO) {
+		// If we haven't set subformat_req yet, look at the command-line option
+
+		cfbfmt_opt = de_get_ext_option(c, "cfb:fmt");
+		if(cfbfmt_opt) {
+			if(!de_strcmp(cfbfmt_opt, "auto")) {
+				d->subformat_req = SUBFMT_AUTO;
+			}
+			else if(!de_strcmp(cfbfmt_opt, "raw")) {
+				d->subformat_req = SUBFMT_RAW;
+			}
+			else if(!de_strcmp(cfbfmt_opt, "thumbsdb")) {
+				d->subformat_req = SUBFMT_THUMBSDB;
+			}
+		}
+	}
+
+	de_run_cfb_internal(c, d);
+
+	de_free(c, d);
 }
 
 static int de_identify_cfb(deark *c)
@@ -1509,6 +1709,7 @@ static int de_identify_cfb(deark *c)
 
 static void de_help_cfb(deark *c)
 {
+	de_msg(c, "-opt cfb:extractstreams : Extract raw streams, instead of decoding");
 	de_msg(c, "-opt cfb:fmt=raw : Do not try to detect the document type");
 	de_msg(c, "-opt cfb:fmt=thumbsdb : Assume Thumbs.db format");
 }

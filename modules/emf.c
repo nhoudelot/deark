@@ -24,6 +24,8 @@ struct decoder_params {
 	de_uint32 rectype;
 	de_int64 recpos;
 	de_int64 recsize_bytes;
+	de_int64 dpos;
+	de_int64 dlen;
 };
 
 // Handler functions return 0 on fatal error, otherwise 1.
@@ -40,6 +42,27 @@ struct emfplus_rec_info {
 	const char *name;
 	void *reserved1;
 };
+
+// Note: This is duplicated in wmf.c
+static de_uint32 colorref_to_color(de_uint32 colorref)
+{
+	de_uint32 r,g,b;
+	r = DE_COLOR_B(colorref);
+	g = DE_COLOR_G(colorref);
+	b = DE_COLOR_R(colorref);
+	return DE_MAKE_RGB(r,g,b);
+}
+
+// Note: This is duplicated in wmf.c
+static void do_dbg_colorref(deark *c, lctx *d, de_uint32 colorref)
+{
+	de_uint32 clr;
+	char csamp[16];
+
+	clr = colorref_to_color(colorref);
+	de_get_colorsample_code(c, clr, csamp, sizeof(csamp));
+	de_dbg(c, "colorref: 0x%08x%s", (unsigned int)colorref, csamp);
+}
 
 static void ucstring_strip_trailing_NULs(de_ucstring *s)
 {
@@ -478,7 +501,7 @@ static int emf_handler_46(deark *c, lctx *d, struct decoder_params *dp)
 	// Datasize is measured from the beginning of the next field (CommentIdentifier).
 	datasize = de_getui32le(dp->recpos+8);
 
-	dbuf_read_fourcc(c->infile, dp->recpos+12, &id4cc, 0);
+	dbuf_read_fourcc(c->infile, dp->recpos+12, &id4cc, 4, 0x0);
 
 	switch(id4cc.id) {
 	case 0: name="EMR_COMMENT_EMFSPOOL"; break;
@@ -487,7 +510,7 @@ static int emf_handler_46(deark *c, lctx *d, struct decoder_params *dp)
 	default: name="?";
 	}
 
-	de_dbg(c, "type: 0x%08x '%s' (%s) datasize=%d", (unsigned int)id4cc.id, id4cc.id_printable, name,
+	de_dbg(c, "type: 0x%08x '%s' (%s) datasize=%d", (unsigned int)id4cc.id, id4cc.id_dbgstr, name,
 		(int)datasize);
 
 	if(datasize<=4 || 12+datasize > dp->recsize_bytes) goto done; // Bad datasize
@@ -561,6 +584,106 @@ static void extract_dib(deark *c, lctx *d, de_int64 bmi_pos, de_int64 bmi_len,
 
 done:
 	dbuf_close(outf);
+}
+
+static const char *get_stock_obj_name(unsigned int n)
+{
+	const char *names[20] = { "WHITE_BRUSH", "LTGRAY_BRUSH", "GRAY_BRUSH",
+		"DKGRAY_BRUSH", "BLACK_BRUSH", "NULL_BRUSH", "WHITE_PEN", "BLACK_PEN",
+		"NULL_PEN", NULL, "OEM_FIXED_FONT", "ANSI_FIXED_FONT", "ANSI_VAR_FONT",
+		"SYSTEM_FONT", "DEVICE_DEFAULT_FONT", "DEFAULT_PALETTE",
+		"SYSTEM_FIXED_FONT", "DEFAULT_GUI_FONT", "DC_BRUSH", "DC_PEN" };
+	const char *name = NULL;
+
+	if(n & 0x80000000U) {
+		unsigned int idx;
+		idx = n & 0x7fffffff;
+		if(idx<20) name = names[idx];
+	}
+	return name ? name : "?";
+}
+
+static void read_object_index_p(deark *c, lctx *d, de_int64 *ppos)
+{
+	unsigned int n;
+	n = (unsigned int)de_getui32le_p(ppos);
+	if(n & 0x80000000U) {
+		// A stock object
+		de_dbg(c, "object index: 0x%08x (%s)", n, get_stock_obj_name(n));
+	}
+	else {
+		de_dbg(c, "object index: %u", n);
+	}
+}
+
+static void read_LogPen(deark *c, lctx *d, de_int64 pos)
+{
+	unsigned int style;
+	de_int64 n;
+	de_uint32 colorref;
+
+	style = (unsigned int)de_getui32le_p(&pos);
+	de_dbg(c, "style: 0x%08x", style);
+
+	n = de_geti32le_p(&pos); // <PointL>.x = pen width
+	de_dbg(c, "width: %d", (int)n);
+
+	pos += 4; // <PointL>.y = unused
+
+	colorref = (de_uint32)de_getui32le_p(&pos);
+	do_dbg_colorref(c, d, colorref);
+}
+
+static int handler_CREATEPEN(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_int64 pos = dp->dpos;
+
+	if(dp->dlen<20) return 1;
+	read_object_index_p(c, d, &pos);
+	read_LogPen(c, d, pos);
+	return 1;
+}
+
+static void read_LogBrushEx(deark *c, lctx *d, de_int64 pos)
+{
+	unsigned int style;
+	de_uint32 colorref;
+
+	style = (unsigned int)de_getui32le_p(&pos);
+	de_dbg(c, "style: 0x%08x", style);
+
+	colorref = (de_uint32)de_getui32le_p(&pos);
+	do_dbg_colorref(c, d, colorref);
+
+	// TODO: BrushHatch
+}
+
+static int handler_CREATEBRUSHINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_int64 pos = dp->dpos;
+
+	if(dp->dlen<16) return 1;
+	read_object_index_p(c, d, &pos);
+	read_LogBrushEx(c, d, pos);
+	return 1;
+}
+
+static int handler_colorref(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_uint32 colorref;
+	colorref = (de_uint32)de_getui32le(dp->dpos);
+	do_dbg_colorref(c, d, colorref);
+	return 1;
+}
+
+// Can handle any record that is, or begins with, and object index.
+static int handler_object_index(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_int64 pos = dp->dpos;
+
+	if(dp->dlen<4) return 1;
+	read_object_index_p(c, d, &pos);
+	return 1;
 }
 
 // BITBLT
@@ -698,6 +821,68 @@ static int emf_handler_54(deark *c, lctx *d, struct decoder_params *dp)
 	return 1;
 }
 
+static void do_LogFont(deark *c, lctx *d, struct decoder_params *dp, de_int64 pos1, de_int64 len)
+{
+	de_ucstring *facename = NULL;
+	de_int64 pos = pos1;
+	de_int64 n, n2;
+	de_byte b;
+
+	if(len<92) goto done;
+
+	n = de_geti32le_p(&pos);
+	n2 = de_geti32le_p(&pos);
+	de_dbg(c, "height,width: %d,%d", (int)n, (int)n2);
+	pos += 15;
+	b = de_getbyte_p(&pos);
+	de_dbg(c, "charset: 0x%02x (%s)", (unsigned int)b,
+		de_fmtutil_get_windows_charset_name(b));
+
+	pos += 4;
+	facename = ucstring_create(c);
+	dbuf_read_to_ucstring(c->infile, pos, 32*2, facename, 0, DE_ENCODING_UTF16LE);
+	ucstring_truncate_at_NUL(facename);
+	de_dbg(c, "facename: \"%s\"", ucstring_getpsz_d(facename));
+
+done:
+	ucstring_destroy(facename);
+}
+
+static void do_LogFontEx(deark *c, lctx *d, struct decoder_params *dp, de_int64 pos1, de_int64 len)
+{
+	do_LogFont(c, d, dp, pos1, len);
+	// TODO: FullName, Style, Script
+
+}
+
+static void do_LogFontExDv(deark *c, lctx *d, struct decoder_params *dp, de_int64 pos1, de_int64 len)
+{
+	do_LogFontEx(c, d, dp, pos1, len);
+	// TODO: DesignVector
+}
+
+static int handler_EXTCREATEFONTINDIRECTW(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_int64 pos = dp->dpos;
+	de_int64 elw_size;
+
+	read_object_index_p(c, d, &pos); // ihFonts
+
+	// "If the size of the elw field is equal to or less than the size of a
+	// LogFontPanose object, elw MUST be treated as a fixed-length LogFont object.
+	// [Else LogFontExDv.] The size of a LogFontPanose object is 320 decimal."
+	elw_size = dp->dlen - 4;
+
+	if(elw_size<=320) {
+		do_LogFont(c, d, dp, pos, elw_size);
+	}
+	else {
+		do_LogFontExDv(c, d, dp, pos, elw_size);
+	}
+
+	return 1;
+}
+
 static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x01, "HEADER", emf_handler_01 },
 	{ 0x02, "POLYBEZIER", NULL },
@@ -722,8 +907,8 @@ static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x15, "SETSTRETCHBLTMODE", NULL },
 	{ 0x16, "SETTEXTALIGN", NULL },
 	{ 0x17, "SETCOLORADJUSTMENT", NULL },
-	{ 0x18, "SETTEXTCOLOR", NULL },
-	{ 0x19, "SETBKCOLOR", NULL },
+	{ 0x18, "SETTEXTCOLOR", handler_colorref },
+	{ 0x19, "SETBKCOLOR", handler_colorref },
 	{ 0x1a, "OFFSETCLIPRGN", NULL },
 	{ 0x1b, "MOVETOEX", NULL },
 	{ 0x1c, "SETMETARGN", NULL },
@@ -735,10 +920,10 @@ static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x22, "RESTOREDC", NULL },
 	{ 0x23, "SETWORLDTRANSFORM", NULL },
 	{ 0x24, "MODIFYWORLDTRANSFORM", NULL },
-	{ 0x25, "SELECTOBJECT", NULL },
-	{ 0x26, "CREATEPEN", NULL },
-	{ 0x27, "CREATEBRUSHINDIRECT", NULL },
-	{ 0x28, "DELETEOBJECT", NULL },
+	{ 0x25, "SELECTOBJECT", handler_object_index },
+	{ 0x26, "CREATEPEN", handler_CREATEPEN },
+	{ 0x27, "CREATEBRUSHINDIRECT", handler_CREATEBRUSHINDIRECT },
+	{ 0x28, "DELETEOBJECT", handler_object_index },
 	{ 0x29, "ANGLEARC", NULL },
 	{ 0x2a, "ELLIPSE", NULL },
 	{ 0x2b, "RECTANGLE", NULL },
@@ -746,8 +931,8 @@ static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x2d, "ARC", NULL },
 	{ 0x2e, "CHORD", NULL },
 	{ 0x2f, "PIE", NULL },
-	{ 0x30, "SELECTPALETTE", NULL },
-	{ 0x31, "CREATEPALETTE", NULL },
+	{ 0x30, "SELECTPALETTE", handler_object_index },
+	{ 0x31, "CREATEPALETTE", handler_object_index }, // TODO: A better handler
 	{ 0x32, "SETPALETTEENTRIES", NULL },
 	{ 0x33, "RESIZEPALETTE", NULL },
 	{ 0x34, "REALIZEPALETTE", NULL },
@@ -779,7 +964,7 @@ static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x4f, "PLGBLT", NULL },
 	{ 0x50, "SETDIBITSTODEVICE", emf_handler_50_51 },
 	{ 0x51, "STRETCHDIBITS", emf_handler_50_51 },
-	{ 0x52, "EXTCREATEFONTINDIRECTW", NULL },
+	{ 0x52, "EXTCREATEFONTINDIRECTW", handler_EXTCREATEFONTINDIRECTW },
 	{ 0x53, "EXTTEXTOUTA", emf_handler_53 },
 	{ 0x54, "EXTTEXTOUTW", emf_handler_54 },
 	{ 0x55, "POLYBEZIER16", NULL },
@@ -790,15 +975,15 @@ static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x5a, "POLYPOLYLINE16", NULL },
 	{ 0x5b, "POLYPOLYGON16", NULL },
 	{ 0x5c, "POLYDRAW16", NULL },
-	{ 0x5d, "CREATEMONOBRUSH", NULL },
-	{ 0x5e, "CREATEDIBPATTERNBRUSHPT", NULL },
-	{ 0x5f, "EXTCREATEPEN", NULL },
+	{ 0x5d, "CREATEMONOBRUSH", handler_object_index }, // TODO: A better handler
+	{ 0x5e, "CREATEDIBPATTERNBRUSHPT", handler_object_index }, // TODO: A better handler
+	{ 0x5f, "EXTCREATEPEN", handler_object_index }, // TODO: A better handler
 	{ 0x60, "POLYTEXTOUTA", NULL },
 	{ 0x61, "POLYTEXTOUTW", NULL },
 	{ 0x62, "SETICMMODE", NULL },
-	{ 0x63, "CREATECOLORSPACE", NULL },
-	{ 0x64, "SETCOLORSPACE", NULL },
-	{ 0x65, "DELETECOLORSPACE", NULL },
+	{ 0x63, "CREATECOLORSPACE", handler_object_index }, // TODO: A better handler
+	{ 0x64, "SETCOLORSPACE", handler_object_index },
+	{ 0x65, "DELETECOLORSPACE", handler_object_index },
 	{ 0x66, "GLSRECORD", NULL },
 	{ 0x67, "GLSBOUNDEDRECORD", NULL },
 	{ 0x68, "PIXELFORMAT", NULL },
@@ -817,7 +1002,7 @@ static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x77, "SETLINKEDUFIS", NULL },
 	{ 0x78, "ETTEXTJUSTIFICATION", NULL },
 	{ 0x79, "COLORMATCHTOTARGETW", NULL },
-	{ 0x7a, "CREATECOLORSPACEW", NULL }
+	{ 0x7a, "CREATECOLORSPACEW", handler_object_index } // TODO: A better handler
 };
 
 static const struct emf_func_info *find_emf_func_info(de_uint32 rectype)
@@ -842,15 +1027,17 @@ static int do_emf_record(deark *c, lctx *d, de_int64 recnum, de_int64 recpos,
 	de_memset(&dp, 0, sizeof(struct decoder_params));
 	dp.recpos = recpos;
 	dp.recsize_bytes = recsize_bytes;
+	dp.dpos = recpos+8;
+	dp.dlen = recsize_bytes-8;
+	if(dp.dlen<0) dp.dlen=0;
 
 	dp.rectype = (de_uint32)de_getui32le(recpos);
 
 	fnci = find_emf_func_info(dp.rectype);
 
-	de_dbg(c, "record #%d at %d, type=0x%02x (%s), size=%d bytes", (int)recnum,
-		(int)recpos, (unsigned int)dp.rectype,
-		fnci ? fnci->name : "?",
-		(int)recsize_bytes);
+	de_dbg(c, "record #%d at %d, type=0x%02x (%s), dpos=%"INT64_FMT", dlen=%"INT64_FMT,
+		(int)recnum, (int)recpos, (unsigned int)dp.rectype,
+		fnci ? fnci->name : "?", dp.dpos, dp.dlen);
 
 	if(fnci && fnci->fn) {
 		de_dbg_indent(c, 1);

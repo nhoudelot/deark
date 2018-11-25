@@ -45,7 +45,7 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 	de_int64 fhs; // file header size
 	de_int64 bmih_pos;
 	struct de_fourcc cmpr4cc;
-	char cmprname[80];
+	char cmprname_dbgstr[80];
 
 	de_memset(bi, 0, sizeof(struct de_bmpinfo));
 	de_memset(&cmpr4cc, 0, sizeof(struct de_fourcc));
@@ -96,7 +96,7 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 		if(bi->infohdrsize>=20) {
 			bi->compression_field = (de_uint32)dbuf_getui32le(f, bmih_pos+16);
 			if(flags & DE_BMPINFO_CMPR_IS_4CC) {
-				dbuf_read_fourcc(f, bmih_pos+16, &cmpr4cc, 0);
+				dbuf_read_fourcc(f, bmih_pos+16, &cmpr4cc, 4, 0x0);
 			}
 		}
 		if(bi->infohdrsize>=36) {
@@ -126,13 +126,13 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 	de_dbg(c, "bit count: %d", (int)bi->bitcount);
 
 	if((flags & DE_BMPINFO_CMPR_IS_4CC) && (bi->compression_field>0xffff)) {
-		de_snprintf(cmprname, sizeof(cmprname), "'%s'", cmpr4cc.id_printable);
+		de_snprintf(cmprname_dbgstr, sizeof(cmprname_dbgstr), "'%s'", cmpr4cc.id_dbgstr);
 	}
 	else {
 		de_fmtutil_get_bmp_compression_name(bi->compression_field,
-			cmprname, sizeof(cmprname), 0);
+			cmprname_dbgstr, sizeof(cmprname_dbgstr), 0);
 	}
-	de_dbg(c, "compression: %u (%s)", (unsigned int)bi->compression_field, cmprname);
+	de_dbg(c, "compression: %u (%s)", (unsigned int)bi->compression_field, cmprname_dbgstr);
 
 	de_dbg(c, "palette entries: %u", (unsigned int)bi->pal_entries);
 	if(bi->pal_entries>256 && bi->bitcount>8) {
@@ -213,7 +213,7 @@ void de_fmtutil_handle_exif2(deark *c, de_int64 pos, de_int64 len,
 	}
 
 	mparams = de_malloc(c, sizeof(de_module_params));
-	mparams->codes = "E";
+	mparams->in_params.codes = "E";
 
 	de_run_module_by_id_on_slice(c, "tiff", mparams, c->infile, pos, len);
 	if(returned_flags) {
@@ -221,13 +221,13 @@ void de_fmtutil_handle_exif2(deark *c, de_int64 pos, de_int64 len,
 		// extract_level>=2, but for now there's no reasonable way to fix it.
 		// We have to process -- not extract -- the Exif chunk if we want to
 		// know what's in it.
-		*returned_flags = mparams->returned_flags;
-		if((mparams->returned_flags & 0x20) && orientation) {
-			*orientation = mparams->uint1;
+		*returned_flags = mparams->out_params.flags;
+		if((mparams->out_params.flags & 0x20) && orientation) {
+			*orientation = mparams->out_params.uint1;
 		}
 
-		if((mparams->returned_flags & 0x40) && exifversion) {
-			*exifversion = mparams->uint2;
+		if((mparams->out_params.flags & 0x40) && exifversion) {
+			*exifversion = mparams->out_params.uint2;
 		}
 	}
 
@@ -241,35 +241,35 @@ void de_fmtutil_handle_exif(deark *c, de_int64 pos, de_int64 len)
 
 // Either extract the IPTC data to a file, or drill down into it,
 // depending on the value of c->extract_level.
-void de_fmtutil_handle_iptc(deark *c, de_int64 pos, de_int64 len)
+void de_fmtutil_handle_iptc(deark *c, dbuf *f, de_int64 pos, de_int64 len)
 {
 	if(len<1) return;
 
 	if(c->extract_level>=2) {
-		dbuf_create_file_from_slice(c->infile, pos, len, "iptc", NULL, DE_CREATEFLAG_IS_AUX);
+		dbuf_create_file_from_slice(f, pos, len, "iptc", NULL, DE_CREATEFLAG_IS_AUX);
 		return;
 	}
 
-	de_run_module_by_id_on_slice(c, "iptc", NULL, c->infile, pos, len);
+	de_run_module_by_id_on_slice(c, "iptc", NULL, f, pos, len);
 }
 
-void de_fmtutil_handle_photoshop_rsrc2(deark *c, de_int64 pos, de_int64 len,
+void de_fmtutil_handle_photoshop_rsrc2(deark *c, dbuf *f, de_int64 pos, de_int64 len,
 	de_uint32 *returned_flags)
 {
 	de_module_params *mparams = NULL;
 
 	mparams = de_malloc(c, sizeof(de_module_params));
-	mparams->codes = "R";
-	de_run_module_by_id_on_slice(c, "psd", mparams, c->infile, pos, len);
+	mparams->in_params.codes = "R";
+	de_run_module_by_id_on_slice(c, "psd", mparams, f, pos, len);
 	if(returned_flags) {
-		*returned_flags = mparams->returned_flags;
+		*returned_flags = mparams->out_params.flags;
 	}
 	de_free(c, mparams);
 }
 
-void de_fmtutil_handle_photoshop_rsrc(deark *c, de_int64 pos, de_int64 len)
+void de_fmtutil_handle_photoshop_rsrc(deark *c, dbuf *f, de_int64 pos, de_int64 len)
 {
-	de_fmtutil_handle_photoshop_rsrc2(c, pos, len, NULL);
+	de_fmtutil_handle_photoshop_rsrc2(c, f, pos, len, NULL);
 }
 
 // Returns 0 on failure (currently impossible).
@@ -731,7 +731,7 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 	}
 
 	size32 = dbuf_getui32be(bctx->f, pos);
-	dbuf_read_fourcc(bctx->f, pos+4, &box4cc, 0);
+	dbuf_read_fourcc(bctx->f, pos+4, &box4cc, 4, 0x0);
 	curbox->boxtype = box4cc.id;
 
 	if(size32>=8) {
@@ -791,12 +791,12 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 		if(curbox->is_uuid) {
 			de_fmtutil_render_uuid(c, curbox->uuid, uuid_string, sizeof(uuid_string));
 			de_dbg(c, "box '%s'{%s}%s at %"INT64_FMT", len=%"INT64_FMT,
-				box4cc.id_printable, uuid_string, name_str,
+				box4cc.id_dbgstr, uuid_string, name_str,
 				pos, total_len);
 		}
 		else {
 			de_dbg(c, "box '%s'%s at %"INT64_FMT", len=%"INT64_FMT", dlen=%"INT64_FMT,
-				box4cc.id_printable, name_str, pos,
+				box4cc.id_dbgstr, name_str, pos,
 				total_len, payload_len);
 		}
 	}
@@ -879,7 +879,7 @@ int de_fmtutil_default_box_handler(deark *c, struct de_boxesctx *bctx)
 		}
 		else if(!de_memcmp(curbox->uuid, "\x2c\x4c\x01\x00\x85\x04\x40\xb9\xa0\x3e\x56\x21\x48\xd6\xdf\xeb", 16)) {
 			de_dbg(c, "Photoshop resources at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
-			de_fmtutil_handle_photoshop_rsrc(c, curbox->payload_pos, curbox->payload_len);
+			de_fmtutil_handle_photoshop_rsrc(c, bctx->f, curbox->payload_pos, curbox->payload_len);
 		}
 		else if(!de_memcmp(curbox->uuid, "\x05\x37\xcd\xab\x9d\x0c\x44\x31\xa7\x2a\xfa\x56\x1f\x2a\x11\x3e", 16)) {
 			de_dbg(c, "Exif data at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
@@ -1188,14 +1188,29 @@ static void do_iff_anno(deark *c, dbuf *f, de_int64 pos, de_int64 len)
 	}
 	if(len<1) return;
 	if(c->extract_level>=2) {
-		dbuf_create_file_from_slice(c->infile, pos, len, "anno.txt", NULL, DE_CREATEFLAG_IS_AUX);
+		dbuf_create_file_from_slice(f, pos, len, "anno.txt", NULL, DE_CREATEFLAG_IS_AUX);
 	}
 	else {
 		de_ucstring *s = NULL;
 		s = ucstring_create(c);
-		dbuf_read_to_ucstring_n(c->infile, pos, len, DE_DBG_MAX_STRLEN, s, 0, DE_ENCODING_ASCII);
+		dbuf_read_to_ucstring_n(f, pos, len, DE_DBG_MAX_STRLEN, s, 0, DE_ENCODING_ASCII);
 		de_dbg(c, "annotation: \"%s\"", ucstring_getpsz(s));
 		ucstring_destroy(s);
+	}
+}
+
+void de_fmtutil_default_iff_chunk_identify(deark *c, struct de_iffctx *ictx)
+{
+	const char *name = NULL;
+
+	switch(ictx->chunkctx->chunk4cc.id) {
+	case CODE__c_ : name="copyright"; break;
+	case CODE_ANNO: name="annotation"; break;
+	case CODE_AUTH: name="author"; break;
+	}
+
+	if(name) {
+		ictx->chunkctx->chunk_name = name;
 	}
 }
 
@@ -1249,7 +1264,7 @@ int de_fmtutil_is_standard_iff_chunk(deark *c, struct de_iffctx *ictx,
 static int de_fmtutil_default_iff_chunk_handler(deark *c, struct de_iffctx *ictx)
 {
 	de_fmtutil_handle_standard_iff_chunk(c, ictx->f,
-		ictx->chunkctx->chunk_dpos, ictx->chunkctx->chunk_dlen,
+		ictx->chunkctx->dpos, ictx->chunkctx->dlen,
 		ictx->chunkctx->chunk4cc.id);
 	// Note we do not set ictx->handled. The caller is responsible for that.
 	return 1;
@@ -1268,14 +1283,14 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 	int level, de_int64 *pbytes_consumed)
 {
 	int ret;
-	de_int64 chunk_dpos;
-	de_int64 chunk_dlen;
+	de_int64 chunk_dlen_raw;
 	de_int64 chunk_dlen_padded;
 	de_int64 data_bytes_avail;
 	de_int64 hdrsize;
 	struct de_iffchunkctx chunkctx;
 	int saved_indent_level;
 	int retval = 0;
+	char name_str[80];
 
 	de_memset(&chunkctx, 0, sizeof(struct de_iffchunkctx));
 
@@ -1289,7 +1304,8 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 	}
 	data_bytes_avail = bytes_avail-hdrsize;
 
-	dbuf_read_fourcc(ictx->f, pos, &chunkctx.chunk4cc, ictx->reversed_4cc);
+	dbuf_read_fourcc(ictx->f, pos, &chunkctx.chunk4cc, 4,
+		ictx->reversed_4cc ? DE_4CCFLAG_REVERSED : 0x0);
 	if(chunkctx.chunk4cc.id==0 && level==0) {
 		de_warn(c, "Chunk ID not found at %"INT64_FMT"; assuming the data ends "
 			"here", pos);
@@ -1297,18 +1313,36 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 	}
 
 	if(ictx->sizeof_len==2) {
-		chunk_dlen = dbuf_getui16x(ictx->f, pos+4, ictx->is_le);
+		chunk_dlen_raw = dbuf_getui16x(ictx->f, pos+4, ictx->is_le);
 	}
 	else {
-		chunk_dlen = dbuf_getui32x(ictx->f, pos+4, ictx->is_le);
+		chunk_dlen_raw = dbuf_getui32x(ictx->f, pos+4, ictx->is_le);
 	}
-	chunk_dpos = pos+hdrsize;
+	chunkctx.dlen = chunk_dlen_raw;
+	chunkctx.dpos = pos+hdrsize;
 
-	de_dbg(c, "chunk '%s' at %d, dpos=%d, dlen=%d", chunkctx.chunk4cc.id_printable, (int)pos,
-		(int)chunk_dpos, (int)chunk_dlen);
+	// TODO: Setting these fields (prior to the identify function) is enough
+	// for now, but we should also set the other fields here if we can.
+	ictx->level = level;
+	ictx->chunkctx = &chunkctx;
+
+	if(ictx->preprocess_chunk_fn) {
+		ictx->preprocess_chunk_fn(c, ictx);
+	}
+
+	if(chunkctx.chunk_name) {
+		de_snprintf(name_str, sizeof(name_str), " (%s)", chunkctx.chunk_name);
+	}
+	else {
+		name_str[0] = '\0';
+	}
+
+	de_dbg(c, "chunk '%s'%s at %"INT64_FMT", dpos=%"INT64_FMT", dlen=%"INT64_FMT,
+		chunkctx.chunk4cc.id_dbgstr, name_str, pos,
+		chunkctx.dpos, chunkctx.dlen);
 	de_dbg_indent(c, 1);
 
-	if(chunk_dlen > data_bytes_avail) {
+	if(chunkctx.dlen > data_bytes_avail) {
 		int should_warn = 1;
 
 		if(chunkctx.chunk4cc.id==CODE_RIFF && pos==0 && bytes_avail==ictx->f->len) {
@@ -1323,30 +1357,26 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 			de_warn(c, "Invalid oversized chunk, or unexpected end of file "
 				"(chunk at %d ends at %" INT64_FMT ", "
 				"parent ends at %" INT64_FMT ")",
-				(int)pos, chunk_dlen+chunk_dpos, pos+bytes_avail);
+				(int)pos, chunkctx.dlen+chunkctx.dpos, pos+bytes_avail);
 		}
 
-		chunk_dlen = data_bytes_avail; // Try to continue
-		de_dbg(c, "adjusting chunk data len to %d", (int)chunk_dlen);
+		chunkctx.dlen = data_bytes_avail; // Try to continue
+		de_dbg(c, "adjusting chunk data len to %"INT64_FMT, chunkctx.dlen);
 	}
 
-	chunk_dlen_padded = de_pad_to_n(chunk_dlen, ictx->alignment);
+	chunk_dlen_padded = de_pad_to_n(chunkctx.dlen, ictx->alignment);
 	*pbytes_consumed = hdrsize + chunk_dlen_padded;
 
 	// We've set *pbytes_consumed, so we can return "success"
 	retval = 1;
 
 	// Set ictx fields, prior to calling the handler
-	ictx->level = level;
-	chunkctx.chunk_pos = pos;
-	chunkctx.chunk_len = bytes_avail;
-	chunkctx.chunk_dpos = chunk_dpos;
-	chunkctx.chunk_dlen = chunk_dlen;
+	chunkctx.pos = pos;
+	chunkctx.len = bytes_avail;
 	ictx->handled = 0;
 	ictx->is_std_container = 0;
 	ictx->is_raw_container = 0;
 
-	ictx->chunkctx = &chunkctx;
 	ret = ictx->handle_chunk_fn(c, ictx);
 	if(!ret) {
 		retval = 0;
@@ -1361,17 +1391,18 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 		fourcc_clear(&ictx->curr_container_contentstype4cc);
 
 		if(ictx->is_std_container) {
-			contents_dpos = chunk_dpos+4;
-			contents_dlen = chunk_dlen-4;
+			contents_dpos = chunkctx.dpos+4;
+			contents_dlen = chunkctx.dlen-4;
 
 			// First 4 bytes of payload are the "contents type" or "FORM type"
-			dbuf_read_fourcc(ictx->f, chunk_dpos, &ictx->curr_container_contentstype4cc, ictx->reversed_4cc);
+			dbuf_read_fourcc(ictx->f, chunkctx.dpos, &ictx->curr_container_contentstype4cc, 4,
+				ictx->reversed_4cc ? DE_4CCFLAG_REVERSED : 0);
 
 			if(level==0) {
 				ictx->main_fmt4cc = ictx->curr_container_fmt4cc;
 				ictx->main_contentstype4cc = ictx->curr_container_contentstype4cc; // struct copy
 			}
-			de_dbg(c, "contents type: '%s'", ictx->curr_container_contentstype4cc.id_printable);
+			de_dbg(c, "contents type: '%s'", ictx->curr_container_contentstype4cc.id_dbgstr);
 
 			if(ictx->on_std_container_start_fn) {
 				// Call only for standard-format containers.
@@ -1380,8 +1411,8 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 			}
 		}
 		else { // ictx->is_raw_container
-			contents_dpos = chunk_dpos;
-			contents_dlen = chunk_dlen;
+			contents_dpos = chunkctx.dpos;
+			contents_dlen = chunkctx.dlen;
 		}
 
 		ret = do_iff_chunk_sequence(c, ictx, contents_dpos, contents_dlen, level+1);
@@ -1478,4 +1509,103 @@ const char *de_fmtutil_tiff_orientation_name(de_int64 n)
 	};
 	if(n>=1 && n<=8) return names[n];
 	return names[0];
+}
+
+const char *de_fmtutil_get_windows_charset_name(de_byte cs)
+{
+	struct csname_struct { de_byte id; const char *name; };
+	static const struct csname_struct csname_arr[] = {
+		{0x00, "ANSI"},
+		{0x01, "default"},
+		{0x02, "symbol"},
+		{0x4d, "Mac"},
+		{0x80, "Shift-JIS"},
+		{0x81, "Hangul"},
+		{0x82, "Johab"},
+		{0x86, "GB2312"},
+		{0x88, "BIG5"},
+		{0xa1, "Greek"},
+		{0xa2, "Turkish"},
+		{0xa3, "Vietnamese"},
+		{0xb1, "Hebrew"},
+		{0xb2, "Arabic"},
+		{0xba, "Baltic"},
+		{0xcc, "Russian"},
+		{0xde, "Thai"},
+		{0xee, "Eastern Europe"},
+		{0xff, "OEM"}
+	};
+	size_t i;
+
+	for(i=0; i<DE_ITEMS_IN_ARRAY(csname_arr); i++) {
+		if(cs==csname_arr[i].id) return csname_arr[i].name;
+	}
+	return "?";
+}
+
+const char *de_fmtutil_get_windows_cb_data_type_name(unsigned int ty)
+{
+	const char *name = "?";
+
+	switch(ty) {
+	case 1: name="CF_TEXT"; break;
+	case 2: name="CF_BITMAP"; break;
+	case 3: name="CF_METAFILEPICT"; break;
+	case 6: name="CF_TIFF"; break;
+	case 7: name="CF_OEMTEXT"; break;
+	case 8: name="CF_DIB"; break;
+	case 11: name="CF_RIFF"; break;
+	case 12: name="CF_WAVE"; break;
+	case 13: name="CF_UNICODETEXT"; break;
+	case 14: name="CF_ENHMETAFILE"; break;
+	case 17: name="CF_DIBV5"; break;
+	}
+	return name;
+}
+
+// Search for the ZIP "end of central directory" object.
+// Also useful for detecting hybrid ZIP files, such as self-extracting EXE.
+int de_fmtutil_find_zip_eocd(deark *c, dbuf *f, de_int64 *foundpos)
+{
+	de_uint32 sig;
+	de_byte *buf = NULL;
+	int retval = 0;
+	de_int64 buf_offset;
+	de_int64 buf_size;
+	de_int64 i;
+
+	*foundpos = 0;
+	if(f->len < 22) goto done;
+
+	// End-of-central-dir record usually starts 22 bytes from EOF. Try that first.
+	sig = (de_uint32)dbuf_getui32le(f, f->len - 22);
+	if(sig == 0x06054b50U) {
+		*foundpos = f->len - 22;
+		retval = 1;
+		goto done;
+	}
+
+	// Search for the signature.
+	// The end-of-central-directory record could theoretically appear anywhere
+	// in the file. We'll follow Info-Zip/UnZip's lead and search the last 66000
+	// bytes.
+#define MAX_ZIP_EOCD_SEARCH 66000
+	buf_size = f->len;
+	if(buf_size > MAX_ZIP_EOCD_SEARCH) buf_size = MAX_ZIP_EOCD_SEARCH;
+
+	buf = de_malloc(c, buf_size);
+	buf_offset = f->len - buf_size;
+	dbuf_read(f, buf, buf_offset, buf_size);
+
+	for(i=buf_size-22; i>=0; i--) {
+		if(buf[i]=='P' && buf[i+1]=='K' && buf[i+2]==5 && buf[i+3]==6) {
+			*foundpos = buf_offset + i;
+			retval = 1;
+			goto done;
+		}
+	}
+
+done:
+	de_free(c, buf);
+	return retval;
 }

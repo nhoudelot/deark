@@ -47,14 +47,15 @@ endif
 OBJDIR:=obj
 
 OFILES_MODS_AB:=$(addprefix $(OBJDIR)/modules/,abk.o alphabmp.o amigaicon.o \
- ansiart.o ar.o asf.o atari.o atari-img.o autocad.o awbm.o basic-c64.o \
- bmff.o binhex.o bintext.o bmp.o bpg.o bsave.o)
+ ansiart.o ar.o asf.o atari-dsk.o atari-img.o autocad.o awbm.o basic-c64.o \
+ bmff.o apple2-dsk.o binhex.o bintext.o bmi.o bmp.o bpg.o bsave.o)
 OFILES_MODS_CH:=$(addprefix $(OBJDIR)/modules/,cab.o cardfile.o cfb.o \
  compress.o cpio.o d64.o drhalo.o ebml.o emf.o epocimage.o eps.o exe.o \
  flif.o fnt.o gemfont.o gemmeta.o gemras.o gif.o grasp.o grob.o gzip.o \
  hlp.o)
 OFILES_MODS_IO:=$(addprefix $(OBJDIR)/modules/,misc.o iccprofile.o icns.o \
  ico.o iff.o ilbm.o insetpix.o iptc.o jbf.o jovianvi.o jpeg.o lha.o \
+ j2c.o ogg.o olepropset.o \
  macpaint.o makichan.o mbk.o mp3.o mscompress.o msp.o nokia.o os2bmp.o)
 OFILES_MODS_PQ:=$(addprefix $(OBJDIR)/modules/,psd.o palmbitmap.o palmpdb.o \
  pcpaint.o pcx.o pff2.o pict.o pkfont.o png.o pnm.o portfolio.o printptnr.o \
@@ -80,21 +81,22 @@ DEARK2_A:=$(OBJDIR)/src/deark2.a
 $(DEARK2_A): $(OFILES_DEARK2)
 	ar rcs $@ $^
 
+ARFLAGS:=urcs
 MODS_AB_A:=$(OBJDIR)/modules/mods-ab.a
 MODS_CH_A:=$(OBJDIR)/modules/mods-ch.a
 MODS_IO_A:=$(OBJDIR)/modules/mods-io.a
 MODS_PQ_A:=$(OBJDIR)/modules/mods-pq.a
 MODS_RZ_A:=$(OBJDIR)/modules/mods-rz.a
 $(MODS_AB_A): $(OFILES_MODS_AB)
-	ar rcs $@ $^
+	ar $(ARFLAGS) $@ $^
 $(MODS_CH_A): $(OFILES_MODS_CH)
-	ar rcs $@ $^
+	ar $(ARFLAGS) $@ $^
 $(MODS_IO_A): $(OFILES_MODS_IO)
-	ar rcs $@ $^
+	ar $(ARFLAGS) $@ $^
 $(MODS_PQ_A): $(OFILES_MODS_PQ)
-	ar rcs $@ $^
+	ar $(ARFLAGS) $@ $^
 $(MODS_RZ_A): $(OFILES_MODS_RZ)
-	ar rcs $@ $^
+	ar $(ARFLAGS) $@ $^
 
 # I'm sorry if your linker doesn't like this library order, but the link
 # command was getting so long that I've decided to start using helper

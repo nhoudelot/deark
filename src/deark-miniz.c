@@ -145,6 +145,10 @@ int de_write_png(deark *c, de_bitmap *img, dbuf *f)
 		return 0;
 	}
 
+	if(f->btype==DBUF_TYPE_NULL) {
+		return 0;
+	}
+
 	if(img->density_code>0 && c->write_density) {
 		pei.has_phys = 1;
 		if(img->density_code==1) { // unspecified units
@@ -359,7 +363,7 @@ static mz_bool my_mz_zip_writer_init_file(deark *c, mz_zip_archive *pZip, const 
     de_err(c, "Failed to initialize ZIP file");
     return MZ_FALSE;
   }
-  if (NULL == (pFile = de_fopen_for_write(c, pFilename, msgbuf, sizeof(msgbuf))))
+  if (NULL == (pFile = de_fopen_for_write(c, pFilename, msgbuf, sizeof(msgbuf), 0)))
   {
     de_err(c, "Failed to write %s: %s", pFilename, msgbuf);
     mz_zip_writer_end(pZip);

@@ -6,6 +6,7 @@
 
 #include <deark-config.h>
 #include <deark-private.h>
+#include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_wmf);
 
 typedef struct localctx_struct {
@@ -13,6 +14,9 @@ typedef struct localctx_struct {
 	int input_encoding;
 	de_int64 wmf_file_type;
 	de_int64 wmf_windows_version;
+	unsigned int num_objects;
+	dbuf *embedded_emf;
+	de_byte *object_table;
 } lctx;
 
 struct escape_info {
@@ -36,10 +40,44 @@ typedef int (*record_decoder_fn)(deark *c, lctx *d, struct decoder_params *dp);
 
 struct wmf_func_info {
 	de_byte rectype; // Low byte of the RecordFunction field
+	// Flags:
+	//  0x1: Creates an object
 	de_byte flags;
 	const char *name;
 	record_decoder_fn fn;
 };
+
+// Note: This is duplicated in emf.c
+static de_uint32 colorref_to_color(de_uint32 colorref)
+{
+	de_uint32 r,g,b;
+	r = DE_COLOR_B(colorref);
+	g = DE_COLOR_G(colorref);
+	b = DE_COLOR_R(colorref);
+	return DE_MAKE_RGB(r,g,b);
+}
+
+// Note: This is duplicated in emf.c
+static void do_dbg_colorref(deark *c, lctx *d, struct decoder_params *dp, de_uint32 colorref)
+{
+	de_uint32 clr;
+	char csamp[16];
+
+	clr = colorref_to_color(colorref);
+	de_get_colorsample_code(c, clr, csamp, sizeof(csamp));
+	de_dbg(c, "colorref: 0x%08x%s", (unsigned int)colorref, csamp);
+}
+
+static int handler_colorref(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_uint32 colorref;
+
+	if(dp->dlen<4) goto done;
+	colorref = (de_uint32)de_getui32le(dp->dpos);
+	do_dbg_colorref(c, d, dp, colorref);
+done:
+	return 1;
+}
 
 static int wmf_handler_TEXTOUT(deark *c, lctx *d, struct decoder_params *dp)
 {
@@ -80,30 +118,22 @@ static int wmf_handler_BITBLT_STRETCHBLT_DIBBITBLT(deark *c, lctx *d, struct dec
 
 	if(dp->rectype==0x23) { // STRETCHBLT
 		de_int64 SrcWidth, SrcHeight;
-		SrcHeight = de_geti16le(pos);
-		pos += 2;
-		SrcWidth = de_geti16le(pos);
-		pos += 2;
+		SrcHeight = de_geti16le_p(&pos);
+		SrcWidth = de_geti16le_p(&pos);
 		de_dbg(c, "SrcWidth, SrcHeight: %d"DE_CHAR_TIMES"%d",
 			(int)SrcWidth, (int)SrcHeight);
 	}
 
-	YSrc = de_geti16le(pos);
-	pos += 2;
-	XSrc = de_geti16le(pos);
-	pos += 2;
+	YSrc = de_geti16le_p(&pos);
+	XSrc = de_geti16le_p(&pos);
 	de_dbg(c, "XSrc, YSrc: (%d, %d)", (int)XSrc, (int)YSrc);
 
-	Height = de_geti16le(pos);
-	pos += 2;
-	Width = de_geti16le(pos);
-	pos += 2;
+	Height = de_geti16le_p(&pos);
+	Width = de_geti16le_p(&pos);
 	de_dbg_dimensions(c, Width, Height);
 
-	YDest = de_geti16le(pos);
-	pos += 2;
-	XDest = de_geti16le(pos);
-	pos += 2;
+	YDest = de_geti16le_p(&pos);
+	XDest = de_geti16le_p(&pos);
 	de_dbg(c, "XDest, YDest: (%d, %d)", (int)XDest, (int)YDest);
 
 	// TODO: Bitmap16 object (if BITBLT or STRETCHBLT)
@@ -141,7 +171,7 @@ static const struct escape_info escape_info_arr[] = {
 	{ 0x000c, "GETPHYSPAGESIZE", NULL },
 	{ 0x000d, "GETPRINTINGOFFSET", NULL },
 	{ 0x000e, "GETSCALINGFACTOR", NULL },
-	{ 0x000f, "META_ESCAPE_ENHANCED_METAFILE", NULL },
+	{ 0x000f, "MFCOMMENT", NULL }, // a.k.a. META_ESCAPE_ENHANCED_METAFILE
 	{ 0x0010, "SETPENWIDTH", NULL },
 	{ 0x0011, "SETCOPYCOUNT", NULL },
 	{ 0x0012, "SETPAPERSOURCE", NULL },
@@ -189,61 +219,100 @@ static const struct escape_info escape_info_arr[] = {
 	{ 0x11d8, "SPCLPASSTHROUGH2", NULL }
 };
 
-static void do_ESCAPE_EMF(deark *c, lctx *d, struct decoder_params *dp,
-	de_int64 bytecount)
+static void do_ESCAPE_MFCOMMENT_EMF(deark *c, lctx *d, struct decoder_params *dp,
+	de_int64 pos1, de_int64 bytecount)
 {
-	de_int64 emfpos, emflen;
-	de_uint32 id;
+	de_int64 pos = pos1;
+	de_int64 endpos = dp->dpos + dp->dlen;
+	unsigned int CommentId;
+	de_int64 n;
 	de_int64 CommentRecordCount, CurrentRecordSize;
 	de_int64 RemainingBytes, EnhancedMetafileDataSize;
 
-	// I am clearly missing something here, because of the half dozen
-	// WMF files I have that use this escape, only one of them uses
-	// the format that is in the specification. The others are not
-	// even remotely close to the documented format.
-
-	// dp->dpos points to the beginning of the EscapeFunction field.
-	// There should be 38 more bytes of headers, from this point,
-	// followed by EMF data.
-
-	emfpos = dp->dpos+38;
-	emflen = bytecount-34;
-	if(emflen<=0) {
-		de_dbg(c, "[bad embedded EMF data (too short)]");
-		goto done;
-	}
-	id = (de_uint32)de_getui32le(dp->dpos+4);
-	if(id!=0x43464d57U) {
-		de_dbg(c, "[bad embedded EMF data (bad CommentIdentifier)]");
+	if(pos+34>endpos) {
+		de_dbg(c, "[bad/unsupported embedded EMF data (too short)]");
 		goto done;
 	}
 
-	CommentRecordCount = de_getui32le(dp->dpos+22);
+	CommentId = (unsigned int)de_getui32le_p(&pos);
+	de_dbg(c, "CommentIdentifier: 0x%08x", CommentId);
+	if(CommentId!=0x43464d57U) goto done;
+
+	n = de_getui32le_p(&pos);
+	de_dbg(c, "CommentType: 0x%08x", (unsigned int)n);
+	if(n != 1) {
+		de_dbg(c, "[bad/unsupported embedded EMF data (unsupported CommentType)]");
+		goto done;
+	}
+
+	n = de_getui32le_p(&pos);
+	de_dbg(c, "Version: 0x%08x", (unsigned int)n);
+	n = de_getui16le_p(&pos);
+	de_dbg(c, "CheckSum (reported): 0x%04x", (unsigned int)n);
+	n = de_getui32le_p(&pos);
+	de_dbg(c, "Flags: 0x%08x", (unsigned int)n);
+	CommentRecordCount = de_getui32le_p(&pos);
 	de_dbg(c, "CommentRecordCount: %d", (int)CommentRecordCount);
-	CurrentRecordSize = de_getui32le(dp->dpos+26);
+	CurrentRecordSize = de_getui32le_p(&pos);
 	de_dbg(c, "CurrentRecordSize: %d", (int)CurrentRecordSize);
-	RemainingBytes = de_getui32le(dp->dpos+30);
+	RemainingBytes = de_getui32le_p(&pos);
 	de_dbg(c, "RemainingBytes: %d", (int)RemainingBytes);
 
 	// The spec says that the ByteCount field must be 34 +
 	// EnhancedMetafileDataSize, but that doesn't make sense to me.
 	// Maybe it was supposed to be 34 + CurrentRecordSize?
-	EnhancedMetafileDataSize = de_getui32le(dp->dpos+34);
+	EnhancedMetafileDataSize = de_getui32le_p(&pos);
 	de_dbg(c, "EnhancedMetafileDataSize: %d", (int)EnhancedMetafileDataSize);
 
-	if(CommentRecordCount!=1) {
-		de_dbg(c, "[not decoding EMF data (fragments not supported)]");
-		goto done;
+	if(pos+CurrentRecordSize>endpos) goto done;
+	de_dbg(c, "embedded EMF data at %d, len=%d", (int)pos, (int)CurrentRecordSize);
+
+	if(!d->embedded_emf && (CurrentRecordSize+RemainingBytes==EnhancedMetafileDataSize)) {
+		// Looks like the first record
+		d->embedded_emf = dbuf_create_output_file(c, "emf", NULL, 0);
 	}
 
-	de_dbg(c, "embedded EMF data at %d, len=%d", (int)emfpos, (int)emflen);
-	if(c->extract_level>=2) {
-		dbuf_create_file_from_slice(c->infile, emfpos, emflen, "emf", NULL, 0);
+	if(d->embedded_emf) {
+		dbuf_copy(c->infile, pos, CurrentRecordSize, d->embedded_emf);
+	}
+
+	if(d->embedded_emf && RemainingBytes==0) {
+		// Looks like the last record
+		dbuf_close(d->embedded_emf);
+		d->embedded_emf = NULL;
+	}
+
+done:
+	;
+}
+
+static void do_ESCAPE_MFCOMMENT(deark *c, lctx *d, struct decoder_params *dp,
+	de_int64 bytecount)
+{
+	de_int64 pos;
+	de_int64 endpos;
+	int commenttype = 0;
+	const char *commenttype_name = "?";
+	unsigned int sig;
+
+	endpos = dp->dpos + dp->dlen;
+	pos = dp->dpos+4; // Skip over EscapeFunction & ByteCount.
+	if(pos+bytecount > endpos) goto done;
+
+	if(bytecount>=4) {
+		sig = (unsigned int)de_getui32le(pos);
+		if(sig==0x43464d57U) {
+			commenttype = 1;
+			commenttype_name = "META_ESCAPE_ENHANCED_METAFILE";
+		}
+	}
+
+	de_dbg(c, "identified as: %s", commenttype_name);
+	if(commenttype==1) {
+		do_ESCAPE_MFCOMMENT_EMF(c, d, dp, pos, bytecount);
 	}
 	else {
-		de_dbg_indent(c, 1);
-		de_run_module_by_id_on_slice(c, "emf", NULL, c->infile, emfpos, emflen);
-		de_dbg_indent(c, -1);
+		de_dbg_hexdump(c, c->infile, pos, bytecount, 256, NULL, 0x1);
 	}
 
 done:
@@ -286,7 +355,7 @@ static int wmf_handler_ESCAPE(deark *c, lctx *d, struct decoder_params *dp)
 	}
 
 	if(escfn==0x000f) {
-		do_ESCAPE_EMF(c, d, dp, bytecount);
+		do_ESCAPE_MFCOMMENT(c, d, dp, bytecount);
 	}
 
 done:
@@ -358,9 +427,155 @@ done:
 	return 1;
 }
 
+static int handler_SELECTOBJECT(deark *c, lctx *d, struct decoder_params *dp)
+{
+	unsigned int oi;
+	oi = (unsigned int)de_getui16le(dp->dpos);
+	de_dbg(c, "object index: %u", oi);
+	return 1;
+}
+
+static int handler_DELETEOBJECT(deark *c, lctx *d, struct decoder_params *dp)
+{
+	unsigned int oi;
+	oi = (unsigned int)de_getui16le(dp->dpos);
+	de_dbg(c, "object index: %u", oi);
+	if(d->object_table && oi<d->num_objects) {
+		d->object_table[oi] = 0; // Mark this index as available
+	}
+	return 1;
+}
+
+static const char* get_brushstyle_name(unsigned int n)
+{
+	static const char *names[7] = { "BS_SOLID", "BS_NULL", "BS_HATCHED", "BS_PATTERN",
+		NULL, "BS_DIBPATTERN", "BS_DIBPATTERNPT"};
+	const char *name = NULL;
+
+	if(n<=6) {
+		name = names[n];
+	}
+	return name?name:"?";
+}
+
+static int handler_CREATEBRUSHINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
+{
+	unsigned int style;
+	de_int64 pos = dp->dpos;
+
+	if(dp->dlen<8) goto done;
+	style = (unsigned int)de_getui16le_p(&pos);
+	de_dbg(c, "style: 0x%04x (%s)", style, get_brushstyle_name(style));
+
+	if(style==0x0 || style==0x2) {
+		de_uint32 colorref;
+		colorref = (de_uint32)de_getui32le(pos);
+		do_dbg_colorref(c, d, dp, colorref);
+	}
+	pos += 4;
+
+	if(style==0x2) {
+		unsigned int h;
+		h = (unsigned int)de_getui16le(pos);
+		de_dbg(c, "hatch: %u", h);
+	}
+
+done:
+	return 1;
+}
+
+static const char *get_penbasestyle_name(unsigned int n)
+{
+	static const char *names[9] = { "PS_SOLID", "PS_DASH", "PS_DOT", "PS_DASHDOT",
+		"PS_DASHDOTDOT", "PS_NULL", "PS_INSIDEFRAME", "PS_USERSTYLE", "PS_ALTERNATE" };
+	const char *name = NULL;
+
+	if(n<=8) {
+		name = names[n];
+	}
+	return name?name:"?";
+}
+
+static int handler_CREATEPENINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_uint32 colorref;
+	de_int64 pos = dp->dpos;
+	unsigned int width;
+	unsigned int style;
+	unsigned int base_style;
+	de_ucstring *style_descr = NULL;
+
+	if(dp->dlen<10) goto done;
+	style = (unsigned int)de_getui16le_p(&pos);
+	base_style = style&0x0f; // ?
+	style_descr = ucstring_create(c);
+	ucstring_append_flags_item(style_descr, get_penbasestyle_name(base_style));
+	if((style&0x0f00)==0x0100) ucstring_append_flags_item(style_descr, "PS_ENDCAP_SQUARE");
+	if((style&0x0f00)==0x0200) ucstring_append_flags_item(style_descr, "PS_ENDCAP_FLAG");
+	if((style&0xf000)==0x1000) ucstring_append_flags_item(style_descr, "PS_JOIN_BEVEL");
+	if((style&0xf000)==0x2000) ucstring_append_flags_item(style_descr, "PS_JOIN_MITER");
+	de_dbg(c, "style: 0x%04x (%s)", style, ucstring_getpsz(style_descr));
+
+	if(base_style!=0x5) {
+		width = (unsigned int)de_getui32le(pos);
+		width &= 0x0000ffffU;
+		de_dbg(c, "width: %u", width);
+	}
+	pos += 4;
+
+	if(base_style!=0x5) {
+		colorref = (de_uint32)de_getui32le(pos);
+		do_dbg_colorref(c, d, dp, colorref);
+	}
+
+done:
+	ucstring_destroy(style_descr);
+	return 1;
+}
+
+static int handler_CREATEFONTINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
+{
+	de_int64 facename_size;
+	de_int64 n, n2;
+	de_byte b;
+	de_int64 pos = dp->dpos;
+
+	n = de_geti16le_p(&pos);
+	n2 = de_geti16le_p(&pos);
+	de_dbg(c, "height,width: %d,%d", (int)n, (int)n2);
+	pos += 9;
+	b = de_getbyte_p(&pos);
+	de_dbg(c, "charset: 0x%02x (%s)", (unsigned int)b,
+		de_fmtutil_get_windows_charset_name(b));
+
+	facename_size = dp->dlen-18;
+	if(facename_size>32) facename_size=32;
+	if(facename_size>=2) {
+		de_ucstring *facename = NULL;
+		facename = ucstring_create(c);
+		dbuf_read_to_ucstring(c->infile, dp->dpos+18, facename_size, facename,
+			DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_WINDOWS1252);
+		de_dbg(c, "facename: \"%s\"", ucstring_getpsz_d(facename));
+		ucstring_destroy(facename);
+	}
+	return 1;
+}
+
+static int handler_FILLREGION(deark *c, lctx *d, struct decoder_params *dp)
+{
+	unsigned int oi;
+	de_int64 pos = dp->dpos;
+
+	oi = (unsigned int)de_getui16le_p(&pos);
+	de_dbg(c, "region object index: %u", oi);
+	oi = (unsigned int)de_getui16le_p(&pos);
+	de_dbg(c, "brush object index: %u", oi);
+	return 1;
+}
+
 static const struct wmf_func_info wmf_func_info_arr[] = {
 	{ 0x00, 0, "EOF", NULL },
-	{ 0x01, 0, "SETBKCOLOR", NULL },
+	{ 0x01, 0, "SETBKCOLOR",  handler_colorref },
 	{ 0x02, 0, "SETBKMODE", NULL },
 	{ 0x03, 0, "SETMAPMODE", NULL },
 	{ 0x04, 0, "SETROP2", NULL },
@@ -368,7 +583,7 @@ static const struct wmf_func_info wmf_func_info_arr[] = {
 	{ 0x06, 0, "SETPOLYFILLMODE", NULL },
 	{ 0x07, 0, "SETSTRETCHBLTMODE", NULL },
 	{ 0x08, 0, "SETTEXTCHAREXTRA", NULL },
-	{ 0x09, 0, "SETTEXTCOLOR", NULL },
+	{ 0x09, 0, "SETTEXTCOLOR",  handler_colorref },
 	{ 0x0a, 0, "SETTEXTJUSTIFICATION", NULL },
 	{ 0x0b, 0, "SETWINDOWORG", NULL },
 	{ 0x0c, 0, "SETWINDOWEXT", NULL },
@@ -399,18 +614,18 @@ static const struct wmf_func_info wmf_func_info_arr[] = {
 	{ 0x25, 0, "POLYLINE", NULL },
 	{ 0x26, 0, "ESCAPE", wmf_handler_ESCAPE },
 	{ 0x27, 0, "RESTOREDC", NULL },
-	{ 0x28, 0, "FILLREGION", NULL },
+	{ 0x28, 0, "FILLREGION", handler_FILLREGION },
 	{ 0x29, 0, "FRAMEREGION", NULL },
 	{ 0x2a, 0, "INVERTREGION", NULL },
 	{ 0x2b, 0, "PAINTREGION", NULL },
-	{ 0x2c, 0, "SELECTCLIPREGION", NULL },
-	{ 0x2d, 0, "SELECTOBJECT", NULL },
+	{ 0x2c, 0, "SELECTCLIPREGION", handler_SELECTOBJECT },
+	{ 0x2d, 0, "SELECTOBJECT", handler_SELECTOBJECT },
 	{ 0x2e, 0, "SETTEXTALIGN", NULL },
 	{ 0x30, 0, "CHORD", NULL },
 	{ 0x31, 0, "SETMAPPERFLAGS", NULL },
 	{ 0x32, 0, "EXTTEXTOUT", wmf_handler_EXTTEXTOUT },
 	{ 0x33, 0, "SETDIBTODEV", NULL },
-	{ 0x34, 0, "SELECTPALETTE", NULL },
+	{ 0x34, 0, "SELECTPALETTE", handler_SELECTOBJECT },
 	{ 0x35, 0, "REALIZEPALETTE", NULL },
 	{ 0x36, 0, "ANIMATEPALETTE", NULL },
 	{ 0x37, 0, "SETPALENTRIES", NULL },
@@ -418,17 +633,17 @@ static const struct wmf_func_info wmf_func_info_arr[] = {
 	{ 0x39, 0, "RESIZEPALETTE", NULL },
 	{ 0x40, 0, "DIBBITBLT", wmf_handler_BITBLT_STRETCHBLT_DIBBITBLT },
 	{ 0x41, 0, "DIBSTRETCHBLT", wmf_handler_DIBSTRETCHBLT_STRETCHDIB },
-	{ 0x42, 0, "DIBCREATEPATTERNBRUSH", NULL },
+	{ 0x42, 1, "DIBCREATEPATTERNBRUSH", NULL },
 	{ 0x43, 0, "STRETCHDIB", wmf_handler_DIBSTRETCHBLT_STRETCHDIB },
 	{ 0x48, 0, "EXTFLOODFILL", NULL },
 	{ 0x49, 0, "SETLAYOUT", NULL },
-	{ 0xf0, 0, "DELETEOBJECT", NULL },
-	{ 0xf7, 0, "CREATEPALETTE", NULL },
-	{ 0xf9, 0, "CREATEPATTERNBRUSH", NULL },
-	{ 0xfa, 0, "CREATEPENINDIRECT", NULL },
-	{ 0xfb, 0, "CREATEFONTINDIRECT", NULL },
-	{ 0xfc, 0, "CREATEBRUSHINDIRECT", NULL },
-	{ 0xff, 0, "CREATEREGION", NULL }
+	{ 0xf0, 0, "DELETEOBJECT", handler_DELETEOBJECT },
+	{ 0xf7, 1, "CREATEPALETTE", NULL },
+	{ 0xf9, 1, "CREATEPATTERNBRUSH", NULL },
+	{ 0xfa, 1, "CREATEPENINDIRECT", handler_CREATEPENINDIRECT },
+	{ 0xfb, 1, "CREATEFONTINDIRECT", handler_CREATEFONTINDIRECT },
+	{ 0xfc, 1, "CREATEBRUSHINDIRECT", handler_CREATEBRUSHINDIRECT },
+	{ 0xff, 1, "CREATEREGION", NULL }
 };
 
 static void do_read_aldus_header(deark *c, lctx *d)
@@ -452,7 +667,6 @@ static void do_read_aldus_header(deark *c, lctx *d)
 static int do_read_wmf_header(deark *c, lctx *d, de_int64 pos)
 {
 	de_int64 hsize_words, maxrecsize_words, filesize_words;
-	de_int64 num_objects;
 	int retval = 0;
 
 	de_dbg(c, "WMF header at %d", (int)pos);
@@ -475,8 +689,13 @@ static int do_read_wmf_header(deark *c, lctx *d, de_int64 pos)
 		(int)(d->wmf_windows_version&0x00ff));
 	filesize_words = de_getui32le(pos+6);
 	de_dbg(c, "reported file size: %d bytes", (int)(filesize_words*2));
-	num_objects = de_getui16le(pos+10);
-	de_dbg(c, "number of objects: %d", (int)num_objects);
+
+	d->num_objects = (unsigned int)de_getui16le(pos+10);
+	de_dbg(c, "number of objects: %u", d->num_objects);
+	if(d->object_table) de_free(c, d->object_table);
+	// d->num_objects is untrusted, but it can only be from 0 to 65535.
+	d->object_table = de_malloc(c, d->num_objects);
+
 	maxrecsize_words = de_getui32le(pos+12);
 	de_dbg(c, "max record size: %d bytes", (int)(maxrecsize_words*2));
 	retval = 1;
@@ -498,6 +717,26 @@ static const struct wmf_func_info *find_wmf_func_info(de_uint16 recfunc)
 	return NULL;
 }
 
+static void on_create_object(deark *c, lctx *d, struct decoder_params *dp)
+{
+	unsigned int k;
+
+	if(!d->object_table) return;
+	// The CREATE* opcodes assign an object index to the new object.
+	// Specifically, the first available index in the object table.
+	// The encoder and decoder must be very careful to use exactly the same
+	// algorithm for index assignment, or they could get out of sync.
+	for(k=0; k<d->num_objects; k++) {
+		if(d->object_table[k]==0) {
+			d->object_table[k] = 1; // Mark this index as used
+			de_dbg(c, "assigned object index: %u", k);
+			return;
+		}
+	}
+	de_warn(c, "Out of space in object table");
+}
+
+
 // Returns 0 if EOF record was found.
 static int do_wmf_record(deark *c, lctx *d, de_int64 recnum, de_int64 recpos,
 	de_int64 recsize_bytes)
@@ -517,16 +756,19 @@ static int do_wmf_record(deark *c, lctx *d, de_int64 recnum, de_int64 recpos,
 
 	fnci = find_wmf_func_info(dp.recfunc);
 
-	de_dbg(c, "record #%d at %d, type=0x%02x (%s), dpos=%d, dlen=%d", (int)recnum,
-		(int)recpos, (unsigned int)dp.rectype,
+	de_dbg(c, "record #%d at %d, func=0x%04x (%s), dpos=%d, dlen=%d", (int)recnum,
+		(int)recpos, (unsigned int)dp.recfunc,
 		fnci ? fnci->name : "?",
 		(int)dp.dpos, (int)dp.dlen);
 
-	if(fnci && fnci->fn) {
-		de_dbg_indent(c, 1);
-		fnci->fn(c, d, &dp);
-		de_dbg_indent(c, -1);
+	de_dbg_indent(c, 1);
+	if(fnci && (fnci->flags&0x1)) {
+		on_create_object(c, d, &dp);
 	}
+	if(fnci && fnci->fn) {
+		fnci->fn(c, d, &dp);
+	}
+	de_dbg_indent(c, -1);
 
 	return (dp.rectype==0x00)?0:1;
 }
@@ -594,7 +836,11 @@ static void de_run_wmf(deark *c, de_module_params *mparams)
 	do_wmf_record_list(c, d, pos);
 
 done:
-	de_free(c, d);
+	if(d) {
+		if(d->embedded_emf) dbuf_close(d->embedded_emf);
+		de_free(c, d->object_table);
+		de_free(c, d);
+	}
 }
 
 static int de_identify_wmf(deark *c)
