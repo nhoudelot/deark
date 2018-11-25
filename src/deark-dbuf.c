@@ -8,11 +8,6 @@
 
 #define DE_NOT_IN_MODULE
 #include "deark-config.h"
-
-#include <stdlib.h>
-#include <string.h>
-#include <stdarg.h>
-
 #include "deark-private.h"
 
 #define DE_CACHE_SIZE 262144
@@ -1181,6 +1176,33 @@ int dbuf_search(dbuf *f, const de_byte *needle, de_int64 needle_len,
 done:
 	de_free(f->c, buf);
 	return retval;
+}
+
+// Search for the aligned pair of 0x00 bytes that marks the end of a UTF-16 string.
+// Endianness doesn't matter, because we're only looking for 0x00 0x00.
+// The returned 'bytes_consumed' is in bytes, and includes the 2 bytes for the NUL
+// terminator.
+// Returns 0 if the NUL is not found, in which case *bytes_consumed is not
+// meaningful.
+int dbuf_get_utf16_NULterm_len(dbuf *f, de_int64 pos1, de_int64 bytes_avail,
+	de_int64 *bytes_consumed)
+{
+	de_int64 x;
+	de_int64 pos = pos1;
+
+	*bytes_consumed = bytes_avail;
+	while(1) {
+		if(pos1+bytes_avail-pos < 2) {
+			break;
+		}
+		x = dbuf_getui16le(f, pos);
+		pos += 2;
+		if(x==0) {
+			*bytes_consumed = pos - pos1;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 int dbuf_find_line(dbuf *f, de_int64 pos1, de_int64 *pcontent_len, de_int64 *ptotal_len)

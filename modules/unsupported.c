@@ -61,12 +61,6 @@ static void get_fmt(deark *c, struct fmtinfo_struct *fmti)
 		return;
 	}
 
-	if(!de_memcmp(b, "MSCF", 4)) {
-		fmti->confidence = 40;
-		fmti->descr = "a Microsoft CAB file";
-		return;
-	}
-
 	if(!de_memcmp(b, "ISc(", 4)) {
 		fmti->confidence = 40;
 		fmti->descr = "an InstallShield CAB file";
@@ -105,6 +99,17 @@ static void get_fmt(deark *c, struct fmtinfo_struct *fmti)
 	if(!de_memcmp(b, "AutoCAD Slide\r\n\x1a", 16)) {
 		fmti->confidence = 100;
 		fmti->descr = "an AutoCAD Slide file";
+		return;
+	}
+
+	// We're not trying to detect every HTML file, but we want to make sure
+	// we can detect the ones we generate.
+	if(!de_memcmp(b, "<!DOCTYPE html", 14) ||
+		!de_memcmp(b, "\xef\xbb\xbf<!DOCTYPE html", 17) ||
+		!de_memcmp(b, "<html", 5))
+	{
+		fmti->confidence = 20;
+		fmti->descr = "an HTML file";
 		return;
 	}
 }

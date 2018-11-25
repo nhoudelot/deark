@@ -13,7 +13,7 @@ struct de_bmpinfo {
 	de_int64 width;
 	de_int64 height;
 	de_int64 bitcount;
-	de_int64 compression_field;
+	de_uint32 compression_field;
 
 	de_int64 bytes_per_pal_entry;
 	de_int64 pal_entries;
@@ -34,10 +34,12 @@ struct de_bmpinfo {
 #define DE_BMPINFO_HAS_FILEHEADER 0x1
 #define DE_BMPINFO_ICO_FORMAT     0x2
 #define DE_BMPINFO_HAS_HOTSPOT    0x4
+#define DE_BMPINFO_CMPR_IS_4CC    0x8
 
+void de_fmtutil_get_bmp_compression_name(de_uint32 code, char *s, size_t s_len,
+	int is_os2v2);
 int de_fmtutil_get_bmpinfo(deark *c,  dbuf *f, struct de_bmpinfo *bi, de_int64 pos,
 	de_int64 len, unsigned int flags);
-
 void de_fmtutil_generate_bmpfileheader(deark *c, dbuf *outf, const struct de_bmpinfo *bi,
 	de_int64 file_size_override);
 
@@ -80,13 +82,11 @@ struct de_boxesctx;
 
 // Return 0 to stop reading
 typedef int (*de_handle_box_fn)(deark *c, struct de_boxesctx *bctx);
+typedef void (*de_identify_box_fn)(deark *c, struct de_boxesctx *bctx);
 
-struct de_boxesctx {
-	void *userdata;
-	dbuf *f; // Input file
-	de_handle_box_fn handle_box_fn;
-
+struct de_boxdata {
 	// Per-box info supplied to handle_box_fn:
+	struct de_boxdata *parent;
 	int level;
 	de_uint32 boxtype;
 	int is_uuid;
@@ -97,10 +97,25 @@ struct de_boxesctx {
 	de_int64 payload_pos;
 	de_int64 payload_len;
 
+	// To be filled in by identify_box_fn:
+	void *box_userdata;
+	const char *box_name;
+
 	// To be filled in by handle_box_fn:
 	int handled;
 	int is_superbox;
-	int has_version_and_flags;
+	int num_children_is_known;
+	de_int64 num_children; // valid if (is_superbox) && (num_children_is_known)
+	de_int64 extra_bytes_before_children; // valid if (is_superbox)
+};
+
+struct de_boxesctx {
+	void *userdata;
+	dbuf *f; // Input file
+	de_identify_box_fn identify_box_fn;
+	de_handle_box_fn handle_box_fn;
+
+	struct de_boxdata *curbox;
 };
 
 double dbuf_fmtutil_read_fixed_16_16(dbuf *f, de_int64 pos);

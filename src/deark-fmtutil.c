@@ -9,6 +9,31 @@
 #include <deark-private.h>
 #include <deark-fmtutil.h>
 
+void de_fmtutil_get_bmp_compression_name(de_uint32 code, char *s, size_t s_len,
+	int is_os2v2)
+{
+	const char *name1 = "?";
+	switch(code) {
+	case 0: name1 = "BI_RGB, uncompressed"; break;
+	case 1: name1 = "BI_RLE8"; break;
+	case 2: name1 = "BI_RLE4"; break;
+	case 3:
+		if(is_os2v2)
+			name1 = "Huffman 1D";
+		else
+			name1 = "BI_BITFIELDS, uncompressed";
+		break;
+	case 4:
+		if(is_os2v2)
+			name1 = "RLE24";
+		else
+			name1 = "BI_JPEG";
+		break;
+	case 5: name1 = "BI_PNG"; break;
+	}
+	de_strlcpy(s, name1, s_len);
+}
+
 // Gathers information about a DIB.
 // If DE_BMPINFO_HAS_FILEHEADER flag is set, pos points to the BITMAPFILEHEADER.
 // Otherwise, it points to the BITMAPINFOHEADER.
@@ -19,8 +44,11 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 {
 	de_int64 fhs; // file header size
 	de_int64 bmih_pos;
+	struct de_fourcc cmpr4cc;
+	char cmprname[80];
 
 	de_memset(bi, 0, sizeof(struct de_bmpinfo));
+	de_memset(&cmpr4cc, 0, sizeof(struct de_fourcc));
 
 	fhs = (flags & DE_BMPINFO_HAS_FILEHEADER) ? 14 : 0;
 
@@ -66,7 +94,10 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 		}
 		bi->bitcount = dbuf_getui16le(f, bmih_pos+14);
 		if(bi->infohdrsize>=20) {
-			bi->compression_field = dbuf_getui32le(f, bmih_pos+16);
+			bi->compression_field = (de_uint32)dbuf_getui32le(f, bmih_pos+16);
+			if(flags & DE_BMPINFO_CMPR_IS_4CC) {
+				dbuf_read_fourcc(f, bmih_pos+16, &cmpr4cc, 0);
+			}
 		}
 		if(bi->infohdrsize>=36) {
 			bi->pal_entries = dbuf_getui32le(f, bmih_pos+32);
@@ -93,7 +124,16 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 
 	de_dbg_dimensions(c, bi->width, bi->height);
 	de_dbg(c, "bit count: %d", (int)bi->bitcount);
-	de_dbg(c, "compression: %d", (int)bi->compression_field);
+
+	if((flags & DE_BMPINFO_CMPR_IS_4CC) && (bi->compression_field>0xffff)) {
+		de_snprintf(cmprname, sizeof(cmprname), "'%s'", cmpr4cc.id_printable);
+	}
+	else {
+		de_fmtutil_get_bmp_compression_name(bi->compression_field,
+			cmprname, sizeof(cmprname), 0);
+	}
+	de_dbg(c, "compression: %u (%s)", (unsigned int)bi->compression_field, cmprname);
+
 	de_dbg(c, "palette entries: %u", (unsigned int)bi->pal_entries);
 	if(bi->pal_entries>256 && bi->bitcount>8) {
 		de_warn(c, "Ignoring bad palette size (%u entries)", (unsigned int)bi->pal_entries);
@@ -488,7 +528,7 @@ static void sauce_read_comments(deark *c, dbuf *inf, struct de_SAUCE_info *si)
 		}
 		else {
 			de_dbg_indent(c, 1);
-			de_dbg(c, "comment: \"%s\"", ucstring_get_printable_sz(si->comments[k].s));
+			de_dbg(c, "comment: \"%s\"", ucstring_getpsz(si->comments[k].s));
 			de_dbg_indent(c, -1);
 		}
 	}
@@ -603,7 +643,7 @@ int de_read_SAUCE(deark *c, dbuf *f, struct de_SAUCE_info *si)
 
 		}
 		de_dbg(c, "tflags: 0x%02x (%s)", (unsigned int)si->tflags,
-			ucstring_get_printable_sz(tflags_descr));
+			ucstring_getpsz(tflags_descr));
 	}
 
 	if(si->original_file_size==0 || si->original_file_size>f->len-128) {
@@ -643,7 +683,7 @@ double dbuf_fmtutil_read_fixed_16_16(dbuf *f, de_int64 pos)
 }
 
 static void do_box_sequence(deark *c, struct de_boxesctx *bctx,
-	de_int64 pos1, de_int64 len, int level);
+	de_int64 pos1, de_int64 len, de_int64 max_nboxes, int level);
 
 // Make a printable version of a UUID (or a big-endian GUID).
 // Caller supplies s.
@@ -676,16 +716,23 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 	struct de_fourcc box4cc;
 	char uuid_string[50];
 	int ret;
+	int retval = 0;
+	struct de_boxdata *parentbox;
+	struct de_boxdata *curbox;
+
+	parentbox = bctx->curbox;
+	bctx->curbox = de_malloc(c, sizeof(struct de_boxdata));
+	curbox = bctx->curbox;
+	curbox->parent = parentbox;
 
 	if(len<8) {
-		de_dbg(c, "(ignoring %d extra bytes at %d)", (int)len, (int)pos);
-		return 0;
+		de_dbg(c, "(ignoring %d extra bytes at %"INT64_FMT")", (int)len, pos);
+		goto done;
 	}
 
-	bctx->is_uuid = 0;
 	size32 = dbuf_getui32be(bctx->f, pos);
 	dbuf_read_fourcc(bctx->f, pos+4, &box4cc, 0);
-	bctx->boxtype = box4cc.id;
+	curbox->boxtype = box4cc.id;
 
 	if(size32>=8) {
 		header_len = 8;
@@ -697,91 +744,106 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 	}
 	else if(size32==1) {
 		if(len<16) {
-			de_dbg(c, "(ignoring %d extra bytes at %d)", (int)len, (int)pos);
-			return 0;
+			de_dbg(c, "(ignoring %d extra bytes at %"INT64_FMT")", (int)len, pos);
+			goto done;
 		}
 		header_len = 16;
 		size64 = dbuf_geti64be(bctx->f, pos+8);
-		if(size64<16) return 0;
+		if(size64<16) goto done;
 		payload_len = size64-16;
 	}
 	else {
 		de_err(c, "Invalid or unsupported box format");
-		return 0;
+		goto done;
 	}
 
 	total_len = header_len + payload_len;
 
-	if(bctx->boxtype==DE_BOX_uuid && payload_len>=16) {
-		bctx->is_uuid = 1;
-		dbuf_read(bctx->f, bctx->uuid, pos+header_len, 16);
+	if(curbox->boxtype==DE_BOX_uuid && payload_len>=16) {
+		curbox->is_uuid = 1;
+		dbuf_read(bctx->f, curbox->uuid, pos+header_len, 16);
+	}
+
+	curbox->level = level;
+	curbox->box_pos = pos;
+	curbox->box_len = total_len;
+	curbox->payload_pos = pos+header_len;
+	curbox->payload_len = payload_len;
+	if(curbox->is_uuid) {
+		curbox->payload_pos += 16;
+		curbox->payload_len -= 16;
+	}
+
+	if(bctx->identify_box_fn) {
+		bctx->identify_box_fn(c, bctx);
 	}
 
 	if(c->debug_level>0) {
-		if(bctx->is_uuid) {
-			de_fmtutil_render_uuid(c, bctx->uuid, uuid_string, sizeof(uuid_string));
-			de_dbg(c, "box '%s'{%s} at %d, len=%" INT64_FMT "",
-				box4cc.id_printable, uuid_string,
-				(int)pos, total_len);
+		char name_str[80];
+
+		if(curbox->box_name) {
+			de_snprintf(name_str, sizeof(name_str), " (%s)", curbox->box_name);
 		}
 		else {
-			de_dbg(c, "box '%s' at %d, len=%" INT64_FMT ", dlen=%d", box4cc.id_printable,
-				(int)pos, total_len, (int)payload_len);
+			name_str[0] = '\0';
+		}
+
+		if(curbox->is_uuid) {
+			de_fmtutil_render_uuid(c, curbox->uuid, uuid_string, sizeof(uuid_string));
+			de_dbg(c, "box '%s'{%s}%s at %"INT64_FMT", len=%"INT64_FMT,
+				box4cc.id_printable, uuid_string, name_str,
+				pos, total_len);
+		}
+		else {
+			de_dbg(c, "box '%s'%s at %"INT64_FMT", len=%"INT64_FMT", dlen=%"INT64_FMT,
+				box4cc.id_printable, name_str, pos,
+				total_len, payload_len);
 		}
 	}
 
 	if(total_len > len) {
 		de_err(c, "Invalid oversized box, or unexpected end of file "
-			"(box at %d ends at %" INT64_FMT ", "
-			"parent ends at %" INT64_FMT ")",
-			(int)pos, pos+total_len, pos+len);
-		return 0;
-	}
-
-	bctx->level = level;
-	bctx->is_superbox = 0; // Default value. Client can change it.
-	bctx->has_version_and_flags = 0; // Default value. Client can change it.
-	bctx->box_pos = pos;
-	bctx->box_len = total_len;
-	bctx->payload_pos = pos+header_len;
-	bctx->payload_len = payload_len;
-	if(bctx->is_uuid) {
-		bctx->payload_pos += 16;
-		bctx->payload_len -= 16;
+			"(box at %"INT64_FMT" ends at %"INT64_FMT", "
+			"parent ends at %"INT64_FMT")",
+			pos, pos+total_len, pos+len);
+		goto done;
 	}
 
 	de_dbg_indent(c, 1);
 	ret = bctx->handle_box_fn(c, bctx);
 	de_dbg_indent(c, -1);
-	if(!ret) return 0;
+	if(!ret) goto done;
 
-	if(bctx->is_superbox) {
-		de_int64 extra_bytes = 0;
+	if(curbox->is_superbox) {
+		de_int64 children_pos, children_len;
+		de_int64 max_nchildren;
 
 		de_dbg_indent(c, 1);
-
-		if(bctx->has_version_and_flags) {
-			extra_bytes = 4;
-			// TODO: Print the version number and flags?
-		}
-
-		do_box_sequence(c, bctx,
-			pos+header_len + extra_bytes,
-			payload_len - extra_bytes, level+1);
+		children_pos = pos+header_len + curbox->extra_bytes_before_children;
+		children_len = payload_len - curbox->extra_bytes_before_children;
+		max_nchildren = (curbox->num_children_is_known) ? curbox->num_children : -1;
+		do_box_sequence(c, bctx, children_pos, children_len, max_nchildren, level+1);
 		de_dbg_indent(c, -1);
 	}
 
 	*pbytes_consumed = total_len;
-	return 1;
+	retval = 1;
+
+done:
+	de_free(c, bctx->curbox);
+	bctx->curbox = parentbox; // Restore the curbox pointer
+	return retval;
 }
 
+// max_nboxes: -1 = no maximum
 static void do_box_sequence(deark *c, struct de_boxesctx *bctx,
-	de_int64 pos1, de_int64 len, int level)
+	de_int64 pos1, de_int64 len, de_int64 max_nboxes, int level)
 {
 	de_int64 pos;
 	de_int64 box_len;
 	de_int64 endpos;
 	int ret;
+	de_int64 box_count = 0;
 
 	if(level >= 32) { // An arbitrary recursion limit.
 		return;
@@ -791,32 +853,37 @@ static void do_box_sequence(deark *c, struct de_boxesctx *bctx,
 	endpos = pos1 + len;
 
 	while(pos < endpos) {
+		if(max_nboxes>=0 && box_count>=max_nboxes) break;
 		ret = do_box(c, bctx, pos, endpos-pos, level, &box_len);
 		if(!ret) break;
+		box_count++;
 		pos += box_len;
 	}
 }
 
 // Handle some box types that might be common to multiple formats.
 // This function should be called as needed by the client's box handler function.
+// TODO: A way to identify (name) the boxes that we handle here.
 int de_fmtutil_default_box_handler(deark *c, struct de_boxesctx *bctx)
 {
-	if(bctx->is_uuid) {
-		if(!de_memcmp(bctx->uuid, "\xb1\x4b\xf8\xbd\x08\x3d\x4b\x43\xa5\xae\x8c\xd7\xd5\xa6\xce\x03", 16)) {
-			de_dbg(c, "GeoTIFF data at %d, len=%d", (int)bctx->payload_pos, (int)bctx->payload_len);
-			dbuf_create_file_from_slice(bctx->f, bctx->payload_pos, bctx->payload_len, "geo.tif", NULL, DE_CREATEFLAG_IS_AUX);
+	struct de_boxdata *curbox = bctx->curbox;
+
+	if(curbox->is_uuid) {
+		if(!de_memcmp(curbox->uuid, "\xb1\x4b\xf8\xbd\x08\x3d\x4b\x43\xa5\xae\x8c\xd7\xd5\xa6\xce\x03", 16)) {
+			de_dbg(c, "GeoTIFF data at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
+			dbuf_create_file_from_slice(bctx->f, curbox->payload_pos, curbox->payload_len, "geo.tif", NULL, DE_CREATEFLAG_IS_AUX);
 		}
-		else if(!de_memcmp(bctx->uuid, "\xbe\x7a\xcf\xcb\x97\xa9\x42\xe8\x9c\x71\x99\x94\x91\xe3\xaf\xac", 16)) {
-			de_dbg(c, "XMP data at %d, len=%d", (int)bctx->payload_pos, (int)bctx->payload_len);
-			dbuf_create_file_from_slice(bctx->f, bctx->payload_pos, bctx->payload_len, "xmp", NULL, DE_CREATEFLAG_IS_AUX);
+		else if(!de_memcmp(curbox->uuid, "\xbe\x7a\xcf\xcb\x97\xa9\x42\xe8\x9c\x71\x99\x94\x91\xe3\xaf\xac", 16)) {
+			de_dbg(c, "XMP data at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
+			dbuf_create_file_from_slice(bctx->f, curbox->payload_pos, curbox->payload_len, "xmp", NULL, DE_CREATEFLAG_IS_AUX);
 		}
-		else if(!de_memcmp(bctx->uuid, "\x2c\x4c\x01\x00\x85\x04\x40\xb9\xa0\x3e\x56\x21\x48\xd6\xdf\xeb", 16)) {
-			de_dbg(c, "Photoshop resources at %d, len=%d", (int)bctx->payload_pos, (int)bctx->payload_len);
-			de_fmtutil_handle_photoshop_rsrc(c, bctx->payload_pos, bctx->payload_len);
+		else if(!de_memcmp(curbox->uuid, "\x2c\x4c\x01\x00\x85\x04\x40\xb9\xa0\x3e\x56\x21\x48\xd6\xdf\xeb", 16)) {
+			de_dbg(c, "Photoshop resources at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
+			de_fmtutil_handle_photoshop_rsrc(c, curbox->payload_pos, curbox->payload_len);
 		}
-		else if(!de_memcmp(bctx->uuid, "\x05\x37\xcd\xab\x9d\x0c\x44\x31\xa7\x2a\xfa\x56\x1f\x2a\x11\x3e", 16)) {
-			de_dbg(c, "Exif data at %d, len=%d", (int)bctx->payload_pos, (int)bctx->payload_len);
-			de_fmtutil_handle_exif(c, bctx->payload_pos, bctx->payload_len);
+		else if(!de_memcmp(curbox->uuid, "\x05\x37\xcd\xab\x9d\x0c\x44\x31\xa7\x2a\xfa\x56\x1f\x2a\x11\x3e", 16)) {
+			de_dbg(c, "Exif data at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
+			de_fmtutil_handle_exif(c, curbox->payload_pos, curbox->payload_len);
 		}
 	}
 	return 1;
@@ -825,7 +892,8 @@ int de_fmtutil_default_box_handler(deark *c, struct de_boxesctx *bctx)
 void de_fmtutil_read_boxes_format(deark *c, struct de_boxesctx *bctx)
 {
 	if(!bctx->f || !bctx->handle_box_fn) return; // Internal error
-	do_box_sequence(c, bctx, 0, bctx->f->len, 0);
+	if(bctx->curbox) return; // Internal error
+	do_box_sequence(c, bctx, 0, bctx->f->len, -1, 0);
 }
 
 static de_byte scale_7_to_255(de_byte x)
@@ -1103,7 +1171,7 @@ static void do_iff_text_chunk(deark *c, dbuf *f, de_int64 dpos, de_int64 dlen,
 	dbuf_read_to_ucstring_n(f,
 		dpos, dlen, DE_DBG_MAX_STRLEN,
 		s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
-	de_dbg(c, "%s: \"%s\"", name, ucstring_get_printable_sz(s));
+	de_dbg(c, "%s: \"%s\"", name, ucstring_getpsz(s));
 	ucstring_destroy(s);
 }
 
@@ -1126,7 +1194,7 @@ static void do_iff_anno(deark *c, dbuf *f, de_int64 pos, de_int64 len)
 		de_ucstring *s = NULL;
 		s = ucstring_create(c);
 		dbuf_read_to_ucstring_n(c->infile, pos, len, DE_DBG_MAX_STRLEN, s, 0, DE_ENCODING_ASCII);
-		de_dbg(c, "annotation: \"%s\"", ucstring_get_printable_sz(s));
+		de_dbg(c, "annotation: \"%s\"", ucstring_getpsz(s));
 		ucstring_destroy(s);
 	}
 }
@@ -1215,13 +1283,19 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 
 	hdrsize = 4+ictx->sizeof_len;
 	if(bytes_avail<hdrsize) {
-		de_err(c, "Invalid chunk size (at %d, size=%" INT64_FMT ")",
-			(int)pos, bytes_avail);
+		de_warn(c, "Ignoring %"INT64_FMT" bytes at %"INT64_FMT"; too small "
+			"to be a chunk", bytes_avail, pos);
 		goto done;
 	}
 	data_bytes_avail = bytes_avail-hdrsize;
 
 	dbuf_read_fourcc(ictx->f, pos, &chunkctx.chunk4cc, ictx->reversed_4cc);
+	if(chunkctx.chunk4cc.id==0 && level==0) {
+		de_warn(c, "Chunk ID not found at %"INT64_FMT"; assuming the data ends "
+			"here", pos);
+		goto done;
+	}
+
 	if(ictx->sizeof_len==2) {
 		chunk_dlen = dbuf_getui16x(ictx->f, pos+4, ictx->is_le);
 	}

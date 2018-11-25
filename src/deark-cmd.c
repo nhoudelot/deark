@@ -6,17 +6,12 @@
 
 #define DE_NOT_IN_MODULE
 #include "deark-config.h"
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "deark-user.h"
 
 #ifdef DE_WINDOWS
 #include <fcntl.h>
 #include <io.h> // for _setmode
 #endif
-
-#include "deark.h"
 
 struct cmdctx {
 	const char *input_filename;
@@ -287,8 +282,8 @@ enum opt_id_enum {
  DE_OPT_MAINONLY, DE_OPT_AUXONLY, DE_OPT_EXTRACTALL, DE_OPT_ZIP,
  DE_OPT_TOSTDOUT, DE_OPT_MSGSTOSTDERR, DE_OPT_FROMSTDIN, DE_OPT_COLOR,
  DE_OPT_ENCODING,
- DE_OPT_EXTOPT, DE_OPT_FILE, DE_OPT_FILE2,
- DE_OPT_START, DE_OPT_SIZE, DE_OPT_M, DE_OPT_O,
+ DE_OPT_EXTOPT, DE_OPT_FILE, DE_OPT_FILE2, DE_OPT_INENC,
+ DE_OPT_START, DE_OPT_SIZE, DE_OPT_M, DE_OPT_MODCODES, DE_OPT_O,
  DE_OPT_ARCFN, DE_OPT_GET, DE_OPT_FIRSTFILE, DE_OPT_MAXFILES, DE_OPT_MAXIMGDIM,
  DE_OPT_PRINTMODULES, DE_OPT_DPREFIX
 };
@@ -331,9 +326,11 @@ struct opt_struct option_array[] = {
 	{ "opt",          DE_OPT_EXTOPT,       1 },
 	{ "file",         DE_OPT_FILE,         1 },
 	{ "file2",        DE_OPT_FILE2,        1 },
+	{ "inenc",        DE_OPT_INENC,        1 },
 	{ "start",        DE_OPT_START,        1 },
 	{ "size",         DE_OPT_SIZE,         1 },
 	{ "m",            DE_OPT_M,            1 },
+	{ "modcodes",     DE_OPT_MODCODES,     1 },
 	{ "o",            DE_OPT_O,            1 },
 	{ "basefn",       DE_OPT_O,            1 }, // Deprecated
 	{ "arcfn",        DE_OPT_ARCFN,        1 },
@@ -498,6 +495,14 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 			case DE_OPT_FILE2:
 				de_set_ext_option(c, "file2", argv[i+1]);
 				break;
+			case DE_OPT_INENC:
+				if(!de_set_input_encoding(c, argv[i+1], 0)) {
+					de_printf(c, DE_MSGTYPE_MESSAGE,
+						"Error: Unknown input encoding: %s\n", argv[i+1]);
+					cc->error_flag = 1;
+					return;
+				}
+				break;
 			case DE_OPT_START:
 				de_set_input_file_slice_start(c, de_atoi64(argv[i+1]));
 				break;
@@ -507,6 +512,9 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 			case DE_OPT_M:
 				module_flag = 1;
 				de_set_input_format(c, argv[i+1]);
+				break;
+			case DE_OPT_MODCODES:
+				de_set_module_init_codes(c, argv[i+1]);
 				break;
 			case DE_OPT_O:
 				de_set_base_output_filename(c, argv[i+1]);

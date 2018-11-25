@@ -14,14 +14,17 @@
 
 #include <windows.h>
 
-#include <stdlib.h>
-#include <string.h>
+// This file is overloaded, in that it contains functions intended to only
+// be used internally, as well as and functions intended only for the
+// command-line utility. That's why we need both deark-user.h and
+// deark-private.h.
+#include "deark-private.h"
+#include "deark-user.h"
+
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 #include <sys/utime.h>
-
-#include "deark-private.h"
 
 int de_strcasecmp(const char *a, const char *b)
 {

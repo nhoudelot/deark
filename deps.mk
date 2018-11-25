@@ -8,6 +8,8 @@ obj/modules/ansiart.o: modules/ansiart.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/ar.o: modules/ar.c src/deark-config.h src/deark-private.h \
  src/deark.h
+obj/modules/asf.o: modules/asf.c src/deark-config.h src/deark-private.h \
+ src/deark.h src/deark-fmtutil.h
 obj/modules/atari-img.o: modules/atari-img.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/atari.o: modules/atari.c src/deark-config.h \
@@ -22,14 +24,16 @@ obj/modules/binhex.o: modules/binhex.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/modules/bintext.o: modules/bintext.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
+obj/modules/bmff.o: modules/bmff.c src/deark-config.h src/deark-private.h \
+ src/deark.h src/deark-fmtutil.h
 obj/modules/bmp.o: modules/bmp.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
-obj/modules/boxes.o: modules/boxes.c src/deark-config.h \
- src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/bpg.o: modules/bpg.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
 obj/modules/bsave.o: modules/bsave.c src/deark-config.h \
  src/deark-private.h src/deark.h
+obj/modules/cab.o: modules/cab.c src/deark-config.h src/deark-private.h \
+ src/deark.h
 obj/modules/cardfile.o: modules/cardfile.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/modules/cfb.o: modules/cfb.c src/deark-config.h src/deark-private.h \
@@ -42,6 +46,8 @@ obj/modules/d64.o: modules/d64.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/drhalo.o: modules/drhalo.c src/deark-config.h \
  src/deark-private.h src/deark.h
+obj/modules/ebml.o: modules/ebml.c src/deark-config.h src/deark-private.h \
+ src/deark.h
 obj/modules/emf.o: modules/emf.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
 obj/modules/epocimage.o: modules/epocimage.c src/deark-config.h \
@@ -52,8 +58,6 @@ obj/modules/exe.o: modules/exe.c src/deark-config.h src/deark-private.h \
  src/deark.h src/deark-fmtutil.h
 obj/modules/flif.o: modules/flif.c src/deark-config.h src/deark-private.h \
  src/deark.h
-obj/modules/fmtutil.o: modules/fmtutil.c src/deark-config.h \
- src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/modules/fnt.o: modules/fnt.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/gemfont.o: modules/gemfont.c src/deark-config.h \
@@ -182,6 +186,8 @@ obj/modules/wmf.o: modules/wmf.c src/deark-config.h src/deark-private.h \
  src/deark.h
 obj/modules/wpg.o: modules/wpg.c src/deark-config.h src/deark-private.h \
  src/deark.h
+obj/modules/wri.o: modules/wri.c src/deark-config.h src/deark-private.h \
+ src/deark.h
 obj/modules/xface.o: modules/xface.c src/deark-config.h \
  src/deark-private.h src/deark.h modules/../foreign/uncompface.h
 obj/modules/xfer.o: modules/xfer.c src/deark-config.h src/deark-private.h \
@@ -194,22 +200,25 @@ obj/src/deark-bitmap.o: src/deark-bitmap.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/src/deark-char.o: src/deark-char.c src/deark-config.h \
  src/deark-private.h src/deark.h
-obj/src/deark-cmd.o: src/deark-cmd.c src/deark-config.h src/deark.h
-obj/src/deark-core.o: src/deark-core.c src/deark-config.h \
- src/deark-private.h src/deark.h
+obj/src/deark-cmd.o: src/deark-cmd.c src/deark-config.h src/deark-user.h \
+ src/deark.h
 obj/src/deark-data.o: src/deark-data.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/src/deark-dbuf.o: src/deark-dbuf.c src/deark-config.h \
  src/deark-private.h src/deark.h
+obj/src/deark-fmtutil.o: src/deark-fmtutil.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 obj/src/deark-font.o: src/deark-font.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/src/deark-miniz.o: src/deark-miniz.c src/deark-config.h \
  src/deark-private.h src/deark.h src/../foreign/miniz.h
 obj/src/deark-modules.o: src/deark-modules.c src/deark-config.h \
- src/deark-private.h src/deark.h src/deark-modules.h
+ src/deark-private.h src/deark.h src/deark-user.h src/deark-modules.h
 obj/src/deark-ucstring.o: src/deark-ucstring.c src/deark-config.h \
  src/deark-private.h src/deark.h
 obj/src/deark-unix.o: src/deark-unix.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-user.h
+obj/src/deark-user.o: src/deark-user.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-user.h
 obj/src/deark-util.o: src/deark-util.c src/deark-config.h \
  src/deark-private.h src/deark.h

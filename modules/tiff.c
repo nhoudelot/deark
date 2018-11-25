@@ -13,7 +13,7 @@ DE_DECLARE_MODULE(de_module_tiff);
 #define MAX_IFDS 1000
 
 #define DE_TIFF_MAX_VALUES_TO_PRINT 100
-#define DE_TIFF_MAX_CHARS_TO_PRINT  500
+#define DE_TIFF_MAX_CHARS_TO_PRINT  DE_DBG_MAX_STRLEN
 
 #define DATATYPE_BYTE      1
 #define DATATYPE_ASCII     2
@@ -40,6 +40,7 @@ DE_DECLARE_MODULE(de_module_tiff);
 #define DE_TIFFFMT_MDI        6 // Microsoft Office Document Imaging
 #define DE_TIFFFMT_JPEGXR     7 // JPEG XR
 #define DE_TIFFFMT_MPEXT      8 // "MP Extension" data from MPF format
+#define DE_TIFFFMT_NIKONMN    9 // Nikon MakerNote
 
 #define IFDTYPE_NORMAL       0
 #define IFDTYPE_SUBIFD       1
@@ -87,6 +88,7 @@ struct tagnuminfo {
 	// 0x0200=TIFF/IT
 	// 0x0400=tags valid in JPEG XR files (from the spec, and jxrlib)
 	// 0x0800=tags for Multi-Picture Format (.MPO) extensions
+	// 0x1000=tags for Nikon MakerNote
 	unsigned int flags;
 
 	const char *tagname;
@@ -742,7 +744,8 @@ static int valdec_exposureprogram(deark *c, const struct valdec_params *vp, stru
 static int valdec_componentsconfiguration(deark *c, const struct valdec_params *vp, struct valdec_result *vr)
 {
 	static const struct int_and_str name_map[] = {
-		{0, "n/a"}, {1, "Y"}, {2, "Cb"}, {3, "Cr"}, {4, "R"}, {5, "G"}, {6, "B"}
+		{0, "n/a"}, {1, "Y"}, {2, "Cb"}, {3, "Cr"}, {4, "R"}, {5, "G"}, {6, "B"},
+		{48, "n/a?"}, {49, "Y?"}, {50, "Cb?"}, {51, "Cr?"}, {52, "R?"}, {53, "G?"}, {54, "B?"}
 	};
 	lookup_str_and_append_to_ucstring(name_map, ITEMS_IN_ARRAY(name_map), vp->n, vr->s);
 	return 1;
@@ -941,6 +944,11 @@ static int valdec_dngcolorspace(deark *c, const struct valdec_params *vp, struct
 	return 1;
 }
 
+static void handler_hexdump(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
+{
+	de_dbg_hexdump(c, c->infile, tg->val_offset, tg->total_size, 256, NULL, 0x1);
+}
+
 static void handler_imagewidth(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
 	if(tg->valcount!=1) return;
@@ -1041,11 +1049,82 @@ static void handler_photoshoprsrc(deark *c, lctx *d, const struct taginfo *tg, c
 	de_dbg_indent(c, -1);
 }
 
+struct makernote_id_info {
+#define MAKERNOTE_NIKON 1
+	int mntype;
+	char name[32];
+};
+
+static void identify_makernote(deark *c, lctx *d, const struct taginfo *tg, struct makernote_id_info *mni)
+{
+	de_byte buf[32];
+	de_int64 amt_to_read;
+
+	de_memset(buf, 0, sizeof(buf));
+	amt_to_read = sizeof(buf);
+	if(amt_to_read > tg->total_size) amt_to_read = tg->total_size;
+	de_read(buf, tg->val_offset, amt_to_read);
+
+	if(!de_memcmp(buf, "Nikon\x00\x02", 7) &&
+		(!de_memcmp(&buf[10], "\x4d\x4d\x00\x2a", 4) ||
+		!de_memcmp(&buf[10], "\x49\x49\x2a\x00", 4)))
+	{
+		// This is one Nikon MakerNote format. There are others.
+		mni->mntype = MAKERNOTE_NIKON;
+		de_strlcpy(mni->name, "Nikon type 3", sizeof(mni->name));
+		goto done;
+	}
+
+done:
+	;
+}
+
+static void do_makernote_nikon(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+{
+	de_int64 dpos;
+	de_int64 dlen;
+	unsigned int ver;
+
+	if(len<10) return;
+	ver = (unsigned int)de_getui16be(pos1+6);
+	de_dbg(c, "version: 0x%04x", ver); // This is a guess
+
+	dpos = pos1+10;
+	dlen = len-10;
+	if(dlen<8) return;
+	de_dbg(c, "Nikon MakerNote tag data at %d, len=%d", (int)dpos, (int)dlen);
+	de_dbg_indent(c, 1);
+	de_run_module_by_id_on_slice2(c, "tiff", "N", c->infile, dpos, dlen);
+	de_dbg_indent(c, -1);
+}
+
+static void handler_makernote(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
+{
+	struct makernote_id_info *mni = NULL;
+
+	mni = de_malloc(c, sizeof(struct makernote_id_info));
+	identify_makernote(c, d, tg, mni);
+
+	if(mni->mntype != 0) {
+		de_dbg(c, "MakerNote identified as: %s", mni->name);
+	}
+
+	if(mni->mntype==MAKERNOTE_NIKON) {
+		do_makernote_nikon(c, d, tg->val_offset, tg->total_size);
+	}
+	else {
+		handler_hexdump(c, d, tg, tni);
+	}
+
+	de_free(c, mni);
+}
+
 static void handler_usercomment(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
 	static de_byte charcode[8];
 	de_ucstring *s = NULL;
 	int enc = DE_ENCODING_UNKNOWN;
+	de_int64 bytes_per_char = 1;
 
 	if(tg->datatype != DATATYPE_UNDEF) goto done;
 	if(tg->total_size < 8) goto done;
@@ -1055,13 +1134,22 @@ static void handler_usercomment(deark *c, lctx *d, const struct taginfo *tg, con
 	if(!de_memcmp(charcode, "ASCII\0\0\0", 8)) {
 		enc = DE_ENCODING_ASCII;
 	}
-	// TODO: Support "UNICODE\0" (need samples)
+	else if(!de_memcmp(charcode, "UNICODE\0", 8)) {
+		enc = d->is_le ? DE_ENCODING_UTF16LE : DE_ENCODING_UTF16BE;
+		bytes_per_char = 2;
+	}
 
 	if(enc == DE_ENCODING_UNKNOWN) goto done;
 
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring_n(c->infile, tg->val_offset + 8, tg->total_size - 8,
-		DE_TIFF_MAX_CHARS_TO_PRINT, s, DE_CONVFLAG_STOP_AT_NUL, enc);
+		DE_TIFF_MAX_CHARS_TO_PRINT*bytes_per_char, s, 0, enc);
+
+	// Should we truncate at NUL, or not? The Exif spec says "NULL termination
+	// is not necessary", but it doesn't say whether it is *allowed*.
+	// In practice, if we don't do this, we sometimes end up printing a lot of
+	// garbage.
+	ucstring_truncate_at_NUL(s);
 
 	// FIXME: This is not quite right, though it's not important. We really
 	// need to read the entire string, not just the first
@@ -1069,7 +1157,7 @@ static void handler_usercomment(deark *c, lctx *d, const struct taginfo *tg, con
 	// are trailing spaces.
 	ucstring_strip_trailing_spaces(s);
 
-	de_dbg(c, "%s: \"%s\"", tni->tagname, ucstring_get_printable_sz(s));
+	de_dbg(c, "%s: \"%s\"", tni->tagname, ucstring_getpsz(s));
 
 done:
 	ucstring_destroy(s);
@@ -1163,7 +1251,7 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 		if(typecode==0x020003U) ucstring_append_flags_item(s, "multi-frame image multi-angle");
 
 		de_dbg(c, "image attribs: 0x%08x (%s)", (unsigned int)attrs,
-			ucstring_get_printable_sz(s));
+			ucstring_getpsz(s));
 
 		n = dbuf_getui32x(c->infile, pos+4, d->is_le);
 		de_dbg(c, "image size: %u", (unsigned int)n);
@@ -1208,7 +1296,7 @@ static void handler_utf16(deark *c, lctx *d, const struct taginfo *tg, const str
 	dbuf_read_to_ucstring_n(c->infile, tg->val_offset, tg->total_size,
 		DE_TIFF_MAX_CHARS_TO_PRINT*2, s, 0, DE_ENCODING_UTF16LE);
 	ucstring_strip_trailing_NUL(s);
-	de_dbg(c, "UTF-16 string: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "UTF-16 string: \"%s\"", ucstring_getpsz(s));
 
 done:
 	ucstring_destroy(s);
@@ -1411,7 +1499,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 34852, 0x10, "SpectralSensitivity", NULL, NULL },
 	{ 34853, 0x0408, "GPS IFD", handler_subifd, NULL },
 	{ 34855, 0x10, "PhotographicSensitivity/ISOSpeedRatings", NULL, NULL },
-	{ 34856, 0x10, "OECF", NULL, NULL },
+	{ 34856, 0x0018, "OECF", handler_hexdump, NULL },
 	{ 34857, 0x0100, "Interlace", NULL, NULL },
 	{ 34858, 0x0100, "TimeZoneOffset", NULL, NULL },
 	{ 34859, 0x0100, "SelfTimerMode", NULL, NULL },
@@ -1456,7 +1544,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 37398, 0x0100, "TIFF/EPStandardID", NULL, NULL },
 	{ 37399, 0x0100, "SensingMethod", NULL, NULL },
 	{ 37439, 0x00, "SToNits(SGI)", NULL, NULL },
-	{ 37500, 0x10, "MakerNote", NULL, NULL },
+	{ 37500, 0x0018, "MakerNote", handler_makernote, NULL },
 	{ 37510, 0x10, "UserComment", handler_usercomment, NULL },
 	{ 37520, 0x10, "SubSec", NULL, NULL },
 	{ 37521, 0x10, "SubSecTimeOriginal", NULL, NULL },
@@ -1477,7 +1565,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 40964, 0x10, "RelatedSoundFile", NULL, NULL },
 	{ 40965, 0x0418, "Interoperability IFD", handler_subifd, NULL },
 	{ 41483, 0x10, "FlashEnergy", NULL, NULL },
-	{ 41484, 0x10, "SpatialFrequencyResponse", NULL, NULL },
+	{ 41484, 0x0018, "SpatialFrequencyResponse", handler_hexdump, NULL },
 	{ 41486, 0x10, "FocalPlaneXResolution", NULL, NULL },
 	{ 41487, 0x10, "FocalPlaneYResolution", NULL, NULL },
 	{ 41488, 0x10, "FocalPlaneResolutionUnit", NULL, valdec_resolutionunit },
@@ -1497,7 +1585,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 41992, 0x10, "Contrast", NULL, valdec_contrast },
 	{ 41993, 0x10, "Saturation", NULL, valdec_saturation },
 	{ 41994, 0x10, "Sharpness", NULL, valdec_sharpness },
-	{ 41995, 0x10, "DeviceSettingDescription", NULL, NULL },
+	{ 41995, 0x0018, "DeviceSettingDescription", handler_hexdump, NULL },
 	{ 41996, 0x10, "SubjectDistanceRange", NULL, valdec_subjectdistancerange },
 	{ 42016, 0x10, "ImageUniqueID", NULL, NULL },
 	{ 42032, 0x10, "CameraOwnerName", NULL, NULL },
@@ -1548,7 +1636,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 50216, 0x0000, "Oce Application Selector", NULL, NULL },
 	{ 50217, 0x0000, "Oce Identification Number", NULL, NULL },
 	{ 50218, 0x0000, "Oce ImageLogic Characteristics", NULL, NULL },
-	{ 50341, 0x0000, "PrintImageMatching", NULL, NULL },
+	{ 50341, 0x0008, "PrintImageMatching", handler_hexdump, NULL },
 	{ 50706, 0x80, "DNGVersion", NULL, NULL},
 	{ 50707, 0x80, "DNGBackwardVersion", NULL, NULL},
 	{ 50708, 0x80, "UniqueCameraModel", NULL, NULL},
@@ -1681,7 +1769,106 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 28, 0x0041, "GPSAreaInformation", NULL, NULL },
 	{ 29, 0x0041, "GPSDateStamp", NULL, NULL },
 	{ 30, 0x0041, "GPSDifferential", NULL, NULL },
-	{ 31, 0x0041, "GPSHPositioningError", NULL, NULL }
+	{ 31, 0x0041, "GPSHPositioningError", NULL, NULL },
+
+	{ 1, 0x1001, "MakerNoteVersion", NULL, NULL },
+	{ 2, 0x1001, "ISOSpeed", NULL, NULL },
+	{ 3, 0x1001, "ColorMode", NULL, NULL },
+	{ 4, 0x1001, "Quality", NULL, NULL },
+	{ 5, 0x1001, "WhiteBalance", NULL, NULL },
+	{ 6, 0x1001, "Sharpness", NULL, NULL },
+	{ 7, 0x1001, "FocusMode", NULL, NULL },
+	{ 8, 0x1001, "FlashSetting", NULL, NULL },
+	{ 9, 0x1001, "FlashType", NULL, NULL },
+	{ 0xb, 0x1001, "WhiteBalanceFineTune", NULL, NULL },
+	{ 0xc, 0x1001, "WB_RBLevels", NULL, NULL },
+	{ 0xd, 0x1001, "ProgramShift", NULL, NULL },
+	{ 0xe, 0x1001, "ExposureDifference", NULL, NULL },
+	{ 0xf, 0x1001, "ISOSelection", NULL, NULL },
+	{ 0x10, 0x1001, "DataDump", NULL, NULL },
+	{ 0x11, 0x1001, "PreviewIFD", NULL, NULL },
+	{ 0x12, 0x1001, "FlashExposureComp", NULL, NULL },
+	{ 0x13, 0x1001, "ISOSetting", NULL, NULL },
+	{ 0x16, 0x1001, "ImageBoundary", NULL, NULL },
+	{ 0x17, 0x1001, "ExternalFlashExposureComp", NULL, NULL },
+	{ 0x18, 0x1001, "FlashExposureBracketValue", NULL, NULL },
+	{ 0x19, 0x1001, "ExposureBracketValue", NULL, NULL },
+	{ 0x1a, 0x1001, "ImageProcessing", NULL, NULL },
+	{ 0x1b, 0x1001, "CropHiSpeed", NULL, NULL },
+	{ 0x1c, 0x1001, "ExposureTuning", NULL, NULL },
+	{ 0x1d, 0x1001, "SerialNumber", NULL, NULL },
+	{ 0x1e, 0x1001, "ColorSpace", NULL, NULL },
+	{ 0x1f, 0x1001, "VRInfo", NULL, NULL },
+	{ 0x20, 0x1001, "ImageAuthentication", NULL, NULL },
+	{ 0x21, 0x1001, "FaceDetect", NULL, NULL },
+	{ 0x22, 0x1001, "ActiveD-Lighting", NULL, NULL },
+	{ 0x23, 0x1001, "PictureControlData", NULL, NULL },
+	{ 0x24, 0x1001, "WorldTime", NULL, NULL },
+	{ 0x25, 0x1001, "ISOInfo", NULL, NULL },
+	{ 0x2a, 0x1001, "VignetteControl", NULL, NULL },
+	{ 0x2b, 0x1001, "DistortInfo", NULL, NULL },
+	{ 0x35, 0x1001, "HDRInfo", NULL, NULL },
+	{ 0x37, 0x1001, "MechanicalShutterCount", NULL, NULL },
+	{ 0x39, 0x1001, "LocationInfo", NULL, NULL },
+	{ 0x3d, 0x1001, "BlackLevel", NULL, NULL },
+	{ 0x4f, 0x1001, "ColorTemperatureAuto", NULL, NULL },
+	{ 0x80, 0x1001, "ImageAdjustment", NULL, NULL },
+	{ 0x81, 0x1001, "ToneComp", NULL, NULL },
+	{ 0x82, 0x1001, "AuxiliaryLens", NULL, NULL },
+	{ 0x83, 0x1001, "LensType", NULL, NULL },
+	{ 0x84, 0x1001, "Lens", NULL, NULL },
+	{ 0x85, 0x1001, "ManualFocusDistance", NULL, NULL },
+	{ 0x86, 0x1001, "DigitalZoom", NULL, NULL },
+	{ 0x87, 0x1001, "FlashMode", NULL, NULL },
+	{ 0x88, 0x1001, "AFFocusPosition", NULL, NULL },
+	{ 0x89, 0x1001, "ShootingMode", NULL, NULL },
+	{ 0x8b, 0x1001, "LensFStops", NULL, NULL },
+	{ 0x8c, 0x1001, "ContrastCurve", NULL, NULL },
+	{ 0x8d, 0x1001, "ColorHue", NULL, NULL },
+	{ 0x8f, 0x1001, "SceneMode", NULL, NULL },
+	{ 0x90, 0x1001, "LightSource", NULL, NULL },
+	{ 0x91, 0x1001, "ShotInfo", NULL, NULL },
+	{ 0x92, 0x1001, "HueAdjustment", NULL, NULL },
+	{ 0x93, 0x1001, "NEFCompression", NULL, NULL },
+	{ 0x94, 0x1001, "Saturation", NULL, NULL },
+	{ 0x95, 0x1001, "NoiseReduction", NULL, NULL },
+	{ 0x96, 0x1001, "NEFLinearizationTable", NULL, NULL },
+	{ 0x97, 0x1001, "ColorBalance", NULL, NULL },
+	{ 0x98, 0x1001, "LensData", NULL, NULL },
+	{ 0x99, 0x1001, "RawImageCenter", NULL, NULL },
+	{ 0x9a, 0x1001, "SensorPixelSize", NULL, NULL },
+	{ 0x9c, 0x1001, "SceneAssist", NULL, NULL },
+	{ 0x9e, 0x1001, "RetouchHistory", NULL, NULL },
+	{ 0xa0, 0x1001, "SerialNumber", NULL, NULL },
+	{ 0xa2, 0x1001, "ImageDataSize", NULL, NULL },
+	{ 0xa5, 0x1001, "ImageCount", NULL, NULL },
+	{ 0xa6, 0x1001, "DeletedImageCount", NULL, NULL },
+	{ 0xa7, 0x1001, "ShutterCount", NULL, NULL },
+	{ 0xa8, 0x1001, "FlashInfo", NULL, NULL },
+	{ 0xa9, 0x1001, "ImageOptimization", NULL, NULL },
+	{ 0xaa, 0x1001, "Saturation", NULL, NULL },
+	{ 0xab, 0x1001, "VariProgram", NULL, NULL },
+	{ 0xac, 0x1001, "ImageStabilization", NULL, NULL },
+	{ 0xad, 0x1001, "AFResponse", NULL, NULL },
+	{ 0xb0, 0x1001, "MultiExposure", NULL, NULL },
+	{ 0xb1, 0x1001, "HighISONoiseReduction", NULL, NULL },
+	{ 0xb3, 0x1001, "ToningEffect", NULL, NULL },
+	{ 0xb6, 0x1001, "PowerUpTime", NULL, NULL },
+	{ 0xb7, 0x1001, "AFInfo2", NULL, NULL },
+	{ 0xb8, 0x1001, "FileInfo", NULL, NULL },
+	{ 0xb9, 0x1001, "AFTune", NULL, NULL },
+	{ 0xbb, 0x1001, "RetouchInfo", NULL, NULL },
+	{ 0xbd, 0x1001, "PictureControlData", NULL, NULL },
+	{ 0xc3, 0x1001, "BarometerInfo", NULL, NULL },
+	{ 0xe00, 0x1001, "PrintIM", NULL, NULL },
+	{ 0xe01, 0x1001, "NikonCaptureData", NULL, NULL },
+	{ 0xe09, 0x1001, "NikonCaptureVersion", NULL, NULL },
+	{ 0xe0e, 0x1001, "NikonCaptureOffsets", NULL, NULL },
+	{ 0xe10, 0x1001, "NikonScanIFD", NULL, NULL },
+	{ 0xe13, 0x1001, "NikonCaptureEditVersions", NULL, NULL },
+	{ 0xe1d, 0x1001, "NikonICCProfile", NULL, NULL },
+	{ 0xe1e, 0x1001, "NikonCaptureOutput", NULL, NULL },
+	{ 0xe22, 0x1001, "NEFBitDepth", NULL, NULL }
 };
 
 static void do_dbg_print_numeric_values(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni,
@@ -1746,7 +1933,6 @@ done:
 static void do_dbg_print_text_values(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni,
 	de_ucstring *dbgline)
 {
-	de_ucstring *str = NULL;
 	struct de_stringreaderdata *srd;
 	int is_truncated = 0;
 	int str_count = 0;
@@ -1791,8 +1977,6 @@ static void do_dbg_print_text_values(deark *c, lctx *d, const struct taginfo *tg
 		ucstring_append_sz(dbgline, "...", DE_ENCODING_UTF8);
 	}
 	ucstring_append_sz(dbgline, "}", DE_ENCODING_UTF8);
-
-	ucstring_destroy(str);
 }
 
 static void do_dbg_print_values(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni,
@@ -1842,6 +2026,9 @@ static const struct tagnuminfo *find_tagnuminfo(int tagnum, int filefmt, int ifd
 				;
 			}
 			else if(filefmt==DE_TIFFFMT_MPEXT && tagnuminfo_arr[i].flags&0x0800) {
+				;
+			}
+			else if(filefmt==DE_TIFFFMT_NIKONMN && tagnuminfo_arr[i].flags&0x1000) {
 				;
 			}
 			else {
@@ -1971,7 +2158,9 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 
 		do_dbg_print_values(c, d, &tg, tni, dbgline);
 
-		de_dbg(c, "%s", ucstring_get_printable_sz_n(dbgline, 80+DE_DBG_MAX_STRLEN));
+		// do_dbg_print_values() already tried to limit the line length.
+		// The "500+" in the next line is an emergency brake.
+		de_dbg(c, "%s", ucstring_getpsz_n(dbgline, 500+DE_DBG_MAX_STRLEN));
 		de_dbg_indent(c, 1);
 
 		switch(tg.tagnum) {
@@ -2119,6 +2308,10 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 	d->fmt = de_identify_tiff_internal(c, &d->is_le);
 
 	if(mparams && mparams->codes) {
+		if(de_strchr(mparams->codes, 'N')) {
+			d->fmt = DE_TIFFFMT_NIKONMN;
+		}
+
 		if(de_strchr(mparams->codes, 'M') && (d->fmt==DE_TIFFFMT_TIFF))
 		{
 			d->fmt = DE_TIFFFMT_MPEXT;

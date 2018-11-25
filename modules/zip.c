@@ -89,7 +89,7 @@ static void do_read_filename(deark *c, lctx *d,
 	dd->fname = ucstring_create(c);
 	from_encoding = utf8_flag ? DE_ENCODING_UTF8 : DE_ENCODING_CP437_G;
 	dbuf_read_to_ucstring(c->infile, pos, len, dd->fname, 0, from_encoding);
-	de_dbg(c, "filename: \"%s\"", ucstring_get_printable_sz_d(dd->fname));
+	de_dbg(c, "filename: \"%s\"", ucstring_getpsz_d(dd->fname));
 }
 
 
@@ -100,7 +100,7 @@ static void do_comment_display(deark *c, lctx *d, de_int64 pos, de_int64 len, in
 
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring(c->infile, pos, len, s, 0, encoding);
-	de_dbg(c, "%s: \"%s\"", name, ucstring_get_printable_sz_d(s));
+	de_dbg(c, "%s: \"%s\"", name, ucstring_getpsz_d(s));
 	ucstring_destroy(s);
 }
 
@@ -420,7 +420,7 @@ static void ef_infozipmac(deark *c, lctx *d,
 		(flags&0x0004)?"uncmpressed_attribute_data":"compressed_attribute_data");
 	if(flags&0x0008) ucstring_append_flags_item(flags_str, "64-bit_times");
 	if(flags&0x0010) ucstring_append_flags_item(flags_str, "no_timezone_offsets");
-	de_dbg(c, "flags: 0x%04x (%s)", flags, ucstring_get_printable_sz(flags_str));
+	de_dbg(c, "flags: 0x%04x (%s)", flags, ucstring_getpsz(flags_str));
 	pos += 2;
 
 	dbuf_read_fourcc(c->infile, pos, &filetype, 0);
@@ -498,13 +498,13 @@ static void ef_infozipmac(deark *c, lctx *d,
 	// TODO: Can we use the correct encoding?
 	srd = dbuf_read_string(attr_data, dpos, attr_data->len-dpos, DE_DBG_MAX_STRLEN,
 		DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
-	de_dbg(c, "fullpath: \"%s\"", ucstring_get_printable_sz(srd->str));
+	de_dbg(c, "fullpath: \"%s\"", ucstring_getpsz(srd->str));
 	dpos += srd->bytes_consumed;
 	de_destroy_stringreaderdata(c, srd);
 
 	srd = dbuf_read_string(attr_data, dpos, attr_data->len-dpos, DE_DBG_MAX_STRLEN,
 		DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
-	de_dbg(c, "comment: \"%s\"", ucstring_get_printable_sz(srd->str));
+	de_dbg(c, "comment: \"%s\"", ucstring_getpsz(srd->str));
 	dpos += srd->bytes_consumed;
 	de_destroy_stringreaderdata(c, srd);
 
@@ -547,7 +547,7 @@ static const struct extra_item_type_info_struct extra_item_type_info_arr[] = {
 	{ 0x4690 /*    */, "POSZIP 4690", NULL },
 	{ 0x4704 /*    */, "VM/CMS", NULL },
 	{ 0x470f /*    */, "MVS", NULL },
-	{ 0x4854 /* TH */, "Theos, old unofficial port", NULL },
+	{ 0x4854 /* TH */, "Theos, old unofficial port", NULL }, // unzip:extrafld.txt says "inofficial"
 	{ 0x4b46 /* FK */, "FWKCS MD5", NULL },
 	{ 0x4c41 /* AL */, "OS/2 access control list (text ACL)", NULL },
 	{ 0x4d49 /* IM */, "Info-ZIP OpenVMS", NULL },
@@ -644,13 +644,13 @@ static void do_extract_file(deark *c, lctx *d, struct member_data *md)
 
 	if(md->is_dir && ldd->uncmpr_size==0) {
 		de_msg(c, "Note: \"%s\" is a directory. Ignoring.",
-			ucstring_get_printable_sz_d(ldd->fname));
+			ucstring_getpsz_d(ldd->fname));
 		goto done;
 	}
 
 	if(md->is_symlink) {
 		de_warn(c, "\"%s\" is a symbolic link. It will not be extracted as a link.",
-			ucstring_get_printable_sz_d(ldd->fname));
+			ucstring_getpsz_d(ldd->fname));
 	}
 
 	fi = de_finfo_create(c);

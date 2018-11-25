@@ -337,15 +337,15 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\src\deark-core.c"
-				>
-			</File>
-			<File
 				RelativePath="..\..\src\deark-data.c"
 				>
 			</File>
 			<File
 				RelativePath="..\..\src\deark-dbuf.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\deark-fmtutil.c"
 				>
 			</File>
 			<File
@@ -401,6 +401,10 @@
 				</FileConfiguration>
 			</File>
 			<File
+				RelativePath="..\..\src\deark-user.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\deark-util.c"
 				>
 			</File>
@@ -428,6 +432,10 @@
 			</File>
 			<File
 				RelativePath="..\..\src\deark-private.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\deark-user.h"
 				>
 			</File>
 			<File
@@ -490,6 +498,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\modules\asf.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\modules\atari-img.c"
 				>
 			</File>
@@ -518,11 +530,11 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\modules\bmp.c"
+				RelativePath="..\..\modules\bmff.c"
 				>
 			</File>
 			<File
-				RelativePath="..\..\modules\boxes.c"
+				RelativePath="..\..\modules\bmp.c"
 				>
 			</File>
 			<File
@@ -531,6 +543,10 @@
 			</File>
 			<File
 				RelativePath="..\..\modules\bsave.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\modules\cab.c"
 				>
 			</File>
 			<File
@@ -558,6 +574,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\modules\ebml.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\modules\emf.c"
 				>
 			</File>
@@ -575,10 +595,6 @@
 			</File>
 			<File
 				RelativePath="..\..\modules\flif.c"
-				>
-			</File>
-			<File
-				RelativePath="..\..\modules\fmtutil.c"
 				>
 			</File>
 			<File
@@ -835,6 +851,10 @@
 			</File>
 			<File
 				RelativePath="..\..\modules\wpg.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\modules\wri.c"
 				>
 			</File>
 			<File

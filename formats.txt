@@ -21,7 +21,7 @@ Deark -- Information about supported formats
 
 * AMOS Sprite Bank (AmSp) / AMOS Icon Bank (AmIc) (module="abk")
 
-* ANI (Windows Animated Cursor) (module="ani")
+* ANI (Windows Animated Cursor) (part of module "riff")
   - Extract individual CUR and ICO files.
 
 * Animatic Film (module="animatic")
@@ -561,7 +561,6 @@ Deark -- Information about supported formats
   - Raw zlib files are uncompressed.
 
 * ZOO (module="zoo")
-  - You may have to use "-m zoo".
   - Extract comments (use -a).
 
 == Transfer encoding modules ==
@@ -588,6 +587,10 @@ Deark -- Information about supported formats
 * AMOS source code (module="amos_source")
   - Extract AmBs resource file.
 
+* ASF multimedia (module="asf")
+  - Files can be parsed, but there is usually nothing that can be extracted
+    from them.
+
 * C64 BASIC (module="basic-c64") (experimental)
   - Detokenize C64 BASIC programs
 
@@ -603,6 +606,8 @@ Deark -- Information about supported formats
 
 * CRC-32 (module="crc32")
   - Print the IEEE CRC-32 of the file.
+
+* EBML/Matroska/MKV/WebM (module="ebml") (experimental/incomplete)
 
 * EXE/PE/NE/etc. (module="exe")
   EXE format can be complex. Not all varieties are correctly supported.
@@ -627,6 +632,9 @@ Deark -- Information about supported formats
 * IPTC metadata (module="iptc")
   - Extract captions/abstracts (use -a).
   - Extract raster caption bitmaps.
+
+* ISO-BMFF (module="bmff") (experimental/incomplete)
+  - MP4, QuickTime .mov, etc.
 
 * JPEG scan (module="jpegscan")
   - This module tries to find and extract embedded JPEG and JPEG-LS files from
@@ -675,4 +683,9 @@ Deark -- Information about supported formats
 * RIFF (module="riff")
   Metaformat used by WAV, AVI, WebP, etc.
   - RIFF can be parsed, but in many cases nothing can be extracted from it.
+
+* WRI - Microsoft Write (module="wri") (experimental/incomplete)
+  - Extract raw text to an HTML file. No formatting, etc. Only Windows-1252
+    encoding is supported.
+  - Extract most pictures.
 

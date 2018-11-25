@@ -33,6 +33,7 @@ DE_DECLARE_MODULE(de_module_mp3);
 
 typedef struct id3v2ctx_struct {
 	de_byte has_id3v2;
+	de_byte wmpicture_mode;
 
 	de_int64 total_len;
 
@@ -167,20 +168,11 @@ static int read_id3v2_terminated_string(deark *c, id3v2ctx *d, dbuf *f,
 
 	if(id3_encoding==ID3ENC_UTF16 || id3_encoding==ID3ENC_UTF16BE) {
 		// A 2-byte encoding
-		de_int64 k;
 		int foundflag = 0;
 
-		// Search for the aligned pair of 0x00 bytes that marks the end of string.
-		for(k=0; k<=(nbytes_to_scan-2); k+=2) {
-			de_int64 x;
-			x = dbuf_getui16be(f, pos+k);
-			if(x==0) {
-				foundflag = 1;
-				stringlen = k;
-				*bytes_consumed = stringlen + 2;
-			}
-		}
+		foundflag = dbuf_get_utf16_NULterm_len(f, pos, nbytes_to_scan, bytes_consumed);
 		if(!foundflag) goto done;
+		stringlen = (*bytes_consumed)-2;
 	}
 	else {
 		// A 1-byte encoding
@@ -326,7 +318,7 @@ static void decode_id3v2_frame_text(deark *c, id3v2ctx *d,
 
 	s = ucstring_create(c);
 	id3v2_read_to_ucstring(c, f, pos, pos1+len-pos, s, id3_encoding);
-	de_dbg(c, "text: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "text: \"%s\"", ucstring_getpsz(s));
 
 done:
 	ucstring_destroy(s);
@@ -340,7 +332,7 @@ static void decode_id3v2_frame_urllink(deark *c, id3v2ctx *d,
 
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring(f, pos1, len, s, 0, DE_ENCODING_LATIN1);
-	de_dbg(c, "url: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "url: \"%s\"", ucstring_getpsz(s));
 	ucstring_destroy(s);
 }
 
@@ -364,14 +356,14 @@ static void decode_id3v2_frame_txxx_etc(deark *c, id3v2ctx *d,
 	bytes_consumed = 0;
 	ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, id3_encoding, description, &bytes_consumed);
 	if(!ret) goto done;
-	de_dbg(c, "description: \"%s\"", ucstring_get_printable_sz(description));
+	de_dbg(c, "description: \"%s\"", ucstring_getpsz(description));
 	pos += bytes_consumed;
 
 	value = ucstring_create(c);
 	id3v2_read_to_ucstring(c, f, pos, pos1+len-pos, value, id3_encoding);
 	if(tag4cc->id==CODE_WXX || tag4cc->id==CODE_WXXX) name="url";
 	else name="value";
-	de_dbg(c, "%s: \"%s\"", name, ucstring_get_printable_sz(value));
+	de_dbg(c, "%s: \"%s\"", name, ucstring_getpsz(value));
 
 done:
 	ucstring_destroy(description);
@@ -393,7 +385,7 @@ static void decode_id3v2_frame_priv(deark *c, id3v2ctx *d,
 		DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_LATIN1);
 	if(!owner->found_nul) goto done;
 
-	de_dbg(c, "owner: \"%s\"", ucstring_get_printable_sz(owner->str));
+	de_dbg(c, "owner: \"%s\"", ucstring_getpsz(owner->str));
 	pos += owner->bytes_consumed;
 
 	payload_len = pos1+len-pos;
@@ -405,7 +397,7 @@ static void decode_id3v2_frame_priv(deark *c, id3v2ctx *d,
 	}
 	else if(c->debug_level>=2) {
 		de_dbg_indent(c, 1);
-		de_dbg_hexdump(c, f, pos, payload_len, 256, "data", 0x1);
+		de_dbg_hexdump(c, f, pos, payload_len, 256, NULL, 0x1);
 		de_dbg_indent(c, -1);
 	}
 
@@ -430,7 +422,7 @@ static void decode_id3v2_frame_comm(deark *c, id3v2ctx *d,
 
 	lang = ucstring_create(c);
 	dbuf_read_to_ucstring(f, pos, 3, lang, 0, DE_ENCODING_ASCII);
-	de_dbg(c, "language: \"%s\"", ucstring_get_printable_sz(lang));
+	de_dbg(c, "language: \"%s\"", ucstring_getpsz(lang));
 	pos += 3;
 
 	shortdesc = ucstring_create(c);
@@ -438,17 +430,126 @@ static void decode_id3v2_frame_comm(deark *c, id3v2ctx *d,
 	ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, id3_encoding,
 		shortdesc, &bytes_consumed);
 	if(!ret) goto done;
-	de_dbg(c, "short description: \"%s\"", ucstring_get_printable_sz(shortdesc));
+	de_dbg(c, "short description: \"%s\"", ucstring_getpsz(shortdesc));
 	pos += bytes_consumed;
 
 	comment_text = ucstring_create(c);
 	id3v2_read_to_ucstring(c, f, pos, pos1+len-pos, comment_text, id3_encoding);
-	de_dbg(c, "comment: \"%s\"", ucstring_get_printable_sz(comment_text));
+	de_dbg(c, "comment: \"%s\"", ucstring_getpsz(comment_text));
 
 done:
 	ucstring_destroy(lang);
 	ucstring_destroy(shortdesc);
 	ucstring_destroy(comment_text);
+}
+
+struct apic_type_info {
+	de_byte picture_type;
+	const char *name;
+	const char *token;
+};
+static const struct apic_type_info apic_type_info_arr[] = {
+	{0x00, "other/unspecified", NULL},
+	{0x01, "standard file icon", "icon"},
+	{0x02, "file icon", "icon"},
+	{0x03, "front cover", "front_cover"},
+	{0x04, "back cover", "back_cover"},
+	{0x05, "leaflet page", NULL},
+	{0x06, "media", "media"},
+	{0x07, "lead artist", NULL},
+	{0x08, "artist", NULL},
+	{0x09, "conductor", NULL},
+	{0x0a, "band", NULL},
+	{0x0b, "composer", NULL},
+	{0x0c, "lyricist", NULL},
+	{0x0d, "recording location", NULL},
+	{0x0e, "picture taken during recording", NULL},
+	{0x0f, "picture taken during performance", NULL},
+	{0x10, "frame from video", NULL},
+	{0x12, "illustration", NULL},
+	{0x13, "logo of artist", NULL},
+	{0x14, "logo of publisher/studio", NULL}
+};
+
+static const struct apic_type_info *get_apic_type_info(de_byte t)
+{
+	size_t k;
+
+	for(k=0; k<DE_ITEMS_IN_ARRAY(apic_type_info_arr); k++) {
+		if(apic_type_info_arr[k].picture_type == t) {
+			return &apic_type_info_arr[k];
+		}
+	}
+	return NULL;
+}
+
+static void extract_pic_apic(deark *c, id3v2ctx *d, dbuf *f,
+	 de_int64 pos, de_int64 len, const struct apic_type_info *ptinfo)
+{
+	const char *ext;
+	char fullext[32];
+	de_byte sig[2];
+	const char *token = NULL;
+
+	dbuf_read(f, sig, pos, 2);
+	if(sig[0]==0x89 && sig[1]==0x50) ext="png";
+	else if(sig[0]==0xff && sig[1]==0xd8) ext="jpg";
+	else ext="bin";
+
+	if(ptinfo && ptinfo->token) token = ptinfo->token;
+	if(!token) {
+		if(d->wmpicture_mode) token = "wmpic";
+	}
+	if(!token) token = "id3pic";
+
+	de_snprintf(fullext, sizeof(fullext), "%s.%s", token, ext);
+
+	dbuf_create_file_from_slice(f, pos, len, fullext, NULL, DE_CREATEFLAG_IS_AUX);
+}
+
+// Similar to decode_id3v2_frame_pic_apic()
+static void decode_id3v2_frame_wmpicture(deark *c, id3v2ctx *d,
+	dbuf *f, de_int64 pos1, de_int64 len)
+{
+	de_byte picture_type;
+	de_int64 pos = pos1;
+	de_int64 pic_data_len;
+	de_int64 stringlen; // includes terminating 0x0000
+	de_ucstring *mimetype = NULL;
+	de_ucstring *description = NULL;
+	const struct apic_type_info *ptinfo = NULL;
+	int ret;
+
+	picture_type = dbuf_getbyte(f, pos++);
+	ptinfo = get_apic_type_info(picture_type);
+	de_dbg(c, "picture type: 0x%02x (%s)", (unsigned int)picture_type,
+		ptinfo?ptinfo->name:"?");
+
+	pic_data_len = dbuf_getui32le(f, pos);
+	de_dbg(c, "picture size: %u", (unsigned int)pic_data_len);
+	pos += 4;
+
+	ret = dbuf_get_utf16_NULterm_len(f, pos, pos1+len-pos, &stringlen);
+	if(!ret) goto done;
+	mimetype = ucstring_create(c);
+	dbuf_read_to_ucstring_n(f, pos, stringlen-2, 256, mimetype, 0, DE_ENCODING_UTF16LE);
+	de_dbg(c, "mime type: \"%s\"", ucstring_getpsz_d(mimetype));
+	pos += stringlen;
+
+	ret = dbuf_get_utf16_NULterm_len(f, pos, pos1+len-pos, &stringlen);
+	if(!ret) goto done;
+	mimetype = ucstring_create(c);
+	dbuf_read_to_ucstring_n(f, pos, stringlen-2, 2048, mimetype, 0, DE_ENCODING_UTF16LE);
+	de_dbg(c, "description: \"%s\"", ucstring_getpsz_d(mimetype));
+	// TODO: Maybe the description should be used in the filename?
+	pos += stringlen;
+
+	if(pos+pic_data_len > pos1+len) goto done;
+	extract_pic_apic(c, d, f, pos, pic_data_len, ptinfo);
+
+done:
+	ucstring_destroy(mimetype);
+	ucstring_destroy(description);
 }
 
 static void decode_id3v2_frame_pic_apic(deark *c, id3v2ctx *d,
@@ -460,10 +561,9 @@ static void decode_id3v2_frame_pic_apic(deark *c, id3v2ctx *d,
 	struct de_stringreaderdata *fmt_srd = NULL;
 	de_ucstring *mimetype = NULL;
 	de_ucstring *description = NULL;
+	const struct apic_type_info *ptinfo = NULL;
 	de_int64 bytes_consumed = 0;
 	int ret;
-	const char *ext;
-	de_byte sig[2];
 
 	id3_encoding = dbuf_getbyte(f, pos++);
 	de_dbg(c, "text encoding: %d (%s)", (int)id3_encoding,
@@ -471,7 +571,7 @@ static void decode_id3v2_frame_pic_apic(deark *c, id3v2ctx *d,
 
 	if(tag4cc->id==CODE_PIC) {
 		fmt_srd = dbuf_read_string(f, pos, 3, 3, 0, DE_ENCODING_ASCII);
-		de_dbg(c, "format: \"%s\"", ucstring_get_printable_sz(fmt_srd->str));
+		de_dbg(c, "format: \"%s\"", ucstring_getpsz(fmt_srd->str));
 		pos += 3;
 	}
 	else {
@@ -479,28 +579,25 @@ static void decode_id3v2_frame_pic_apic(deark *c, id3v2ctx *d,
 		ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, ID3ENC_ISO_8859_1,
 			mimetype, &bytes_consumed);
 		if(!ret) goto done;
-		de_dbg(c, "mime type: \"%s\"", ucstring_get_printable_sz(mimetype));
+		de_dbg(c, "mime type: \"%s\"", ucstring_getpsz(mimetype));
 		pos += bytes_consumed;
 	}
 
 	picture_type = dbuf_getbyte(f, pos++);
-	de_dbg(c, "picture type: 0x%02x", (unsigned int)picture_type);
+	ptinfo = get_apic_type_info(picture_type);
+	de_dbg(c, "picture type: 0x%02x (%s)", (unsigned int)picture_type,
+		ptinfo?ptinfo->name:"?");
 
 	description = ucstring_create(c);
 	// "The description has a maximum length of 64 characters" [we'll allow more]
 	ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, id3_encoding,
 		description, &bytes_consumed);
 	if(!ret) goto done;
-	de_dbg(c, "description: \"%s\"", ucstring_get_printable_sz(description));
+	de_dbg(c, "description: \"%s\"", ucstring_getpsz(description));
 	pos += bytes_consumed;
 
 	if(pos >= pos1+len) goto done;
-
-	dbuf_read(f, sig, pos, 2);
-	if(sig[0]==0x89 && sig[1]==0x50) ext="id3pic.png";
-	else if(sig[0]==0xff && sig[1]==0xd8) ext="id3pic.jpg";
-	else ext="id3pic.bin";
-	dbuf_create_file_from_slice(f, pos, pos1+len-pos, ext, NULL, DE_CREATEFLAG_IS_AUX);
+	extract_pic_apic(c, d, f, pos, pos1+len-pos, ptinfo);
 
 done:
 	de_destroy_stringreaderdata(c, fmt_srd);
@@ -528,21 +625,21 @@ static void decode_id3v2_frame_geob(deark *c, id3v2ctx *d,
 	ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, ID3ENC_ISO_8859_1,
 		mimetype, &bytes_consumed);
 	if(!ret) goto done;
-	de_dbg(c, "mime type: \"%s\"", ucstring_get_printable_sz(mimetype));
+	de_dbg(c, "mime type: \"%s\"", ucstring_getpsz(mimetype));
 	pos += bytes_consumed;
 
 	filename = ucstring_create(c);
 	ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, id3_encoding,
 		filename, &bytes_consumed);
 	if(!ret) goto done;
-	de_dbg(c, "filename: \"%s\"", ucstring_get_printable_sz(filename));
+	de_dbg(c, "filename: \"%s\"", ucstring_getpsz(filename));
 	pos += bytes_consumed;
 
 	description = ucstring_create(c);
 	ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, id3_encoding,
 		description, &bytes_consumed);
 	if(!ret) goto done;
-	de_dbg(c, "description: \"%s\"", ucstring_get_printable_sz(description));
+	de_dbg(c, "description: \"%s\"", ucstring_getpsz(description));
 	pos += bytes_consumed;
 
 	objlen = pos1+len-pos;
@@ -556,7 +653,7 @@ static void decode_id3v2_frame_geob(deark *c, id3v2ctx *d,
 	}
 	else if(c->debug_level>=2) {
 		de_dbg_indent(c, 1);
-		de_dbg_hexdump(c, f, pos, objlen, 256, "data", 0x1);
+		de_dbg_hexdump(c, f, pos, objlen, 256, NULL, 0x1);
 		de_dbg_indent(c, -1);
 	}
 
@@ -580,7 +677,7 @@ static void decode_id3v2_frame_pop_popm(deark *c, id3v2ctx *d,
 	ret = read_id3v2_terminated_string(c, d, f, pos, pos1+len-pos, 256, ID3ENC_ISO_8859_1,
 		email, &bytes_consumed);
 	if(!ret) goto done;
-	de_dbg(c, "email/id: \"%s\"", ucstring_get_printable_sz(email));
+	de_dbg(c, "email/id: \"%s\"", ucstring_getpsz(email));
 	pos += bytes_consumed;
 
 	if(pos1+len-pos < 1) goto done;
@@ -868,6 +965,23 @@ done:
 	de_dbg_indent_restore(c, saved_indent_level);
 }
 
+// WM/Picture a metadata element that occurs in ASF, and maybe other, Microsoft
+// formats. Microsoft says
+//   "This attribute is compatible with the ID3 frame, APIC."
+// That's slightly misleading. It contains the same information, but formatted
+// in an incompatible way.
+// It seems to be a serialization of the WM_PICTURE struct, with the fields in
+// a different order.
+static void do_wmpicture(deark *c, dbuf *f, de_int64 pos, de_int64 len)
+{
+	id3v2ctx *d = NULL;
+
+	d = de_malloc(c, sizeof(id3v2ctx));
+	d->wmpicture_mode = 1;
+	decode_id3v2_frame_wmpicture(c, d, f, pos, len);
+	de_free(c, d);
+}
+
 static void do_id3v2(deark *c, dbuf *f, de_int64 pos, de_int64 bytes_avail,
 	 de_int64 *bytes_consumed)
 {
@@ -1000,30 +1114,30 @@ static void do_mp3_id3v1(deark *c, de_int64 pos1)
 
 	dbuf_read_to_ucstring(c->infile, pos, 30, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
 	ucstring_strip_trailing_spaces(s);
-	de_dbg(c, "song title: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "song title: \"%s\"", ucstring_getpsz(s));
 	pos += 30;
 
 	ucstring_empty(s);
 	dbuf_read_to_ucstring(c->infile, pos, 30, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
 	ucstring_strip_trailing_spaces(s);
-	de_dbg(c, "artist: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "artist: \"%s\"", ucstring_getpsz(s));
 	pos += 30;
 
 	ucstring_empty(s);
 	dbuf_read_to_ucstring(c->infile, pos, 30, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
 	ucstring_strip_trailing_spaces(s);
-	de_dbg(c, "album: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "album: \"%s\"", ucstring_getpsz(s));
 	pos += 30;
 
 	ucstring_empty(s);
 	dbuf_read_to_ucstring(c->infile, pos, 4, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
-	de_dbg(c, "year: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "year: \"%s\"", ucstring_getpsz(s));
 	pos += 4;
 
 	ucstring_empty(s);
 	dbuf_read_to_ucstring(c->infile, pos, 30, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
 	ucstring_strip_trailing_spaces(s);
-	de_dbg(c, "comment: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "comment: \"%s\"", ucstring_getpsz(s));
 	pos += 28;
 	if(de_getbyte(pos)==0) {
 		de_byte trknum;
@@ -1074,7 +1188,7 @@ static void do_ape_text_item(deark *c, struct ape_tag_header_footer *ah,
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring_n(c->infile, pos, len, DE_DBG_MAX_STRLEN,
 		s, 0, encoding);
-	de_dbg(c, "value: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "value: \"%s\"", ucstring_getpsz(s));
 	ucstring_destroy(s);
 }
 
@@ -1110,7 +1224,7 @@ static int do_ape_item(deark *c, struct ape_tag_header_footer *ah,
 	key = dbuf_read_string(c->infile, pos, 256, 256, DE_CONVFLAG_STOP_AT_NUL,
 		DE_ENCODING_ASCII);
 	if(!key->found_nul) goto done;
-	de_dbg(c, "key: \"%s\"", ucstring_get_printable_sz(key->str));
+	de_dbg(c, "key: \"%s\"", ucstring_getpsz(key->str));
 	pos += key->bytes_consumed;
 
 	de_dbg(c, "item data at %"INT64_FMT", len=%"INT64_FMT, pos, item_value_len);
@@ -1119,7 +1233,7 @@ static int do_ape_item(deark *c, struct ape_tag_header_footer *ah,
 		do_ape_text_item(c, ah, pos, item_value_len);
 	}
 	else if(c->debug_level>=2) {
-		de_dbg_hexdump(c, c->infile, pos, item_value_len, 256, "data", 0x1);
+		de_dbg_hexdump(c, c->infile, pos, item_value_len, 256, NULL, 0x1);
 	}
 	de_dbg_indent(c, -1);
 
@@ -1371,6 +1485,18 @@ static void de_run_mp3(deark *c, de_module_params *mparams)
 	pos = 0;
 	endpos = c->infile->len;
 
+	if(mparams && mparams->codes) {
+		if(de_strchr(mparams->codes, 'I')) { // raw ID3v2
+			de_int64 bytes_consumed_id3v2 = 0;
+			do_id3v2(c, c->infile, 0, c->infile->len, &bytes_consumed_id3v2);
+			goto done;
+		}
+		if(de_strchr(mparams->codes, 'P')) { // Windows WM/Picture
+			do_wmpicture(c, c->infile, 0, c->infile->len);
+			goto done;
+		}
+	}
+
 	if(!dbuf_memcmp(c->infile, 0, "ID3", 3)) {
 		de_int64 bytes_consumed_id3v2 = 0;
 
@@ -1405,6 +1531,7 @@ static void de_run_mp3(deark *c, de_module_params *mparams)
 
 	do_mp3_data(c, d, pos, endpos-pos);
 
+done:
 	de_free(c, d);
 }
 
@@ -1434,7 +1561,6 @@ static int de_identify_mp3(deark *c)
 	}
 	return 0;
 }
-
 
 void de_module_mp3(deark *c, struct deark_module_info *mi)
 {

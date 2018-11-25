@@ -9,15 +9,16 @@
 #include <deark-private.h>
 #include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_riff);
-DE_DECLARE_MODULE(de_module_ani);
 
 #define CODE_ACON  0x41434f4eU
+#define CODE_AVI   0x41564920U
 #define CODE_INFO  0x494e464fU
 #define CODE_PAL   0x50414c20U
 #define CODE_RMID  0x524d4944U
 #define CODE_WAVE  0x57415645U
 #define CODE_WEBP  0x57454250U
 #define CODE_cmpr  0x636d7072U
+#define CODE_movi  0x6d6f7669U
 
 #define CHUNK_DISP 0x44495350U
 #define CHUNK_EXIF 0x45584946U
@@ -27,10 +28,13 @@ DE_DECLARE_MODULE(de_module_ani);
 #define CHUNK_RIFX 0x52494658U
 #define CHUNK_XMP  0x584d5020U
 #define CHUNK__PMX 0x5f504d58U
+#define CHUNK_avih 0x61766968U
 #define CHUNK_data 0x64617461U
 #define CHUNK_fact 0x66616374U
 #define CHUNK_fmt  0x666d7420U
 #define CHUNK_icon 0x69636f6eU
+#define CHUNK_strf 0x73747266U
+#define CHUNK_strh 0x73747268U
 
 typedef struct localctx_struct {
 	int is_cdr;
@@ -53,7 +57,7 @@ static void do_INFO_item(deark *c, lctx *d, struct de_iffctx *ictx, de_int64 pos
 	// TODO: Support the CSET chunk
 	dbuf_read_to_ucstring_n(c->infile, pos, len, DE_DBG_MAX_STRLEN, s,
 		DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_LATIN1);
-	de_dbg(c, "value: \"%s\"", ucstring_get_printable_sz(s));
+	de_dbg(c, "value: \"%s\"", ucstring_getpsz(s));
 
 	ucstring_destroy(s);
 }
@@ -121,6 +125,45 @@ static void do_wav_fact(deark *c, lctx *d, struct de_iffctx *ictx, de_int64 pos,
 	if(len<4) return;
 	n = de_getui32le(pos);
 	de_dbg(c, "number of samples: %u", (unsigned int)n);
+}
+
+static void do_avi_avih(deark *c, lctx *d, struct de_iffctx *ictx, de_int64 pos, de_int64 len)
+{
+	de_int64 n, n2;
+
+	if(len<40) return;
+	n = de_getui32le(pos);
+	de_dbg(c, "microseconds/frame: %u", (unsigned int)n);
+	n = de_getui32le(pos+12);
+	de_dbg(c, "flags: 0x%08x", (unsigned int)n);
+	n = de_getui32le(pos+16);
+	de_dbg(c, "number of frames: %u", (unsigned int)n);
+	n = de_getui32le(pos+24);
+	de_dbg(c, "number of streams: %u", (unsigned int)n);
+	n = de_getui32le(pos+32);
+	n2 = de_getui32le(pos+36);
+	de_dbg_dimensions(c, n, n2);
+	// TODO: There are more fields in this chunk.
+}
+
+static void do_avi_strh(deark *c, lctx *d, struct de_iffctx *ictx, de_int64 pos, de_int64 len)
+{
+	struct de_fourcc type4cc;
+	struct de_fourcc codec4cc;
+
+	if(len<8) return;
+	dbuf_read_fourcc(ictx->f, pos, &type4cc, 0);
+	de_dbg(c, "stream type: '%s'", type4cc.id_printable);
+	dbuf_read_fourcc(ictx->f, pos+4, &codec4cc, 0);
+	de_dbg(c, "codec: '%s'", codec4cc.id_printable);
+	// TODO: There are more fields here.
+}
+
+static void do_avi_strf(deark *c, lctx *d, struct de_iffctx *ictx, de_int64 pos, de_int64 len)
+{
+	struct de_bmpinfo bi;
+	de_fmtutil_get_bmpinfo(c, c->infile, &bi, pos, len, DE_BMPINFO_CMPR_IS_4CC);
+	// This chunk contains only the BITMAPINFOHEADER, so we can't extract a bitmap.
 }
 
 static void do_palette(deark *c, lctx *d, struct de_iffctx *ictx, de_int64 pos, de_int64 len)
@@ -245,9 +288,23 @@ static int my_on_std_container_start_fn(deark *c, struct de_iffctx *ictx)
 	lctx *d = (lctx*)ictx->userdata;
 
 	if(ictx->level==0) {
+		const char *fmtname = NULL;
+
 		// Special check for CorelDraw formats.
 		if(!de_memcmp(ictx->main_contentstype4cc.bytes, (const void*)"CDR", 3)) {
 			d->is_cdr = 1;
+			fmtname = "CorelDRAW (RIFF-based)";
+		}
+		else {
+			switch(ictx->main_contentstype4cc.id) {
+			case CODE_ACON: fmtname = "Windows animated cursor"; break;
+			case CODE_AVI: fmtname = "AVI"; break;
+			case CODE_WAVE: fmtname = "WAVE"; break;
+			case CODE_WEBP: fmtname = "WebP"; break;
+			}
+		}
+		if(fmtname) {
+			de_declare_fmt(c, fmtname);
 		}
 	}
 
@@ -259,8 +316,18 @@ static int my_on_std_container_start_fn(deark *c, struct de_iffctx *ictx)
 			return 0;
 		}
 	}
-	return 1;
 
+	if(ictx->main_contentstype4cc.id==CODE_AVI &&
+		ictx->curr_container_contentstype4cc.id==CODE_movi &&
+		c->debug_level<2)
+	{
+		// There are often a huge number of these chunks, and we can't do
+		// anything interesting with them, so skip them by default.
+		de_dbg(c, "[not decoding movi chunks]");
+		return 0;
+	}
+
+	return 1;
 }
 
 static int my_riff_chunk_handler(deark *c, struct de_iffctx *ictx)
@@ -334,6 +401,24 @@ static int my_riff_chunk_handler(deark *c, struct de_iffctx *ictx)
 			do_wav_fact(c, d, ictx, dpos, dlen);
 		}
 		break;
+
+	case CHUNK_avih:
+		if(ictx->main_contentstype4cc.id==CODE_AVI) {
+			do_avi_avih(c, d, ictx, dpos, dlen);
+		}
+		break;
+
+	case CHUNK_strh:
+		if(ictx->main_contentstype4cc.id==CODE_AVI) {
+			do_avi_strh(c, d, ictx, dpos, dlen);
+		}
+		break;
+
+	case CHUNK_strf:
+		if(ictx->main_contentstype4cc.id==CODE_AVI) {
+			do_avi_strf(c, d, ictx, dpos, dlen);
+		}
+		break;
 	}
 
 chunk_handled:
@@ -380,24 +465,6 @@ static void de_run_riff(deark *c, de_module_params *mparams)
 	de_free(c, d);
 }
 
-static int de_identify_ani(deark *c)
-{
-	de_byte buf[12];
-	de_read(buf, 0, 12);
-
-	if(!de_memcmp(buf, "RIFF", 4) && !de_memcmp(&buf[8], "ACON", 4))
-		return 100;
-	return 0;
-}
-
-void de_module_ani(deark *c, struct deark_module_info *mi)
-{
-	mi->id = "ani";
-	mi->desc = "Windows animated cursor";
-	mi->run_fn = de_run_riff;
-	mi->identify_fn = de_identify_ani;
-}
-
 static int de_identify_riff(deark *c)
 {
 	if(!dbuf_memcmp(c->infile, 0, "RIFF", 4))
@@ -412,7 +479,7 @@ static int de_identify_riff(deark *c)
 void de_module_riff(deark *c, struct deark_module_info *mi)
 {
 	mi->id = "riff";
-	mi->desc = "RIFF metaformat";
+	mi->desc = "RIFF-based formats";
 	mi->run_fn = de_run_riff;
 	mi->identify_fn = de_identify_riff;
 }

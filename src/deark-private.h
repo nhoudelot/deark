@@ -2,14 +2,16 @@
 // Copyright (C) 2016 Jason Summers
 // See the file COPYING for terms of use.
 
+// Definitions not visible to the command-line utility.
+
 #ifdef DEARK_PRIVATE_H_INC
 #error "deark-private.h included multiple times"
 #endif
 #define DEARK_PRIVATE_H_INC
 
-#include <string.h>
-#include <stdarg.h>
+#ifndef DEARK_H_INC
 #include "deark.h"
+#endif
 
 #define DE_MAX_FILE_SIZE 100000000
 #define DE_DEFAULT_MAX_IMAGE_DIMENSION 10000
@@ -17,6 +19,7 @@
 #define DE_ENCODING_ASCII   0
 #define DE_ENCODING_UTF8    1
 #define DE_ENCODING_LATIN1  2
+#define DE_ENCODING_PRINTABLEASCII 7
 #define DE_ENCODING_PETSCII      8
 #define DE_ENCODING_CP437_G      10
 #define DE_ENCODING_CP437_C      11
@@ -198,6 +201,8 @@ struct deark_ext_option {
 	char *val;
 };
 
+typedef void (*de_module_register_fn_type)(deark *c);
+
 struct deark_struct {
 	int debug_level;
 	void *userdata;
@@ -237,6 +242,7 @@ struct deark_struct {
 
 	const char *input_filename;
 	const char *input_format_req; // Format requested
+	const char *modcodes_req;
 	de_int64 slice_start_req; // Used if we're only to look at part of the file.
 	de_int64 slice_size_req;
 	int slice_size_req_valid;
@@ -264,6 +270,7 @@ struct deark_struct {
 	int can_decode_fltpt;
 	int host_is_le;
 	int modhelp_req;
+	int input_encoding;
 
 	de_msgfn_type msgfn; // Caller's message output function
 	de_specialmsgfn_type specialmsgfn;
@@ -276,6 +283,8 @@ struct deark_struct {
 	char *output_archive_filename;
 
 	struct de_timestamp current_time;
+
+	de_module_register_fn_type module_register_fn;
 
 	int num_modules;
 	struct deark_module_info *module_info; // Pointer to an array
@@ -291,8 +300,7 @@ struct deark_struct {
 
 void de_fatalerror(deark *c);
 
-void de_register_modules(deark *c);
-
+deark *de_create_internal(void);
 int de_run_module(deark *c, struct deark_module_info *mi, de_module_params *mparams, int moddisp);
 int de_run_module_by_id(deark *c, const char *id, de_module_params *mparams);
 void de_run_module_by_id_on_slice(deark *c, const char *id, de_module_params *mparams,
@@ -545,6 +553,9 @@ int dbuf_search_byte(dbuf *f, const de_byte b, de_int64 startpos,
 int dbuf_search(dbuf *f, const de_byte *needle, de_int64 needle_len,
 	de_int64 startpos, de_int64 haystack_len, de_int64 *foundpos);
 
+int dbuf_get_utf16_NULterm_len(dbuf *f, de_int64 pos1, de_int64 bytes_avail,
+	de_int64 *bytes_consumed);
+
 int dbuf_find_line(dbuf *f, de_int64 pos1, de_int64 *pcontent_len, de_int64 *ptotal_len);
 
 struct de_fourcc {
@@ -746,21 +757,24 @@ de_int64 ucstring_count_utf8_bytes(de_ucstring *s);
 // flags: DE_CONVFLAG_*
 void ucstring_to_sz(de_ucstring *s, char *szbuf, size_t szbuf_len, unsigned int flags, int encoding);
 
+// "get printable string"
 // Returns a pointer to a NUL-terminated string, that is valid until the
 // next ucstring_* function is called on that string.
-const char *ucstring_get_printable_sz(de_ucstring *s);
+const char *ucstring_getpsz(de_ucstring *s);
 // The _n version limits the number of bytes in the result.
 // max_bytes does not count the terminating NUL.
-const char *ucstring_get_printable_sz_n(de_ucstring *s, de_int64 max_bytes);
+const char *ucstring_getpsz_n(de_ucstring *s, de_int64 max_bytes);
 
 #define DE_DBG_MAX_STRLEN 500
 // Same as ..._n, with max_bytes=DE_DBG_MAX_STRLEN
-const char *ucstring_get_printable_sz_d(de_ucstring *s);
+const char *ucstring_getpsz_d(de_ucstring *s);
 
 // Helper function for printing the contents of bit-flags fields
 void ucstring_append_flags_item(de_ucstring *s, const char *str);
 
 void de_write_codepoint_to_html(deark *c, dbuf *f, de_int32 ch);
+
+int de_encoding_name_to_code(const char *encname);
 
 void de_copy_bits(const de_byte *src, de_int64 srcbitnum,
 	de_byte *dst, de_int64 dstbitnum, de_int64 bitstocopy);

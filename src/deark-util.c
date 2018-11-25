@@ -6,11 +6,6 @@
 
 #define DE_NOT_IN_MODULE
 #include "deark-config.h"
-
-#include <stdlib.h>
-#include <string.h>
-#include <stdarg.h>
-
 #include "deark-private.h"
 
 char *de_get_version_string(char *buf, size_t bufsize)
@@ -278,6 +273,19 @@ void de_dbg_indent_restore(deark *c, int saved_indent_level)
 	c->dbg_indent_amount = saved_indent_level;
 }
 
+static int get_ndigits_for_offset(de_int64 n)
+{
+	int nd;
+
+	if(n<10) nd=1;
+	else if(n<100) nd=2;
+	else if(n<1000) nd=3;
+	else if(n<10000) nd=4;
+	else nd=5;
+	return nd;
+}
+
+// If prefix is NULL, a default will be used.
 // flags:
 //  0x1 = Include an ASCII representation
 void de_dbg_hexdump(deark *c, dbuf *f, de_int64 pos1,
@@ -285,14 +293,19 @@ void de_dbg_hexdump(deark *c, dbuf *f, de_int64 pos1,
 	const char *prefix, unsigned int flags)
 {
 	char linebuf[3*16+32];
-	char asciibuf[32];
+	char asciibuf[64];
+	char offset_fmtstr[32];
 	de_int64 pos = pos1;
 	de_int64 k;
 	de_int64 bytesthisrow;
-	de_int64 asciibufpos;
+	int asciibufpos;
+	int linebufpos;
 	de_byte b;
 	de_int64 len;
+	int ndigits_for_offset;
 	int was_truncated = 0;
+
+	if(!prefix) prefix="data";
 
 	if(nbytes_avail > max_nbytes_to_dump) {
 		len = max_nbytes_to_dump;
@@ -302,20 +315,58 @@ void de_dbg_hexdump(deark *c, dbuf *f, de_int64 pos1,
 		len = nbytes_avail;
 	}
 
-	while(1) {
+	// Construct a format string to use for byte offsets.
+	if(was_truncated) {
+		// If we're truncating, the highest offset we'll print is the number
+		// of data bytes that we'll dump.
+		ndigits_for_offset = get_ndigits_for_offset(len);
+	}
+	else {
+		if(len<1) return;
+
+		// If we're not truncating, the highest offset we'll print is the
+		// highest byte offset that is a multiple of 16.
+		ndigits_for_offset = get_ndigits_for_offset(((len-1)/16)*16);
+	}
+	de_snprintf(offset_fmtstr, sizeof(offset_fmtstr), "%%%dd", ndigits_for_offset);
+
+	while(1) { // For each row...
+		char offset_formatted[32];
+
 		if(pos >= pos1+len) break;
+
 		bytesthisrow = (pos1+len)-pos;
 		if(bytesthisrow>16) bytesthisrow=16;
+
+		linebufpos = 0;
 		asciibufpos = 0;
 		asciibuf[asciibufpos++] = '\"';
 		for(k=0; k<bytesthisrow; k++) {
 			b = dbuf_getbyte(f, pos+k);
-			linebuf[k*3] = de_get_hexchar(b/16);
-			linebuf[k*3+1] = de_get_hexchar(b%16);
-			linebuf[k*3+2] = ' ';
-			linebuf[k*3+3] = '\0';
-			asciibuf[asciibufpos++] = (b>=32 && b<=126) ? (char)b : '.';
+			linebuf[linebufpos++] = de_get_hexchar(b/16);
+			linebuf[linebufpos++] = de_get_hexchar(b%16);
+			linebuf[linebufpos++] = ' ';
+			if(b>=32 && b<=126) {
+				asciibuf[asciibufpos++] = (char)b;
+			}
+			else {
+				asciibuf[asciibufpos++] = '\x01'; // DE_CODEPOINT_HL
+				asciibuf[asciibufpos++] = '.';
+				// We'll often turn off highlighting only to turn it back on
+				// again for the next character. The OFF+ON sequences will be
+				// optimized out later, though, so there's no reason to worry
+				// about that here.
+				asciibuf[asciibufpos++] = '\x02'; // DE_CODEPOINT_UNHL
+			}
 		}
+
+		// Pad and terminate the hex values
+		while(linebufpos<48) {
+			linebuf[linebufpos++] = ' ';
+		}
+		linebuf[linebufpos] = '\0';
+
+		// Terminate or erase the ASCII representation
 		if(flags&0x1) {
 			asciibuf[asciibufpos++] = '\"';
 			asciibuf[asciibufpos++] = '\0';
@@ -323,7 +374,12 @@ void de_dbg_hexdump(deark *c, dbuf *f, de_int64 pos1,
 		else {
 			asciibuf[0] = '\0';
 		}
-		de_dbg(c, "%s:%d: %s%s", prefix, (int)(pos-pos1), linebuf, asciibuf);
+
+		// Careful: With a variable format string, the compiler won't be able to
+		// detect errors.
+		de_snprintf(offset_formatted, sizeof(offset_formatted), offset_fmtstr, (int)(pos-pos1));
+
+		de_dbg(c, "%s:%s: %s%s", prefix, offset_formatted, linebuf, asciibuf);
 		pos += bytesthisrow;
 	}
 	if(was_truncated) {
@@ -359,7 +415,7 @@ char *de_get_colorsample_code(deark *c, de_uint32 clr, char *csamp,
 	// all be 0; since we can't have NUL bytes in this NUL-terminated string.
 	// Also, it's nice if the values are all <= 127, to make them UTF-8
 	// compatible.
-	csamp[0] = '\x03';
+	csamp[0] = '\x03'; // refer to DE_CODEPOINT_RGBSAMPLE
 	csamp[1] = 16 + (r>>4)%16;
 	csamp[2] = 16 + r%16;
 	csamp[3] = 16 + (g>>4)%16;
@@ -506,194 +562,9 @@ void de_free(deark *c, void *m)
 	free(m);
 }
 
-deark *de_create(void)
-{
-	deark *c;
-	c = de_malloc(NULL,sizeof(deark));
-	c->show_messages = 1;
-	c->show_warnings = 1;
-	c->write_bom = 1;
-	c->write_density = 1;
-	c->filenames_from_file = 1;
-	c->preserve_file_times = 1;
-	c->max_output_files = -1;
-	c->max_image_dimension = DE_DEFAULT_MAX_IMAGE_DIMENSION;
-	c->current_time.is_valid = 0;
-	c->can_decode_fltpt = -1; // = unknown
-	c->host_is_le = -1; // = unknown
-	return c;
-}
-
-void de_destroy(deark *c)
-{
-	de_int64 i;
-
-	if(!c) return;
-	for(i=0; i<c->num_ext_options; i++) {
-		de_free(c, c->ext_option[i].name);
-		de_free(c, c->ext_option[i].val);
-	}
-	if(c->zip_data) { de_zip_close_file(c); }
-	if(c->base_output_filename) { de_free(c, c->base_output_filename); }
-	if(c->output_archive_filename) { de_free(c, c->output_archive_filename); }
-	de_free(c, c->module_info);
-	de_free(NULL,c);
-}
-
-void de_set_userdata(deark *c, void *x)
-{
-	c->userdata = x;
-}
-
-void *de_get_userdata(deark *c)
-{
-	return c->userdata;
-}
-
-void de_set_messages_callback(deark *c, de_msgfn_type fn)
-{
-	c->msgfn = fn;
-}
-
-void de_set_special_messages_callback(deark *c, de_specialmsgfn_type fn)
-{
-	c->specialmsgfn = fn;
-}
-
-void de_set_fatalerror_callback(deark *c, de_fatalerrorfn_type fn)
-{
-	c->fatalerrorfn = fn;
-}
-
-void de_set_base_output_filename(deark *c, const char *fn)
-{
-	if(c->base_output_filename) de_free(c, c->base_output_filename);
-	c->base_output_filename = NULL;
-	if(fn) {
-		c->base_output_filename = de_strdup(c, fn);
-	}
-}
-
-void de_set_output_archive_filename(deark *c, const char *fn)
-{
-	if(c->output_archive_filename) de_free(c, c->output_archive_filename);
-	c->output_archive_filename = NULL;
-	if(fn) {
-		c->output_archive_filename = de_strdup(c, fn);
-	}
-}
-
-void de_set_input_style(deark *c, int x)
-{
-	c->input_style = x;
-}
-
-void de_set_input_filename(deark *c, const char *fn)
-{
-	c->input_filename = fn;
-}
-
-void de_set_input_file_slice_start(deark *c, de_int64 n)
-{
-	c->slice_start_req = n;
-}
-
-void de_set_input_file_slice_size(deark *c, de_int64 n)
-{
-	c->slice_size_req = n;
-	c->slice_size_req_valid = 1;
-}
-
-void de_set_output_style(deark *c, int x)
-{
-	c->output_style = x;
-}
-
 int de_identify_none(deark *c)
 {
 	return 0;
-}
-
-void de_set_debug_level(deark *c, int x)
-{
-	c->debug_level = x;
-}
-
-void de_set_dprefix(deark *c, const char *s)
-{
-	c->dprefix = s;
-}
-
-void de_set_extract_policy(deark *c, int x)
-{
-	c->extract_policy = x;
-}
-
-void de_set_extract_level(deark *c, int x)
-{
-	c->extract_level = x;
-}
-
-void de_set_listmode(deark *c, int x)
-{
-	c->list_mode = x;
-}
-
-void de_set_want_modhelp(deark *c, int x)
-{
-	c->modhelp_req = x;
-}
-
-void de_set_first_output_file(deark *c, int x)
-{
-	c->first_output_file = x;
-}
-
-void de_set_max_output_files(deark *c, int n)
-{
-	c->max_output_files = n;
-}
-
-void de_set_max_image_dimension(deark *c, de_int64 n)
-{
-	if(n<0) n=0;
-	else if (n>0x7fffffff) n=0x7fffffff;
-	c->max_image_dimension = n;
-}
-
-void de_set_messages(deark *c, int x)
-{
-	c->show_messages = x;
-}
-
-void de_set_warnings(deark *c, int x)
-{
-	c->show_warnings = x;
-}
-
-void de_set_write_bom(deark *c, int x)
-{
-	c->write_bom = x;
-}
-
-void de_set_write_density(deark *c, int x)
-{
-	c->write_density = x;
-}
-
-void de_set_ascii_html(deark *c, int x)
-{
-	c->ascii_html = x;
-}
-
-void de_set_filenames_from_file(deark *c, int x)
-{
-	c->filenames_from_file = x;
-}
-
-void de_set_preserve_file_times(deark *c, int x)
-{
-	c->preserve_file_times = x;
 }
 
 struct deark_module_info *de_get_module_by_id(deark *c, const char *module_id)
@@ -772,19 +643,6 @@ void de_run_module_by_id_on_slice2(deark *c, const char *id, const char *codes,
 	de_free(c, mparams);
 }
 
-void de_set_ext_option(deark *c, const char *name, const char *val)
-{
-	int n;
-
-	n = c->num_ext_options;
-	if(n>=DE_MAX_EXT_OPTIONS) return;
-	if(!name || !val) return;
-
-	c->ext_option[n].name = de_strdup(c, name);
-	c->ext_option[n].val = de_strdup(c, val);
-	c->num_ext_options++;
-}
-
 const char *de_get_ext_option(deark *c, const char *name)
 {
 	int i;
@@ -795,11 +653,6 @@ const char *de_get_ext_option(deark *c, const char *name)
 		}
 	}
 	return NULL; // Option name not found.
-}
-
-void de_set_input_format(deark *c, const char *fmtname)
-{
-	c->input_format_req = fmtname;
 }
 
 int de_atoi(const char *string)
