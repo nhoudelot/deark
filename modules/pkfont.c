@@ -8,58 +8,56 @@
 #include <deark-private.h>
 DE_DECLARE_MODULE(de_module_pkfont);
 
-struct page_ctx {
-	de_int32 cc;
-	int w, h;
-	de_int64 tfm;
-	de_int64 dm;
-	de_int64 hoff, voff;
-	de_int64 dyn_f;
-	int start_with_black;
-	de_int64 raster_pos;
-	de_int64 raster_len;
+#define PK_XXX1 240
+#define PK_XXX2 241
+#define PK_XXX3 242
+#define PK_XXX4 243
+#define PK_YYY  244
 
-	de_int64 curpos_x, curpos_y;
-	de_int64 pixelcount;
+struct page_ctx {
+	i32 cc;
+	int w, h;
+	i64 tfm;
+	i64 dm;
+	i64 hoff, voff;
+	i64 dyn_f;
+	int start_with_black;
+	i64 raster_pos;
+	i64 raster_len;
+
+	i64 curpos_x, curpos_y;
+	i64 pixelcount;
 };
 
 typedef struct localctx_struct {
 	struct de_bitmap_font *font;
-	de_int64 char_array_alloc;
+	i64 char_array_alloc;
 } lctx;
 
-static void do_preamble(deark *c, lctx *d, de_int64 pos, de_int64 *bytesused)
+static void do_preamble(deark *c, lctx *d, i64 pos, i64 *bytesused)
 {
-	de_int64 comment_len;
+	i64 comment_len;
 
 	de_dbg(c, "preamble at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
 	// (identification byte (should be 89) is at pos+1)
 
-	comment_len = (de_int64)de_getbyte(pos+2);
+	comment_len = (i64)de_getbyte(pos+2);
 	de_dbg(c, "comment length: %d", (int)comment_len);
 
 	*bytesused = 3+comment_len+16;
 	de_dbg_indent(c, -1);
 }
 
-static de_int64 do_get_signed_byte(dbuf *f, de_int64 pos)
-{
-	de_int64 n;
-	n = dbuf_getbyte(f, pos);
-	if(n>=128) n -= 256;
-	return n;
-}
-
-static de_int64 do_getui24be(dbuf *f, de_int64 pos)
+static i64 do_getu24be(dbuf *f, i64 pos)
 {
 	return dbuf_getint_ext(f, pos, 3, 0, 0);
 }
 
-static de_byte get_nybble(dbuf *f, de_int64 abs_byte_pos, de_int64 nybble_offs)
+static u8 get_nybble(dbuf *f, i64 abs_byte_pos, i64 nybble_offs)
 {
-	de_byte b;
+	u8 b;
 	b = dbuf_getbyte(f, abs_byte_pos + nybble_offs/2);
 	if(nybble_offs%2) {
 		return b&0x0f;
@@ -67,13 +65,13 @@ static de_byte get_nybble(dbuf *f, de_int64 abs_byte_pos, de_int64 nybble_offs)
 	return b>>4;
 }
 
-static int get_packed_int(dbuf *f, de_int64 raster_pos, de_int64 *nybble_pos,
-	de_int64 initial_zero_count, de_int64 *result)
+static int get_packed_int(dbuf *f, i64 raster_pos, i64 *nybble_pos,
+	i64 initial_zero_count, i64 *result)
 {
-	de_byte v = 0;
-	de_int64 zero_count = initial_zero_count;
-	de_int64 val;
-	de_int64 i;
+	u8 v = 0;
+	i64 zero_count = initial_zero_count;
+	i64 val;
+	i64 i;
 
 	while(1) {
 		v = get_nybble(f, raster_pos, *nybble_pos);
@@ -92,7 +90,7 @@ static int get_packed_int(dbuf *f, de_int64 raster_pos, de_int64 *nybble_pos,
 		}
 	}
 
-	val = (de_int64)v;
+	val = (i64)v;
 	// There are zero_count+1 data nybbles, but we've already read the first one,
 	// so we need to read zero_count more of them.
 	for(i=0; i<zero_count; i++) {
@@ -106,8 +104,8 @@ static int get_packed_int(dbuf *f, de_int64 raster_pos, de_int64 *nybble_pos,
 
 static void set_bit_at_cur_pos(struct de_bitmap_font_char *ch, struct page_ctx *pg)
 {
-	de_int64 bytepos;
-	de_int64 bitpos;
+	i64 bytepos;
+	i64 bitpos;
 
 	if(pg->curpos_x<0 || pg->curpos_x>=pg->w) return;
 	if(pg->curpos_y<0 || pg->curpos_y>=pg->h) return;
@@ -119,10 +117,10 @@ static void set_bit_at_cur_pos(struct de_bitmap_font_char *ch, struct page_ctx *
 
 // Copy row number pg->curpos_y-1 zero more more times, updating
 // pg->curpos_y as appropriate.
-static void repeat_row_as_needed(struct de_bitmap_font_char *ch, struct page_ctx *pg, de_int64 repeat_count)
+static void repeat_row_as_needed(struct de_bitmap_font_char *ch, struct page_ctx *pg, i64 repeat_count)
 {
-	de_int64 z;
-	de_int64 from_row, to_row;
+	i64 z;
+	i64 from_row, to_row;
 
 	from_row = pg->curpos_y-1;
 	if(from_row<0) return;
@@ -138,24 +136,24 @@ static void repeat_row_as_needed(struct de_bitmap_font_char *ch, struct page_ctx
 
 static void do_read_raster(deark *c, lctx *d, struct page_ctx *pg)
 {
-	de_int64 char_idx;
+	i64 char_idx;
 	struct de_bitmap_font_char *ch;
-	de_byte v, v1;
-	de_int64 nybble_pos;
-	de_int64 expected_num_pixels;
-	de_int64 j;
-	de_int64 k;
+	u8 v, v1;
+	i64 nybble_pos;
+	i64 expected_num_pixels;
+	i64 j;
+	i64 k;
 	int parity;
 	int next_num_is_repeat_count;
-	de_int64 number;
-	de_int64 run_count;
-	de_int64 repeat_count;
+	i64 number;
+	i64 run_count;
+	i64 repeat_count;
 
 	de_dbg(c, "%scompressed character raster at %d, len=%d", pg->dyn_f==14?"un":"",
 		(int)pg->raster_pos, (int)pg->raster_len);
 	de_dbg_indent(c, 1);
 
-	expected_num_pixels = pg->w * pg->h;
+	expected_num_pixels = (i64)pg->w * (i64)pg->h;
 	if(expected_num_pixels<1) {
 		de_dbg(c, "ignoring zero-size character (cc=%d) at %d",
 			(int)pg->cc, (int)pg->raster_pos);
@@ -164,13 +162,13 @@ static void do_read_raster(deark *c, lctx *d, struct page_ctx *pg)
 
 	// Make sure we have room for the new character
 	if(d->font->num_chars+1 > d->char_array_alloc) {
-		de_int64 new_numalloc;
+		i64 new_numalloc;
 		new_numalloc = d->char_array_alloc*2;
 		if(new_numalloc<d->font->num_chars+1) new_numalloc=d->font->num_chars+1;
 		if(new_numalloc<37) new_numalloc=37;
-		d->font->char_array = de_realloc(c, d->font->char_array,
-			d->char_array_alloc * sizeof(struct de_bitmap_font_char),
-			new_numalloc * sizeof(struct de_bitmap_font_char));
+		d->font->char_array = de_reallocarray(c, d->font->char_array,
+			d->char_array_alloc, sizeof(struct de_bitmap_font_char),
+			new_numalloc);
 		d->char_array_alloc = new_numalloc;
 	}
 
@@ -180,6 +178,15 @@ static void do_read_raster(deark *c, lctx *d, struct page_ctx *pg)
 	ch = &d->font->char_array[char_idx];
 	ch->width = pg->w;
 	ch->height = pg->h;
+	if(pg->hoff<0 && (pg->hoff >= -128)) {
+		// Not sure if this is the right way to handle horizontal spacing, but
+		// it looks about right. (At least in a relative way. With some fonts,
+		// the glyphs definitely would have to be rendered closer together than
+		// our presentation would imply.)
+		// Some characters have positive ->hoff values, but we don't have any
+		// way to deal with that.
+		ch->extraspace_l = (i16)-pg->hoff;
+	}
 
 	// The vertical offset will be normalized later, once we know the offsets
 	// of all the characters.
@@ -190,8 +197,8 @@ static void do_read_raster(deark *c, lctx *d, struct page_ctx *pg)
 	ch->codepoint_nonunicode = pg->cc;
 
 	if(pg->dyn_f==14) {
-		de_byte *srcbitmap;
-		de_int64 srcbitmap_size;
+		u8 *srcbitmap;
+		i64 srcbitmap_size;
 
 		srcbitmap_size = (pg->w*pg->h+7)/8;
 		srcbitmap = de_malloc(c, srcbitmap_size);
@@ -231,12 +238,15 @@ static void do_read_raster(deark *c, lctx *d, struct page_ctx *pg)
 
 		if(v==14) {
 			next_num_is_repeat_count = 1;
-			de_dbg2(c, "[%.1f] n=%d; repeat_count=...", initial_abs_nybble_pos,
-				(int)v);
+			if(c->debug_level>=3) {
+				de_dbg3(c, "[%.1f] n=%d; repeat_count=...", initial_abs_nybble_pos, (int)v);
+			}
 			continue;
 		}
 		else if(v==15) { // v==15: repeat count = 1
-			de_dbg2(c, "[%.1f] n=%d; repeat_count=1", initial_abs_nybble_pos, (int)v);
+			if(c->debug_level>=3) {
+				de_dbg3(c, "[%.1f] n=%d; repeat_count=1", initial_abs_nybble_pos, (int)v);
+			}
 			repeat_count = 1;
 			continue;
 		}
@@ -248,15 +258,17 @@ static void do_read_raster(deark *c, lctx *d, struct page_ctx *pg)
 			number = number - 15 + (13-pg->dyn_f)*16 + pg->dyn_f;
 		}
 		else if(v<=pg->dyn_f) { // one-nybble run count
-			number = (de_int64)v;
+			number = (i64)v;
 		}
 		else if(v<=13) { // two-nybble run count
 			v1 = get_nybble(c->infile, pg->raster_pos, nybble_pos++);
-			number = ((de_int64)v-pg->dyn_f-1)*16 + v1 + pg->dyn_f + 1;
+			number = ((i64)v-pg->dyn_f-1)*16 + v1 + pg->dyn_f + 1;
 		}
 
 		if(next_num_is_repeat_count) {
-			de_dbg2(c, "[%.1f] ...%d", initial_abs_nybble_pos, (int)number);
+			if(c->debug_level>=3) {
+				de_dbg3(c, "[%.1f] ...%d", initial_abs_nybble_pos, (int)number);
+			}
 			repeat_count = number;
 			next_num_is_repeat_count = 0;
 			continue;
@@ -268,8 +280,10 @@ static void do_read_raster(deark *c, lctx *d, struct page_ctx *pg)
 
 		run_count = number;
 
-		de_dbg2(c, "[%.1f] n=%d; run_count=%d %s", initial_abs_nybble_pos,
-			(int)v, (int)run_count, parity?"B":"W");
+		if(c->debug_level>=3) {
+			de_dbg3(c, "[%.1f] n=%d; run_count=%d %s", initial_abs_nybble_pos,
+				(int)v, (int)run_count, parity?"B":"W");
+		}
 
 		for(k=0; k<run_count; k++) {
 			pg->pixelcount++;
@@ -303,16 +317,16 @@ done:
 	de_dbg_indent(c, -1);
 }
 
-static int do_char_descr(deark *c, lctx *d, de_int64 pos, de_int64 *bytesused)
+static int do_char_descr(deark *c, lctx *d, i64 pos, i64 *bytesused)
 {
-	de_byte flagbyte;
-	de_byte lsb3;
+	u8 flagbyte;
+	u8 lsb3;
 #define CHAR_PREAMBLE_FORMAT_SHORT      1
 #define CHAR_PREAMBLE_FORMAT_EXT_SHORT  2
 #define CHAR_PREAMBLE_FORMAT_LONG       3
 	int char_preamble_format;
-	de_int64 pl;
-	de_int64 tfm_offs;
+	i64 pl;
+	i64 tfm_offs;
 	struct page_ctx *pg = NULL;
 	int retval = 0;
 
@@ -322,7 +336,7 @@ static int do_char_descr(deark *c, lctx *d, de_int64 pos, de_int64 *bytesused)
 	de_dbg_indent(c, 1);
 
 	flagbyte = de_getbyte(pos);
-	pg->dyn_f = ((de_int64)flagbyte)>>4;
+	pg->dyn_f = ((i64)flagbyte)>>4;
 	de_dbg(c, "dyn_f: %d", (int)pg->dyn_f);
 
 	// Character preamble format: (lsb=...)
@@ -344,27 +358,27 @@ static int do_char_descr(deark *c, lctx *d, de_int64 pos, de_int64 *bytesused)
 	}
 
 	if(char_preamble_format==CHAR_PREAMBLE_FORMAT_SHORT) {
-		pl = (de_int64)de_getbyte(pos+1);
-		pl |= (flagbyte&0x03)<<8;
-		pg->cc = (de_int32)de_getbyte(pos+2);
+		pl = (i64)de_getbyte(pos+1);
+		pl |= ((i64)(flagbyte&0x03))<<8;
+		pg->cc = (i32)de_getbyte(pos+2);
 		tfm_offs = 3;
-		pg->tfm = do_getui24be(c->infile, pos+tfm_offs);
-		pg->dm = (de_int64)de_getbyte(pos+6);
+		pg->tfm = do_getu24be(c->infile, pos+tfm_offs);
+		pg->dm = (i64)de_getbyte(pos+6);
 		pg->w = (int)de_getbyte(pos+7);
 		pg->h = (int)de_getbyte(pos+8);
-		pg->hoff = do_get_signed_byte(c->infile, pos+9);
-		pg->voff = do_get_signed_byte(c->infile, pos+10);
+		pg->hoff = dbuf_geti8(c->infile, pos+9);
+		pg->voff = dbuf_geti8(c->infile, pos+10);
 		pg->raster_pos = pos + 11;
 	}
 	else if(char_preamble_format==CHAR_PREAMBLE_FORMAT_EXT_SHORT) {
-		pl = de_getui16be(pos+1);
-		pl |= (flagbyte&0x03)<<16;
-		pg->cc = (de_int32)de_getbyte(pos+3);
+		pl = de_getu16be(pos+1);
+		pl |= ((i64)(flagbyte&0x03))<<16;
+		pg->cc = (i32)de_getbyte(pos+3);
 		tfm_offs = 4;
-		pg->tfm = do_getui24be(c->infile, pos+tfm_offs);
-		pg->dm = de_getui16be(pos+7);
-		pg->w = (int)de_getui16be(pos+9);
-		pg->h = (int)de_getui16be(pos+11);
+		pg->tfm = do_getu24be(c->infile, pos+tfm_offs);
+		pg->dm = de_getu16be(pos+7);
+		pg->w = (int)de_getu16be(pos+9);
+		pg->h = (int)de_getu16be(pos+11);
 		pg->hoff = de_geti16be(pos+13);
 		pg->voff = de_geti16be(pos+15);
 		pg->raster_pos = pos + 17;
@@ -390,15 +404,15 @@ done:
 	return retval;
 }
 
-static const char *get_flagbyte_name(de_byte flagbyte)
+static const char *get_flagbyte_name(u8 flagbyte)
 {
 	if(flagbyte<240) return "character descriptor";
 	switch(flagbyte) {
-	case 240: return "special xxx1";
-	case 241: return "special xxx2";
-	case 242: return "special xxx3";
-	case 243: return "special xxx4";
-	case 244: return "special yyy";
+	case PK_XXX1: return "special xxx1";
+	case PK_XXX2: return "special xxx2";
+	case PK_XXX3: return "special xxx3";
+	case PK_XXX4: return "special xxx4";
+	case PK_YYY: return "special yyy";
 	case 245: return "postamble";
 	case 246: return "no-op";
 	case 247: return "preamble";
@@ -409,7 +423,7 @@ static const char *get_flagbyte_name(de_byte flagbyte)
 static void scan_and_fixup_font(deark *c, lctx *d)
 {
 	struct de_bitmap_font_char *ch;
-	de_int64 i;
+	i64 i;
 	int min_v_pos = 1000000;
 	int max_v_pos = -1000000;
 
@@ -440,11 +454,11 @@ static void scan_and_fixup_font(deark *c, lctx *d)
 static void de_run_pkfont(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 bytesused;
-	de_int64 i;
-	de_byte flagbyte;
-	de_int64 chars_in_file = 0;
+	i64 pos;
+	i64 bytesused;
+	i64 i;
+	u8 flagbyte;
+	i64 chars_in_file = 0;
 
 	d = de_malloc(c, sizeof(lctx));
 	d->font = de_create_bitmap_font(c);
@@ -458,14 +472,33 @@ static void de_run_pkfont(deark *c, de_module_params *mparams)
 		bytesused = 0;
 
 		if(flagbyte >= 240) {
+			i64 dpos = 0;
+			i64 dlen = 0;
+
 			switch(flagbyte) {
-			case 240:
-				bytesused = 2 + (de_int64)de_getbyte(pos+1);
+			case PK_XXX1:
+				dlen = (i64)de_getbyte(pos+1);
+				dpos = pos + 2;
+				bytesused = 2 + dlen;
 				break;
-			//case 241: // TODO
-			//case 242: // TODO
-			//case 243: // TODO
-			case 244:
+			case PK_XXX2:
+				dlen = de_getu16be(pos+1);
+				dpos = pos + 3;
+				bytesused = 3 + dlen;
+				break;
+			case PK_XXX3:
+				dlen = dbuf_getint_ext(c->infile, pos+1, 3, 0, 0);
+				dpos = pos + 4;
+				bytesused = 4 + dlen;
+				break;
+			case PK_XXX4:
+				dlen = de_getu32be(pos+1);
+				dpos = pos + 5;
+				bytesused = 5 + dlen;
+				break;
+			case PK_YYY:
+				dlen = 4;
+				dpos = pos + 1;
 				bytesused = 5;
 				break;
 			case 245: // postamble
@@ -479,6 +512,12 @@ static void de_run_pkfont(deark *c, de_module_params *mparams)
 			default:
 				de_err(c, "Unsupported command: %d at %d", (int)flagbyte, (int)pos);
 				goto done;
+			}
+
+			if(dlen>0 && flagbyte>=240 && flagbyte<=244) {
+				de_dbg_indent(c, 1);
+				de_dbg_hexdump(c, c->infile, dpos, dlen, 256, NULL, 0x1);
+				de_dbg_indent(c, -1);
 			}
 		}
 		else {

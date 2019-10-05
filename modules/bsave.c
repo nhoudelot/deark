@@ -11,21 +11,21 @@ DE_DECLARE_MODULE(de_module_bsave);
 #define BSAVE_HDRSIZE 7
 
 typedef struct localctx_struct {
-	de_int64 base_addr, offset_from_base, data_size;
+	i64 base_addr, offset_from_base, data_size;
 
 	int has_pcpaint_sig;
-	de_byte pcpaint_pal_num;
-	de_byte pcpaint_border_col;
+	u8 pcpaint_pal_num;
+	u8 pcpaint_border_col;
 
 	int interlaced;
 	int has_dimension_fields;
 
 	int pal_valid;
-	de_uint32 pal[256];
+	u32 pal[256];
 } lctx;
 
 // Return a width that might be overridden by user request.
-static de_int64 get_width(deark *c, lctx *d, de_int64 default_width)
+static i64 get_width(deark *c, lctx *d, i64 default_width)
 {
 	const char *s;
 	s = de_get_ext_option(c, "bsave:width");
@@ -33,7 +33,7 @@ static de_int64 get_width(deark *c, lctx *d, de_int64 default_width)
 	return default_width;
 }
 
-static de_int64 get_height(deark *c, lctx *d, de_int64 default_height)
+static i64 get_height(deark *c, lctx *d, i64 default_height)
 {
 	const char *s;
 	s = de_get_ext_option(c, "bsave:height");
@@ -46,12 +46,12 @@ static de_int64 get_height(deark *c, lctx *d, de_int64 default_height)
 static int do_cga16(deark *c, lctx *d)
 {
 	de_bitmap *img = NULL;
-	de_int64 max_possible_height;
-	de_int64 i, j;
+	i64 max_possible_height;
+	i64 i, j;
 	int retval = 0;
-	de_byte charcode, colorcode;
-	de_int64 src_rowspan;
-	de_byte color0, color1;
+	u8 charcode, colorcode;
+	i64 src_rowspan;
+	u8 color0, color1;
 	int charwarning = 0;
 
 	de_declare_fmt(c, "BSAVE-PC 16-color CGA pseudo-graphics");
@@ -114,12 +114,12 @@ done:
 static int do_4color(deark *c, lctx *d)
 {
 	// TODO: This may not be the right palette.
-	static const de_uint32 default_palette[4] = { 0x000000, 0x55ffff, 0xff55ff, 0xffffff };
-	de_uint32 palette[4];
+	static const u32 default_palette[4] = { 0x000000, 0x55ffff, 0xff55ff, 0xffffff };
+	u32 palette[4];
 	int palent;
-	de_int64 i,j;
-	de_int64 pos;
-	de_int64 src_rowspan;
+	i64 i,j;
+	i64 pos;
+	i64 src_rowspan;
 	de_bitmap *img = NULL;
 
 	if(d->has_dimension_fields) {
@@ -142,8 +142,8 @@ static int do_4color(deark *c, lctx *d)
 
 	if(d->has_dimension_fields) {
 		// 11-byte header that includes width & height
-		img->width = (de_getui16le(pos) + 1)/2; // width = number of bits??
-		img->height = de_getui16le(pos+2);
+		img->width = (de_getu16le(pos) + 1)/2; // width = number of bits??
+		img->height = de_getu16le(pos+2);
 		pos+=4;
 	}
 	else {
@@ -191,9 +191,9 @@ static int do_4color(deark *c, lctx *d)
 // "wh2": http://cd.textfiles.com/bthevhell/200/112/
 static int do_2color(deark *c, lctx *d)
 {
-	de_int64 j;
-	de_int64 src_rowspan;
-	de_int64 pos;
+	i64 j;
+	i64 src_rowspan;
+	i64 pos;
 	de_bitmap *img = NULL;
 
 	img = de_bitmap_create_noinit(c);
@@ -215,8 +215,8 @@ static int do_2color(deark *c, lctx *d)
 
 	if(d->has_dimension_fields) {
 		// 11-byte header that includes width & height
-		img->width = de_getui16le(pos);
-		img->height = de_getui16le(pos+2);
+		img->width = de_getu16le(pos);
+		img->height = de_getu16le(pos+2);
 		pos+=4;
 	}
 	else {
@@ -246,9 +246,9 @@ static int do_2color(deark *c, lctx *d)
 // http://cd.textfiles.com/advheaven2/PUZZLES/DRCODE12/
 static int do_256color(deark *c, lctx *d)
 {
-	de_int64 i, j;
-	de_byte palent;
-	de_uint32 clr;
+	i64 i, j;
+	u8 palent;
+	u32 clr;
 	de_bitmap *img = NULL;
 
 	de_declare_fmt(c, "BSAVE-PC 256-color");
@@ -282,13 +282,13 @@ static int do_256color(deark *c, lctx *d)
 // http://cd.textfiles.com/advheaven2/SOLITAIR/SP107/
 static int do_wh16(deark *c, lctx *d)
 {
-	de_int64 i, j;
+	i64 i, j;
 	de_bitmap *img = NULL;
-	de_int64 src_rowspan1;
-	de_int64 src_rowspan;
-	de_int64 pos;
-	de_byte palent;
-	de_byte b0, b1, b2, b3;
+	i64 src_rowspan1;
+	i64 src_rowspan;
+	i64 pos;
+	u8 palent;
+	u8 b0, b1, b2, b3;
 
 	de_declare_fmt(c, "BSAVE-PC 16-color, interlaced, 11-byte header");
 
@@ -296,8 +296,8 @@ static int do_wh16(deark *c, lctx *d)
 	img = de_bitmap_create_noinit(c);
 	img->bytes_per_pixel = 3;
 
-	img->width = de_getui16le(pos);
-	img->height = de_getui16le(pos+2);
+	img->width = de_getu16le(pos);
+	img->height = de_getu16le(pos+2);
 	pos+=4;
 
 	de_dbg_dimensions(c, img->width, img->height);
@@ -326,13 +326,13 @@ static int do_wh16(deark *c, lctx *d)
 // A strange 2-bits/2-pixel color format.
 static int do_b265(deark *c, lctx *d)
 {
-	static const de_uint32 palette1[4] = { 0xffffff, 0x55ffff, 0x000000, 0xffffff };
-	static const de_uint32 palette2[4] = { 0xffffff, 0x000000, 0x000000, 0x000000 };
+	static const u32 palette1[4] = { 0xffffff, 0x55ffff, 0x000000, 0xffffff };
+	static const u32 palette2[4] = { 0xffffff, 0x000000, 0x000000, 0x000000 };
 	int palent;
-	de_int64 i,j;
-	de_int64 bits_per_scanline;
+	i64 i,j;
+	i64 bits_per_scanline;
 	de_bitmap *img = NULL;
-	de_int64 fakewidth;
+	i64 fakewidth;
 	int retval = 0;
 
 	de_declare_fmt(c, "BSAVE-PC special");
@@ -362,21 +362,21 @@ static int do_b265(deark *c, lctx *d)
 	return retval;
 }
 
-static void do_char_1screen(deark *c, lctx *d, struct de_char_screen *screen, de_int64 pgnum,
-	de_int64 pg_offset_in_data, de_int64 width, de_int64 height)
+static void do_char_1screen(deark *c, lctx *d, struct de_char_screen *screen, i64 pgnum,
+	i64 pg_offset_in_data, i64 width, i64 height)
 {
-	de_int64 i, j;
+	i64 i, j;
 	unsigned int ch;
-	de_byte fgcol, bgcol;
-	de_int64 offset;
-	de_byte b0, b1;
+	u8 fgcol, bgcol;
+	i64 offset;
+	u8 b0, b1;
 
 	screen->width = width;
 	screen->height = height;
-	screen->cell_rows = de_malloc(c, height * sizeof(struct de_char_cell*));
+	screen->cell_rows = de_mallocarray(c, height, sizeof(struct de_char_cell*));
 
 	for(j=0; j<height; j++) {
-		screen->cell_rows[j] = de_malloc(c, width * sizeof(struct de_char_cell));
+		screen->cell_rows[j] = de_mallocarray(c, width, sizeof(struct de_char_cell));
 
 		for(i=0; i<width; i++) {
 			// 96 padding bytes per page?
@@ -391,10 +391,10 @@ static void do_char_1screen(deark *c, lctx *d, struct de_char_screen *screen, de
 			fgcol = (b1 & 0x0f);
 			bgcol = (b1 & 0xf0) >> 4;
 
-			screen->cell_rows[j][i].fgcol = (de_uint32)fgcol;
-			screen->cell_rows[j][i].bgcol = (de_uint32)bgcol;
-			screen->cell_rows[j][i].codepoint = (de_int32)ch;
-			screen->cell_rows[j][i].codepoint_unicode = de_char_to_unicode(c, (de_int32)ch, DE_ENCODING_CP437_G);
+			screen->cell_rows[j][i].fgcol = (u32)fgcol;
+			screen->cell_rows[j][i].bgcol = (u32)bgcol;
+			screen->cell_rows[j][i].codepoint = (i32)ch;
+			screen->cell_rows[j][i].codepoint_unicode = de_char_to_unicode(c, (i32)ch, DE_ENCODING_CP437_G);
 		}
 	}
 }
@@ -403,14 +403,14 @@ static int do_char(deark *c, lctx *d)
 {
 	struct de_char_context *charctx = NULL;
 	int retval = 0;
-	de_int64 k;
-	de_int64 numpages;
-	de_int64 pgnum;
-	de_int64 width, height;
-	de_int64 height_for_this_page;
-	de_int64 bytes_per_page;
-	de_int64 bytes_for_this_page;
-	de_int64 pg_offset_in_data;
+	i64 k;
+	i64 numpages;
+	i64 pgnum;
+	i64 width, height;
+	i64 height_for_this_page;
+	i64 bytes_per_page;
+	i64 bytes_for_this_page;
+	i64 pg_offset_in_data;
 
 	de_declare_fmt(c, "BSAVE-PC character graphics");
 
@@ -441,7 +441,7 @@ static int do_char(deark *c, lctx *d)
 
 	charctx = de_malloc(c, sizeof(struct de_char_context));
 	charctx->nscreens = numpages;
-	charctx->screens = de_malloc(c, numpages*sizeof(struct de_char_screen*));
+	charctx->screens = de_mallocarray(c, numpages, sizeof(struct de_char_screen*));
 
 	for(k=0; k<16; k++) {
 		charctx->pal[k] = de_palette_pc16((int)k);
@@ -476,8 +476,8 @@ static int do_read_palette_file(deark *c, lctx *d, const char *palfn)
 {
 	dbuf *f = NULL;
 	int retval = 0;
-	de_int64 i;
-	de_byte buf[3];
+	i64 i;
+	u8 buf[3];
 
 	de_dbg(c, "reading palette file %s", palfn);
 
@@ -508,14 +508,14 @@ static void de_run_bsave(deark *c, de_module_params *mparams)
 	const char *bsavefmt;
 	const char *s;
 	lctx *d;
-	de_byte sig[14];
+	u8 sig[14];
 	decoder_fn_type decoder_fn = NULL;
 
 	d = de_malloc(c, sizeof(lctx));
 
-	d->base_addr = de_getui16le(1);
-	d->offset_from_base = de_getui16le(3);
-	d->data_size = de_getui16le(5);
+	d->base_addr = de_getu16le(1);
+	d->offset_from_base = de_getu16le(3);
+	d->data_size = de_getu16le(5);
 
 	de_dbg(c, "base_addr: 0x%04x", (int)d->base_addr);
 	de_dbg(c, "offset_from_base: 0x%04x", (int)d->offset_from_base);
@@ -609,6 +609,7 @@ done:
 static int de_identify_bsave(deark *c)
 {
 	// Note - Make sure XZ has higher confidence.
+	// Note - Make sure BLD has higher confidence.
 	if(de_getbyte(0)==0xfd) return 10;
 	return 0;
 }

@@ -24,29 +24,29 @@ DE_DECLARE_MODULE(de_module_palmrc);
 #define CODE_vIMG 0x76494d47U
 
 struct rec_data_struct {
-	de_uint32 offset;
+	u32 offset;
 };
 
 struct rec_list_struct {
-	de_int64 num_recs;
+	i64 num_recs;
 	// The rec_data items are in the order they appear in the file
 	struct rec_data_struct *rec_data;
 	// A list of all the rec_data indices, in the order we should read them
 	size_t *order_to_read;
-	de_int64 icon_name_count;
+	i64 icon_name_count;
 };
 
 struct rsrc_type_info_struct {
-	de_uint32 id;
-	de_uint32 flags; // 1=standard Palm resource
+	u32 id;
+	u32 flags; // 1=standard Palm resource
 	const char *descr;
 	void* /* rsrc_decoder_fn */ decoder_fn;
 };
 
 struct img_gen_info {
-	de_int64 w, h;
-	de_int64 bitsperpixel;
-	de_int64 rowbytes;
+	i64 w, h;
+	i64 bitsperpixel;
+	i64 rowbytes;
 	de_finfo *fi;
 	unsigned int createflags;
 };
@@ -59,27 +59,41 @@ typedef struct localctx_struct {
 #define SUBFMT_PQA  1
 #define SUBFMT_IMAGEVIEWER 2
 	int file_subfmt;
+
+#define TIMESTAMPFMT_UNKNOWN 0
+#define TIMESTAMPFMT_MACBE   1
+#define TIMESTAMPFMT_UNIXBE  2
+#define TIMESTAMPFMT_MACLE   3
+	int timestampfmt;
+
 	int has_nonzero_ids;
 	const char *fmt_shortname;
-	de_int64 rec_size; // bytes per record
+	i64 rec_size; // bytes per record
 	struct de_fourcc dtype4cc;
 	struct de_fourcc creator4cc;
-	de_int64 appinfo_offs;
-	de_int64 sortinfo_offs;
+	struct de_timestamp mod_time;
+	i64 appinfo_offs;
+	i64 sortinfo_offs;
 	struct rec_list_struct rec_list;
 	de_ucstring *icon_name;
 } lctx;
 
-static void handle_palm_timestamp(deark *c, lctx *d, de_int64 pos, const char *name)
+static void handle_palm_timestamp(deark *c, lctx *d, i64 pos, const char *name,
+	struct de_timestamp *returned_ts)
 {
 	struct de_timestamp ts;
 	char timestamp_buf[64];
-	de_int64 ts_int;
+	i64 ts_int;
 
-	ts_int = de_getui32be(pos);
+	de_zeromem(&ts, sizeof(struct de_timestamp));
+	if(returned_ts) {
+		de_zeromem(returned_ts, sizeof(struct de_timestamp));
+	}
+
+	ts_int = de_getu32be(pos);
 	if(ts_int==0) {
 		de_dbg(c, "%s: 0 (not set)", name);
-		return;
+		goto done;
 	}
 
 	de_dbg(c, "%s: ...", name);
@@ -88,31 +102,42 @@ static void handle_palm_timestamp(deark *c, lctx *d, de_int64 pos, const char *n
 	// I've seen three different ways to interpret this 32-bit timestamp, and
 	// I don't know how to guess the correct one.
 
-	de_mac_time_to_timestamp(ts_int, &ts);
-	de_timestamp_to_string(&ts, timestamp_buf, sizeof(timestamp_buf), 0);
-	de_dbg(c, "... if Mac-BE: %"INT64_FMT" (%s)", ts_int, timestamp_buf);
-
-	ts_int = de_geti32be(pos);
-	if(ts_int>0) { // Assume dates before 1970 are wrong
-		de_unix_time_to_timestamp(ts_int, &ts);
-		de_timestamp_to_string(&ts, timestamp_buf, sizeof(timestamp_buf), 0x1);
-		de_dbg(c, "... if Unix-BE: %"INT64_FMT" (%s)", ts_int, timestamp_buf);
-	}
-
-	ts_int = de_getui32le(pos);
-	if(ts_int>2082844800) {
+	if(d->timestampfmt==TIMESTAMPFMT_MACBE || d->timestampfmt==TIMESTAMPFMT_UNKNOWN) {
 		de_mac_time_to_timestamp(ts_int, &ts);
 		de_timestamp_to_string(&ts, timestamp_buf, sizeof(timestamp_buf), 0);
-		de_dbg(c, "... if Mac-LE: %"INT64_FMT" (%s)", ts_int, timestamp_buf);
+		de_dbg(c, "... if Mac-BE: %"I64_FMT" (%s)", ts_int, timestamp_buf);
+	}
+
+	ts_int = de_geti32be(pos);
+	if(d->timestampfmt==TIMESTAMPFMT_UNIXBE ||
+		(d->timestampfmt==TIMESTAMPFMT_UNKNOWN && ts_int>0)) // Assume dates before 1970 are wrong
+	{
+		de_unix_time_to_timestamp(ts_int, &ts, 0x1);
+		de_timestamp_to_string(&ts, timestamp_buf, sizeof(timestamp_buf), 0);
+		de_dbg(c, "... if Unix-BE: %"I64_FMT" (%s)", ts_int, timestamp_buf);
+	}
+
+	ts_int = de_getu32le(pos);
+	if(d->timestampfmt==TIMESTAMPFMT_MACLE ||
+		(d->timestampfmt==TIMESTAMPFMT_UNKNOWN && ts_int>2082844800))
+	{
+		de_mac_time_to_timestamp(ts_int, &ts);
+		de_timestamp_to_string(&ts, timestamp_buf, sizeof(timestamp_buf), 0);
+		de_dbg(c, "... if Mac-LE: %"I64_FMT" (%s)", ts_int, timestamp_buf);
 	}
 
 	de_dbg_indent(c, -1);
+
+done:
+	if(returned_ts && d->timestampfmt!=TIMESTAMPFMT_UNKNOWN) {
+		*returned_ts = ts;
+	}
 }
 
-static void get_db_attr_descr(de_ucstring *s, de_uint32 attribs)
+static void get_db_attr_descr(de_ucstring *s, u32 attribs)
 {
 	size_t i;
-	struct { de_uint32 a; const char *n; } flags_arr[] = {
+	struct { u32 a; const char *n; } flags_arr[] = {
 		{0x0001, "dmHdrAttrResDB"},
 		{0x0002, "dmHdrAttrReadOnly"},
 		{0x0004, "dmHdrAttrAppInfoDirty"},
@@ -137,12 +162,12 @@ static void get_db_attr_descr(de_ucstring *s, de_uint32 attribs)
 
 static int do_read_pdb_prc_header(deark *c, lctx *d)
 {
-	de_int64 pos1 = 0;
+	i64 pos1 = 0;
 	de_ucstring *dname = NULL;
 	de_ucstring *attr_descr = NULL;
-	de_uint32 attribs;
-	de_uint32 version;
-	de_int64 x;
+	u32 attribs;
+	u32 version;
+	i64 x;
 	int retval = 0;
 
 	de_dbg(c, "header at %d", (int)pos1);
@@ -152,24 +177,24 @@ static int do_read_pdb_prc_header(deark *c, lctx *d)
 	dbuf_read_to_ucstring(c->infile, pos1, 32, dname, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_PALM);
 	de_dbg(c, "name: \"%s\"", ucstring_getpsz(dname));
 
-	attribs = (de_uint32)de_getui16be(pos1+32);
+	attribs = (u32)de_getu16be(pos1+32);
 	attr_descr = ucstring_create(c);
 	get_db_attr_descr(attr_descr, attribs);
 	de_dbg(c, "attributes: 0x%04x (%s)", (unsigned int)attribs,
 		ucstring_getpsz(attr_descr));
 
-	version = (de_uint32)de_getui16be(pos1+34);
+	version = (u32)de_getu16be(pos1+34);
 	de_dbg(c, "version: 0x%04x", (unsigned int)version);
 
-	handle_palm_timestamp(c, d, pos1+36, "create date");
-	handle_palm_timestamp(c, d, pos1+40, "mod date");
-	handle_palm_timestamp(c, d, pos1+44, "backup date");
+	handle_palm_timestamp(c, d, pos1+36, "create date", NULL);
+	handle_palm_timestamp(c, d, pos1+40, "mod date", &d->mod_time);
+	handle_palm_timestamp(c, d, pos1+44, "backup date", NULL);
 
-	x = de_getui32be(pos1+48);
+	x = de_getu32be(pos1+48);
 	de_dbg(c, "mod number: %d", (int)x);
-	d->appinfo_offs = de_getui32be(pos1+52);
+	d->appinfo_offs = de_getu32be(pos1+52);
 	de_dbg(c, "app info pos: %d", (int)d->appinfo_offs);
-	d->sortinfo_offs = de_getui32be(pos1+56);
+	d->sortinfo_offs = de_getu32be(pos1+56);
 	de_dbg(c, "sort info pos: %d", (int)d->sortinfo_offs);
 
 	dbuf_read_fourcc(c->infile, pos1+60, &d->dtype4cc, 4, 0x0);
@@ -199,7 +224,7 @@ static int do_read_pdb_prc_header(deark *c, lctx *d)
 		goto done;
 	}
 
-	x = de_getui32be(68);
+	x = de_getu32be(68);
 	de_dbg(c, "uniqueIDseed: %u", (unsigned int)x);
 
 	retval = 1;
@@ -210,20 +235,20 @@ done:
 	return retval;
 }
 
-static de_int64 calc_rec_len(deark *c, lctx *d, de_int64 rec_idx)
+static i64 calc_rec_len(deark *c, lctx *d, i64 rec_idx)
 {
-	de_int64 len;
+	i64 len;
 	if(rec_idx+1 < d->rec_list.num_recs) {
-		len = (de_int64)(d->rec_list.rec_data[rec_idx+1].offset - d->rec_list.rec_data[rec_idx].offset);
+		len = (i64)(d->rec_list.rec_data[rec_idx+1].offset - d->rec_list.rec_data[rec_idx].offset);
 	}
 	else {
-		len = c->infile->len - (de_int64)d->rec_list.rec_data[rec_idx].offset;
+		len = c->infile->len - (i64)d->rec_list.rec_data[rec_idx].offset;
 	}
 	return len;
 }
 
 // ext_ucstring will be used if ext_sz is NULL
-static void extract_item(deark *c, lctx *d, de_int64 data_offs, de_int64 data_len,
+static void extract_item(deark *c, lctx *d, i64 data_offs, i64 data_len,
 	const char *ext_sz, de_ucstring *ext_ucstring,
 	unsigned int createflags, int always_extract)
 {
@@ -234,10 +259,10 @@ static void extract_item(deark *c, lctx *d, de_int64 data_offs, de_int64 data_le
 	if(data_offs+data_len > c->infile->len) goto done;
 	fi = de_finfo_create(c);
 	if(ext_sz) {
-		de_finfo_set_name_from_sz(c, fi, ext_sz, DE_ENCODING_ASCII);
+		de_finfo_set_name_from_sz(c, fi, ext_sz, 0, DE_ENCODING_ASCII);
 	}
 	else if(ext_ucstring) {
-		de_finfo_set_name_from_ucstring(c, fi, ext_ucstring);
+		de_finfo_set_name_from_ucstring(c, fi, ext_ucstring, 0);
 	}
 	dbuf_create_file_from_slice(c->infile, data_offs, data_len, NULL, fi, createflags);
 done:
@@ -245,21 +270,21 @@ done:
 }
 
 static int do_decompress_imgview_image(deark *c, lctx *d, dbuf *inf,
-	de_int64 pos1, de_int64 len, dbuf *unc_pixels)
+	i64 pos1, i64 len, dbuf *unc_pixels)
 {
-	de_int64 pos = pos1;
-	de_byte b1, b2;
-	de_int64 count;
+	i64 pos = pos1;
+	u8 b1, b2;
+	i64 count;
 
 	while(pos < pos1+len) {
 		b1 = dbuf_getbyte(inf, pos++);
 		if(b1>128) {
-			count = (de_int64)b1-127;
+			count = (i64)b1-127;
 			b2 = dbuf_getbyte(inf, pos++);
 			dbuf_write_run(unc_pixels, b2, count);
 		}
 		else {
-			count = (de_int64)b1+1;
+			count = (i64)b1+1;
 			dbuf_copy(inf, pos, count, unc_pixels);
 			pos += count;
 		}
@@ -270,9 +295,9 @@ static int do_decompress_imgview_image(deark *c, lctx *d, dbuf *inf,
 static void do_generate_unc_image(deark *c, lctx *d, dbuf *unc_pixels,
 	struct img_gen_info *igi)
 {
-	de_int64 i, j;
-	de_byte b;
-	de_byte b_adj;
+	i64 i, j;
+	u8 b;
+	u8 b_adj;
 	de_bitmap *img = NULL;
 
 	if(igi->bitsperpixel==1) {
@@ -299,11 +324,11 @@ done:
 
 // A wrapper that decompresses the image if necessary, then calls do_generate_unc_image().
 static void do_generate_image(deark *c, lctx *d,
-	dbuf *inf, de_int64 pos, de_int64 len, unsigned int cmpr_meth,
+	dbuf *inf, i64 pos, i64 len, unsigned int cmpr_meth,
 	struct img_gen_info *igi)
 {
 	dbuf *unc_pixels = NULL;
-	de_int64 expected_num_uncmpr_image_bytes;
+	i64 expected_num_uncmpr_image_bytes;
 
 	expected_num_uncmpr_image_bytes = igi->rowbytes*igi->h;
 
@@ -327,14 +352,14 @@ static void do_generate_image(deark *c, lctx *d,
 	dbuf_close(unc_pixels);
 }
 
-static void do_imgview_image(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void do_imgview_image(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_byte imgver;
-	de_byte imgtype;
+	u8 imgver;
+	u8 imgtype;
 	unsigned int cmpr_meth;
-	de_int64 x0, x1;
-	de_int64 pos = pos1;
-	de_int64 num_raw_image_bytes;
+	i64 x0, x1;
+	i64 pos = pos1;
+	i64 num_raw_image_bytes;
 	de_ucstring *iname = NULL;
 	struct img_gen_info *igi = NULL;
 
@@ -344,11 +369,13 @@ static void do_imgview_image(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 	de_dbg(c, "image record at %d", (int)pos1);
 	de_dbg_indent(c, 1);
 
+	igi->fi->image_mod_time = d->mod_time;
+
 	iname = ucstring_create(c);
 	dbuf_read_to_ucstring(c->infile, pos, 32, iname, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_PALM);
 	de_dbg(c, "name: \"%s\"", ucstring_getpsz(iname));
 	if(iname->len>0 && c->filenames_from_file) {
-		de_finfo_set_name_from_ucstring(c, igi->fi, iname);
+		de_finfo_set_name_from_ucstring(c, igi->fi, iname, 0);
 	}
 	pos += 32;
 
@@ -374,34 +401,34 @@ static void do_imgview_image(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 	de_dbg(c, "bits/pixel: %d", (int)igi->bitsperpixel);
 	de_dbg_indent(c, -1);
 
-	x0 = de_getui32be(pos);
+	x0 = de_getu32be(pos);
 	de_dbg(c, "reserved1: 0x%08x", (unsigned int)x0);
 	pos += 4;
 
-	x0 = de_getui32be(pos);
+	x0 = de_getu32be(pos);
 	de_dbg(c, "note: 0x%08x", (unsigned int)x0);
 	pos += 4;
 
-	x0 = de_getui16be(pos);
+	x0 = de_getu16be(pos);
 	pos += 2;
-	x1 = de_getui16be(pos);
+	x1 = de_getu16be(pos);
 	pos += 2;
 	de_dbg(c, "last: (%d,%d)", (int)x0, (int)x1);
 
-	x0 = de_getui32be(pos);
+	x0 = de_getu32be(pos);
 	de_dbg(c, "reserved2: 0x%08x", (unsigned int)x0);
 	pos += 4;
 
 	// TODO: Is the anchor signed or unsigned?
-	x0 = de_getui16be(pos);
+	x0 = de_getu16be(pos);
 	pos += 2;
-	x1 = de_getui16be(pos);
+	x1 = de_getu16be(pos);
 	pos += 2;
 	de_dbg(c, "anchor: (%d,%d)", (int)x0, (int)x1);
 
-	igi->w = de_getui16be(pos);
+	igi->w = de_getu16be(pos);
 	pos += 2;
-	igi->h = de_getui16be(pos);
+	igi->h = de_getu16be(pos);
 	pos += 2;
 	de_dbg_dimensions(c, igi->w, igi->h);
 	if(!de_good_image_dimensions(c, igi->w, igi->h)) goto done;
@@ -424,7 +451,7 @@ done:
 	}
 }
 
-static void do_imgview_text(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void do_imgview_text(deark *c, lctx *d, i64 pos, i64 len)
 {
 	de_ucstring *s = NULL;
 
@@ -446,7 +473,7 @@ static void do_imgview_text(deark *c, lctx *d, de_int64 pos, de_int64 len)
 	ucstring_destroy(s);
 }
 
-static void get_rec_attr_descr(de_ucstring *s, de_byte attribs)
+static void get_rec_attr_descr(de_ucstring *s, u8 attribs)
 {
 	if(attribs&0x10) ucstring_append_flags_item(s, "mRecAttrSecret");
 	if(attribs&0x20) ucstring_append_flags_item(s, "dmRecAttrBusy");
@@ -456,12 +483,12 @@ static void get_rec_attr_descr(de_ucstring *s, de_byte attribs)
 }
 
 // For PDB or PQA format
-static int do_read_pdb_record(deark *c, lctx *d, de_int64 rec_idx, de_int64 pos1)
+static int do_read_pdb_record(deark *c, lctx *d, i64 rec_idx, i64 pos1)
 {
-	de_int64 data_offs;
-	de_byte attribs;
-	de_uint32 id;
-	de_int64 data_len;
+	i64 data_offs;
+	u8 attribs;
+	u32 id;
+	i64 data_len;
 	de_ucstring *attr_descr = NULL;
 	char extfull[80];
 
@@ -520,7 +547,7 @@ static int do_read_pdb_record(deark *c, lctx *d, de_int64 rec_idx, de_int64 pos1
 }
 
 static void do_string_rsrc(deark *c, lctx *d,
-	de_int64 pos, de_int64 len,
+	i64 pos, i64 len,
 	const struct rsrc_type_info_struct *rti, unsigned int flags)
 {
 	de_ucstring *s = NULL;
@@ -585,7 +612,7 @@ static const struct rsrc_type_info_struct rsrc_type_info_arr[] = {
 	{ CODE_tver, 0x1, "app version string", NULL }
 };
 
-static const struct rsrc_type_info_struct *get_rsrc_type_info(de_uint32 id)
+static const struct rsrc_type_info_struct *get_rsrc_type_info(u32 id)
 {
 	size_t i;
 
@@ -597,12 +624,12 @@ static const struct rsrc_type_info_struct *get_rsrc_type_info(de_uint32 id)
 	return NULL;
 }
 
-static int do_read_prc_record(deark *c, lctx *d, de_int64 rec_idx, de_int64 pos1)
+static int do_read_prc_record(deark *c, lctx *d, i64 rec_idx, i64 pos1)
 {
-	de_uint32 id;
+	u32 id;
 	struct de_fourcc rsrc_type_4cc;
-	de_int64 data_offs;
-	de_int64 data_len;
+	i64 data_offs;
+	i64 data_len;
 	int always_extract = 0;
 	de_ucstring *ext_ucstring = NULL;
 	int ext_set = 0;
@@ -622,10 +649,10 @@ static int do_read_prc_record(deark *c, lctx *d, de_int64 rec_idx, de_int64 pos1
 	// The "filename" always starts with the fourcc.
 	ucstring_append_sz(ext_ucstring, rsrc_type_4cc.id_sanitized_sz, DE_ENCODING_ASCII);
 
-	id = (de_uint32)de_getui16be(pos1+4);
+	id = (u32)de_getu16be(pos1+4);
 	de_dbg(c, "id: %d", (int)id);
 
-	data_offs = (de_int64)d->rec_list.rec_data[rec_idx].offset;
+	data_offs = (i64)d->rec_list.rec_data[rec_idx].offset;
 	de_dbg(c, "data pos: %d", (int)data_offs);
 	data_len = calc_rec_len(c, d, rec_idx);
 	de_dbg(c, "calculated len: %d", (int)data_len);
@@ -669,9 +696,9 @@ static int do_read_prc_record(deark *c, lctx *d, de_int64 rec_idx, de_int64 pos1
 
 // Put idx at the beginning of the order_to_read array, shifting everything else
 // over. Assumes items [0] through [idx-1] are valid.
-static void rec_list_insert_at_start(struct rec_list_struct *rl, de_int64 idx)
+static void rec_list_insert_at_start(struct rec_list_struct *rl, i64 idx)
 {
-	de_int64 i;
+	i64 i;
 	// Move [idx-1] to [idx],
 	//      [idx-2] to [idx-1], ...
 	for(i=idx; i>0; i--) {
@@ -683,32 +710,32 @@ static void rec_list_insert_at_start(struct rec_list_struct *rl, de_int64 idx)
 
 // Allocates and populates the d->rec_data array.
 // Tests for sanity, and returns 0 if there is a problem.
-static int do_prescan_records(deark *c, lctx *d, de_int64 pos1)
+static int do_prescan_records(deark *c, lctx *d, i64 pos1)
 {
-	de_int64 i;
+	i64 i;
 
 	if(d->rec_list.num_recs<1) return 1;
 	// num_recs is untrusted, but it is a 16-bit int that can be at most 65535.
-	d->rec_list.rec_data = de_malloc(c, sizeof(struct rec_data_struct)*d->rec_list.num_recs);
-	d->rec_list.order_to_read = de_malloc(c, sizeof(size_t)*d->rec_list.num_recs);
+	d->rec_list.rec_data = de_mallocarray(c, d->rec_list.num_recs, sizeof(struct rec_data_struct));
+	d->rec_list.order_to_read = de_mallocarray(c, d->rec_list.num_recs, sizeof(size_t));
 	for(i=0; i<d->rec_list.num_recs; i++) {
 		// By default, read the records in the order they appear in the file.
 		d->rec_list.order_to_read[i] = (size_t)i;
 
 		if(d->file_fmt==FMT_PRC) {
-			de_uint32 rsrc_type;
-			rsrc_type = (de_uint32)de_getui32be(pos1 + d->rec_size*i);
+			u32 rsrc_type;
+			rsrc_type = (u32)de_getu32be(pos1 + d->rec_size*i);
 			if(rsrc_type==CODE_tAIN && d->rec_list.icon_name_count==0) {
 				// "Move" the tAIN record to the beginning, so we will read it
 				// before any tAIB resources.
 				rec_list_insert_at_start(&d->rec_list, i);
 				d->rec_list.icon_name_count++;
 			}
-			d->rec_list.rec_data[i].offset = (de_uint32)de_getui32be(pos1 + d->rec_size*i + 6);
+			d->rec_list.rec_data[i].offset = (u32)de_getu32be(pos1 + d->rec_size*i + 6);
 		}
 		else {
-			de_uint32 id;
-			d->rec_list.rec_data[i].offset = (de_uint32)de_getui32be(pos1 + d->rec_size*i);
+			u32 id;
+			d->rec_list.rec_data[i].offset = (u32)de_getu32be(pos1 + d->rec_size*i);
 			if(!d->has_nonzero_ids) {
 				id = (de_getbyte(pos1+d->rec_size*i+5)<<16) |
 					(de_getbyte(pos1+d->rec_size*i+6)<<8) |
@@ -718,7 +745,7 @@ static int do_prescan_records(deark *c, lctx *d, de_int64 pos1)
 		}
 
 		// Record data must not start beyond the end of file.
-		if((de_int64)d->rec_list.rec_data[i].offset > c->infile->len) {
+		if((i64)d->rec_list.rec_data[i].offset > c->infile->len) {
 			de_err(c, "Record %d (at %d) starts after end of file (%d)",
 				(int)i, (int)d->rec_list.rec_data[i].offset, (int)c->infile->len);
 			return 0;
@@ -737,10 +764,10 @@ static int do_prescan_records(deark *c, lctx *d, de_int64 pos1)
 }
 
 // Read "Palm Database record list" or PRC records, and the data it refers to
-static int do_read_pdb_prc_records(deark *c, lctx *d, de_int64 pos1)
+static int do_read_pdb_prc_records(deark *c, lctx *d, i64 pos1)
 {
-	de_int64 i;
-	de_int64 x;
+	i64 i;
+	i64 x;
 	int retval = 0;
 
 	de_dbg(c, "%s record list at %d", d->fmt_shortname, (int)pos1);
@@ -748,13 +775,13 @@ static int do_read_pdb_prc_records(deark *c, lctx *d, de_int64 pos1)
 
 	// 6-byte header
 
-	x = de_getui32be(pos1);
+	x = de_getu32be(pos1);
 	de_dbg(c, "nextRecordListID: %d", (int)x);
 	if(x!=0) {
 		de_warn(c, "This file contains multiple record lists, which is not supported.");
 	}
 
-	d->rec_list.num_recs = de_getui16be(pos1+4);
+	d->rec_list.num_recs = de_getu16be(pos1+4);
 	de_dbg(c, "number of records: %d", (int)d->rec_list.num_recs);
 
 	/////
@@ -769,8 +796,8 @@ static int do_read_pdb_prc_records(deark *c, lctx *d, de_int64 pos1)
 	// i is the index in rec_list.order_to_read
 	// n is the index in rec_list.rec_data
 	for(i=0; i<d->rec_list.num_recs; i++) {
-		de_int64 n;
-		n = (de_int64)d->rec_list.order_to_read[i];
+		i64 n;
+		n = (i64)d->rec_list.order_to_read[i];
 		if(d->file_fmt==FMT_PRC) {
 			if(!do_read_prc_record(c, d, n, pos1+6+d->rec_size*n))
 				goto done;
@@ -786,57 +813,52 @@ done:
 	return retval;
 }
 
-static void do_pqa_app_info_block(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void do_pqa_app_info_block(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_uint32 sig;
-	de_uint32 ux;
+	u32 sig;
+	u32 ux;
+	i64 n;
 	de_ucstring *s = NULL;
-	de_int64 pos = pos1;
+	i64 pos = pos1;
 
-	sig = (de_uint32)de_getui32be(pos);
+	de_dbg(c, "hello");
+	sig = (u32)de_getu32be_p(&pos);
 	if(sig!=CODE_lnch) return; // Apparently not a PQA appinfo block
 	de_dbg(c, "PQA sig: 0x%08x", (unsigned int)sig);
-	pos += 4;
 
-	ux = (de_uint32)de_getui16be(pos);
+	ux = (u32)de_getu16be_p(&pos);
 	de_dbg(c, "hdrVersion: 0x%04x", (unsigned int)ux);
-	pos += 2;
-	ux = (de_uint32)de_getui16be(pos);
+	ux = (u32)de_getu16be_p(&pos);
 	de_dbg(c, "encVersion: 0x%04x", (unsigned int)ux);
-	pos += 2;
 
 	s = ucstring_create(c);
 
-	ux = (de_uint32)de_getui16be(pos);
-	pos += 2;
-	dbuf_read_to_ucstring_n(c->infile, pos, ux*2, DE_DBG_MAX_STRLEN, s,
+	n = de_getu16be_p(&pos);
+	dbuf_read_to_ucstring_n(c->infile, pos, n*2, DE_DBG_MAX_STRLEN, s,
 		DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_PALM);
 	de_dbg(c, "verStr: \"%s\"", ucstring_getpsz(s));
 	ucstring_empty(s);
-	pos += 2*ux;
+	pos += 2*n;
 
-	ux = (de_uint32)de_getui16be(pos);
-	pos += 2;
-	dbuf_read_to_ucstring_n(c->infile, pos, ux*2, DE_DBG_MAX_STRLEN, s,
+	n = de_getu16be_p(&pos);
+	dbuf_read_to_ucstring_n(c->infile, pos, n*2, DE_DBG_MAX_STRLEN, s,
 		DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_PALM);
 	de_dbg(c, "pqaTitle: \"%s\"", ucstring_getpsz(s));
 	ucstring_empty(s);
-	pos += 2*ux;
+	pos += 2*n;
 
 	de_dbg(c, "icon");
 	de_dbg_indent(c, 1);
-	ux = (de_uint32)de_getui16be(pos); // iconWords (length prefix)
-	pos += 2;
-	extract_item(c, d, pos, 2*ux, "icon.palm", NULL, DE_CREATEFLAG_IS_AUX, 1);
-	pos += 2*ux;
+	n = de_getu16be_p(&pos); // iconWords (length prefix)
+	extract_item(c, d, pos, 2*n, "icon.palm", NULL, DE_CREATEFLAG_IS_AUX, 1);
+	pos += 2*n;
 	de_dbg_indent(c, -1);
 
 	de_dbg(c, "smIcon");
 	de_dbg_indent(c, 1);
-	ux = (de_uint32)de_getui16be(pos); // smIconWords
-	pos += 2;
-	extract_item(c, d, pos, 2*ux, "smicon.palm", NULL, DE_CREATEFLAG_IS_AUX, 1);
-	pos += 2*ux;
+	n = de_getu16be_p(&pos); // smIconWords
+	extract_item(c, d, pos, 2*n, "smicon.palm", NULL, DE_CREATEFLAG_IS_AUX, 1);
+	pos += 2*n;
 	de_dbg_indent(c, -1);
 
 	ucstring_destroy(s);
@@ -844,7 +866,7 @@ static void do_pqa_app_info_block(deark *c, lctx *d, de_int64 pos1, de_int64 len
 
 static void do_app_info_block(deark *c, lctx *d)
 {
-	de_int64 len;
+	i64 len;
 
 	if(d->appinfo_offs==0) return;
 	de_dbg(c, "app info block at %d", (int)d->appinfo_offs);
@@ -854,7 +876,7 @@ static void do_app_info_block(deark *c, lctx *d)
 		len = d->sortinfo_offs - d->appinfo_offs;
 	}
 	else if(d->rec_list.num_recs>0) {
-		len = (de_int64)d->rec_list.rec_data[0].offset - d->appinfo_offs;
+		len = (i64)d->rec_list.rec_data[0].offset - d->appinfo_offs;
 	}
 	else {
 		len = c->infile->len - d->appinfo_offs;
@@ -877,14 +899,14 @@ static void do_app_info_block(deark *c, lctx *d)
 
 static void do_sort_info_block(deark *c, lctx *d)
 {
-	de_int64 len;
+	i64 len;
 
 	if(d->sortinfo_offs==0) return;
 	de_dbg(c, "sort info block at %d", (int)d->sortinfo_offs);
 
 	de_dbg_indent(c, 1);
 	if(d->rec_list.num_recs>0) {
-		len = (de_int64)d->rec_list.rec_data[0].offset - d->sortinfo_offs;
+		len = (i64)d->rec_list.rec_data[0].offset - d->sortinfo_offs;
 	}
 	else {
 		len = c->infile->len - d->sortinfo_offs;
@@ -910,6 +932,18 @@ static void free_lctx(deark *c, lctx *d)
 
 static void de_run_pdb_or_prc(deark *c, lctx *d, de_module_params *mparams)
 {
+	const char *s;
+
+	s = de_get_ext_option(c, "palm:timestampfmt");
+	if(s) {
+		if(!de_strcmp(s, "macbe"))
+			d->timestampfmt = TIMESTAMPFMT_MACBE;
+		else if(!de_strcmp(s, "unixbe"))
+			d->timestampfmt = TIMESTAMPFMT_UNIXBE;
+		else if(!de_strcmp(s, "macle"))
+			d->timestampfmt = TIMESTAMPFMT_MACLE;
+	}
+
 	if(!do_read_pdb_prc_header(c, d)) goto done;
 	if(!do_read_pdb_prc_records(c, d, 72)) goto done;
 	do_app_info_block(c, d);
@@ -940,15 +974,15 @@ static void de_run_palmrc(deark *c, de_module_params *mparams)
 static int de_identify_palmdb(deark *c)
 {
 	int has_ext = 0;
-	de_byte id[8];
-	de_byte buf[32];
-	de_uint32 attribs;
-	de_int64 appinfo_offs;
-	de_int64 sortinfo_offs;
-	de_int64 n;
-	de_int64 num_recs;
-	de_int64 recdata_offs;
-	de_int64 curpos;
+	u8 id[8];
+	u8 buf[32];
+	u32 attribs;
+	i64 appinfo_offs;
+	i64 sortinfo_offs;
+	i64 n;
+	i64 num_recs;
+	i64 recdata_offs;
+	i64 curpos;
 
 	static const char *exts[] = {"pdb", "prc", "pqa", "mobi"};
 	static const char *ids[] = {"vIMGView", "TEXtREAd", "pqa clpr", "BOOKMOBI"};
@@ -962,7 +996,7 @@ static int de_identify_palmdb(deark *c)
 	}
 	if(!has_ext) return 0;
 
-	attribs = (de_uint32)de_getui16be(32);
+	attribs = (u32)de_getu16be(32);
 	if(attribs & 0x0001) return 0; // Might be PRC, but is not PDB
 
 	// It is not easy to identify PDB format from its contents.
@@ -993,9 +1027,9 @@ static int de_identify_palmdb(deark *c)
 	}
 	if(n==0) return 0;
 
-	appinfo_offs = de_getui32be(52);
-	sortinfo_offs = de_getui32be(56);
-	num_recs = de_getui16be(72+4);
+	appinfo_offs = de_getu32be(52);
+	sortinfo_offs = de_getu32be(56);
+	num_recs = de_getu16be(72+4);
 
 	curpos = 72 + 6 + num_recs*8;
 	if(curpos>c->infile->len) return 0;
@@ -1015,7 +1049,7 @@ static int de_identify_palmdb(deark *c)
 	if(num_recs>0) {
 		// Sanity-check the first record.
 		// TODO? We could check more than one record.
-		recdata_offs = de_getui32be(72+6+0);
+		recdata_offs = de_getu32be(72+6+0);
 		if(recdata_offs<curpos) return 0;
 		curpos = recdata_offs;
 		if(curpos>c->infile->len) return 0;
@@ -1024,10 +1058,10 @@ static int de_identify_palmdb(deark *c)
 	return 25;
 }
 
-static int looks_like_a_4cc(dbuf *f, de_int64 pos)
+static int looks_like_a_4cc(dbuf *f, i64 pos)
 {
-	de_int64 i;
-	de_byte buf[4];
+	i64 i;
+	u8 buf[4];
 	dbuf_read(f, buf, pos, 4);
 	for(i=0; i<4; i++) {
 		if(buf[i]<32 || buf[i]>126) return 0;
@@ -1040,12 +1074,12 @@ static int looks_like_a_4cc(dbuf *f, de_int64 pos)
 // TODO: Improve this ID algorithm
 static int identify_pdb_prc_internal(deark *c, dbuf *f)
 {
-	de_int64 nrecs;
-	de_uint32 attribs;
-	attribs = (de_uint32)dbuf_getui16be(f, 32);
+	i64 nrecs;
+	u32 attribs;
+	attribs = (u32)dbuf_getu16be(f, 32);
 	if(!looks_like_a_4cc(f, 60)) return 0;
 	if(!looks_like_a_4cc(f, 64)) return 0;
-	nrecs = dbuf_getui16be(f, 72+4);
+	nrecs = dbuf_getu16be(f, 72+4);
 	if(nrecs<1) return 0;
 	if(!(attribs&0x0001)) return 0;
 	if(!looks_like_a_4cc(f, 72+6+0)) return 0;
@@ -1057,7 +1091,7 @@ static int de_identify_palmrc(deark *c)
 	int prc_ext = 0;
 	int pdb_ext = 0;
 	int x;
-	de_byte id[8];
+	u8 id[8];
 
 	if(de_input_file_has_ext(c, "prc"))
 		prc_ext = 1;
@@ -1074,12 +1108,19 @@ static int de_identify_palmrc(deark *c)
 	return 0;
 }
 
+static void de_help_pdb_prc(deark *c)
+{
+	de_msg(c, "-opt timestampfmt=<macbe|unixbe|macle> : The format of the "
+		"timestamp fields");
+}
+
 void de_module_palmdb(deark *c, struct deark_module_info *mi)
 {
 	mi->id = "palmdb";
 	mi->desc = "Palm OS PDB";
 	mi->run_fn = de_run_palmdb;
 	mi->identify_fn = de_identify_palmdb;
+	mi->help_fn = de_help_pdb_prc;
 }
 
 void de_module_palmrc(deark *c, struct deark_module_info *mi)
@@ -1088,4 +1129,5 @@ void de_module_palmrc(deark *c, struct deark_module_info *mi)
 	mi->desc = "Palm OS PRC";
 	mi->run_fn = de_run_palmrc;
 	mi->identify_fn = de_identify_palmrc;
+	mi->help_fn = de_help_pdb_prc;
 }

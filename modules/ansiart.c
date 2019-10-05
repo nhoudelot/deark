@@ -9,7 +9,7 @@
 #include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_ansiart);
 
-static const de_uint32 ansi_palette[16] = {
+static const u32 ansi_palette[16] = {
 	0x000000,0xaa0000,0x00aa00,0xaa5500,0x0000aa,0xaa00aa,0x00aaaa,0xaaaaaa,
 	0x555555,0xff5555,0x55ff55,0xffff55,0x5555ff,0xff55ff,0x55ffff,0xffffff
 };
@@ -21,7 +21,7 @@ static const de_uint32 ansi_palette[16] = {
 struct parse_results_struct {
 	int num_params;
 #define MAX_ESC_PARAMS 16
-	de_int64 params[MAX_ESC_PARAMS];
+	i64 params[MAX_ESC_PARAMS];
 };
 
 struct row_data_struct {
@@ -29,30 +29,30 @@ struct row_data_struct {
 #define SIZEMODE_DBLH_TOP    1
 #define SIZEMODE_DBLH_BOTTOM 2
 #define SIZEMODE_DBLW        3
-	de_byte size_mode;
+	u8 size_mode;
 };
 
 typedef struct localctx_struct {
 	int opt_disable_24bitcolor;
 	int opt_disable_blink;
 
-	de_byte sauce_disable_blink;
+	u8 sauce_disable_blink;
 
 	struct de_char_screen *screen;
 	struct row_data_struct *row_data;
 
-	de_int64 effective_file_size;
-	de_int64 xpos, ypos; // 0-based
-	de_int64 saved_xpos, saved_ypos;
+	i64 effective_file_size;
+	i64 xpos, ypos; // 0-based
+	i64 saved_xpos, saved_ypos;
 
-	de_uint32 curr_fgcol;
-	de_uint32 curr_bgcol;
-	de_byte curr_bold;
-	de_byte curr_underline;
-	de_byte curr_blink;
-	de_byte curr_negative;
-	de_byte curr_conceal;
-	de_byte curr_strikethru;
+	u32 curr_fgcol;
+	u32 curr_bgcol;
+	u8 curr_bold;
+	u8 curr_underline;
+	u8 curr_blink;
+	u8 curr_negative;
+	u8 curr_conceal;
+	u8 curr_strikethru;
 
 #define CHARSET_DEFAULT 0
 #define CHARSET_US 1
@@ -64,17 +64,17 @@ typedef struct localctx_struct {
 	int curr_charset_index; // 0=use g0, 1=use g1
 
 #define ANSIART_MAX_WARNINGS 10
-	de_int64 num_warnings;
-	de_byte disable_blink_attr;
-	de_byte support_9b_csi;
-	de_byte vt100_mode;
+	i64 num_warnings;
+	u8 disable_blink_attr;
+	u8 support_9b_csi;
+	u8 vt100_mode;
 
-	de_byte param_string_buf[100];
+	u8 param_string_buf[100];
 
 	struct parse_results_struct parse_results;
 
-	de_byte escape_code_seen[96];
-	de_byte control_seq_seen[128];
+	u8 escape_code_seen[96];
+	u8 control_seq_seen[128];
 } lctx;
 
 static void init_cell(deark *c, struct de_char_cell *cell)
@@ -88,20 +88,20 @@ static void init_cell(deark *c, struct de_char_cell *cell)
 static void erase_cell(deark *c, struct de_char_cell *cell)
 {
 	if(!cell) return;
-	de_memset(cell, 0, sizeof(struct de_char_cell));
+	de_zeromem(cell, sizeof(struct de_char_cell));
 	init_cell(c, cell);
 }
 
 static struct de_char_cell *get_cell_at(deark *c, struct de_char_screen *screen,
-	de_int64 xpos, de_int64 ypos)
+	i64 xpos, i64 ypos)
 {
-	de_int64 i;
+	i64 i;
 	struct de_char_cell *cell;
 
 	if(xpos<0 || ypos<0) return NULL;
 	if(xpos>=screen->width || ypos>=MAX_ROWS) return NULL;
 	if(!screen->cell_rows[ypos]) {
-		screen->cell_rows[ypos] = de_malloc(c, screen->width * sizeof(struct de_char_cell));
+		screen->cell_rows[ypos] = de_mallocarray(c, screen->width, sizeof(struct de_char_cell));
 		for(i=0; i<screen->width; i++) {
 			// Initialize each new cell
 			cell = &screen->cell_rows[ypos][i];
@@ -111,9 +111,9 @@ static struct de_char_cell *get_cell_at(deark *c, struct de_char_screen *screen,
 	return &(screen->cell_rows[ypos][xpos]);
 }
 
-static de_int32 ansi_char_to_unicode(deark *c, lctx *d, de_byte ch)
+static i32 ansi_char_to_unicode(deark *c, lctx *d, u8 ch)
 {
-	de_int32 u;
+	i32 u;
 	int cs;
 
 	if(d->curr_charset_index==0)
@@ -123,7 +123,7 @@ static de_int32 ansi_char_to_unicode(deark *c, lctx *d, de_byte ch)
 
 	if(cs==CHARSET_LINEDRAWING) {
 		if(ch>=95 && ch<=126) {
-			u = de_char_to_unicode(c, (de_int32)ch, DE_ENCODING_DEC_SPECIAL_GRAPHICS);
+			u = de_char_to_unicode(c, (i32)ch, DE_ENCODING_DEC_SPECIAL_GRAPHICS);
 			return u;
 		}
 	}
@@ -132,11 +132,11 @@ static de_int32 ansi_char_to_unicode(deark *c, lctx *d, de_byte ch)
 		if(ch=='#') return 0x00a3;
 	}
 
-	u = de_char_to_unicode(c, (de_int32)ch, DE_ENCODING_CP437_G);
+	u = de_char_to_unicode(c, (i32)ch, DE_ENCODING_CP437_G);
 	return u;
 }
 
-static void do_ctrl_char(deark *c, lctx *d, de_byte ch)
+static void do_ctrl_char(deark *c, lctx *d, u8 ch)
 {
 	if(ch==13) { // CR
 		d->xpos = 0;
@@ -155,10 +155,10 @@ static void do_ctrl_char(deark *c, lctx *d, de_byte ch)
 	else if(ch==0x0f) d->curr_charset_index = 0;
 }
 
-static void do_normal_char(deark *c, lctx *d, de_int64 pos, de_byte ch)
+static void do_normal_char(deark *c, lctx *d, i64 pos, u8 ch)
 {
 	struct de_char_cell *cell;
-	de_int32 u;
+	i32 u;
 
 	// TODO: A few more characters, such as tabs, should be treated as
 	// control characters.
@@ -173,7 +173,7 @@ static void do_normal_char(deark *c, lctx *d, de_int64 pos, de_byte ch)
 
 	cell = get_cell_at(c, d->screen, d->xpos, d->ypos);
 	if(cell) {
-		cell->codepoint = (de_int32)ch;
+		cell->codepoint = (i32)ch;
 		cell->codepoint_unicode = u;
 		cell->fgcol = d->curr_fgcol;
 		cell->bgcol = d->curr_bgcol;
@@ -196,7 +196,7 @@ static void do_normal_char(deark *c, lctx *d, de_int64 pos, de_byte ch)
 		}
 
 		if(d->curr_negative) {
-			de_uint32 tmpcolor;
+			u32 tmpcolor;
 			tmpcolor = cell->fgcol;
 			cell->fgcol = cell->bgcol;
 			cell->bgcol = tmpcolor;
@@ -226,11 +226,11 @@ static void do_normal_char(deark *c, lctx *d, de_int64 pos, de_byte ch)
 }
 
 // Convert d->param_string_buf to d->params and d->num_params.
-static void parse_params(deark *c, lctx *d, de_int64 default_val, de_int64 offset)
+static void parse_params(deark *c, lctx *d, i64 default_val, i64 offset)
 {
-	de_int64 buf_len;
-	de_int64 ppos;
-	de_int64 param_len;
+	i64 buf_len;
+	i64 ppos;
+	i64 param_len;
 	char *p_ptr;
 	int last_param = 0;
 
@@ -270,8 +270,8 @@ static void parse_params(deark *c, lctx *d, de_int64 default_val, de_int64 offse
 	}
 }
 
-static void read_one_int(deark *c, lctx *d, const de_byte *buf,
-	de_int64 *a, de_int64 a_default)
+static void read_one_int(deark *c, lctx *d, const u8 *buf,
+	i64 *a, i64 a_default)
 {
 	parse_params(c, d, a_default, 0);
 
@@ -287,8 +287,8 @@ static void do_ext_color(deark *c, lctx *d)
 {
 	int is_bg;
 	const char *name;
-	de_byte cr, cg, cb;
-	de_uint32 clr;
+	u8 cr, cg, cb;
+	u32 clr;
 
 	if(d->parse_results.num_params<2) return;
 
@@ -314,10 +314,10 @@ static void do_ext_color(deark *c, lctx *d)
 
 	if(d->opt_disable_24bitcolor) return;
 
-	cr = (de_byte)(d->parse_results.params[2]%256);
-	cg = (de_byte)(d->parse_results.params[3]%256);
-	cb = (de_byte)(d->parse_results.params[4]%256);
-	clr = (de_uint32)DE_MAKE_RGB(cr, cg, cb);
+	cr = (u8)(d->parse_results.params[2]%256);
+	cg = (u8)(d->parse_results.params[3]%256);
+	cb = (u8)(d->parse_results.params[4]%256);
+	clr = (u32)DE_MAKE_RGB(cr, cg, cb);
 	if(is_bg) {
 		d->curr_bgcol = clr;
 	}
@@ -329,8 +329,8 @@ static void do_ext_color(deark *c, lctx *d)
 // m - Select Graphic Rendition
 static void do_code_m(deark *c, lctx *d)
 {
-	de_int64 i;
-	de_int64 sgr_code;
+	i64 i;
+	i64 sgr_code;
 
 	parse_params(c, d, 0, 0);
 
@@ -395,17 +395,23 @@ static void do_code_m(deark *c, lctx *d)
 		}
 		else if(sgr_code>=30 && sgr_code<=37) {
 			// Set foreground color
-			d->curr_fgcol = (de_uint32)(sgr_code-30);
+			d->curr_fgcol = (u32)(sgr_code-30);
 		}
 		else if(sgr_code==39) {
 			d->curr_fgcol = DEFAULT_FGCOL;
 		}
 		else if(sgr_code>=40 && sgr_code<=47) {
 			// Set background color
-			d->curr_bgcol = (de_uint32)(sgr_code-40);
+			d->curr_bgcol = (u32)(sgr_code-40);
 		}
 		else if(sgr_code==49) {
 			d->curr_bgcol = DEFAULT_BGCOL;
+		}
+		else if(sgr_code>=90 && sgr_code<=97) {
+			d->curr_fgcol = (u32)(8+(sgr_code-90));
+		}
+		else if(sgr_code>=100 && sgr_code<=107) {
+			d->curr_bgcol = (u32)(8+(sgr_code-100));
 		}
 		else {
 			if(d->num_warnings<ANSIART_MAX_WARNINGS) {
@@ -419,7 +425,7 @@ static void do_code_m(deark *c, lctx *d)
 // H: Set cursor position
 static void do_code_H(deark *c, lctx *d)
 {
-	de_int64 row, col;
+	i64 row, col;
 
 	parse_params(c, d, 1, 0);
 
@@ -434,7 +440,7 @@ static void do_code_H(deark *c, lctx *d)
 }
 
 // h: Mode settings
-static void do_code_h(deark *c, lctx *d, de_int64 param_start)
+static void do_code_h(deark *c, lctx *d, i64 param_start)
 {
 	int ok=0;
 	int is_DEC = 0;
@@ -485,7 +491,7 @@ static void do_code_h(deark *c, lctx *d, de_int64 param_start)
 }
 
 // l: Turn off mode
-static void do_code_l(deark *c, lctx *d, de_int64 param_start)
+static void do_code_l(deark *c, lctx *d, i64 param_start)
 {
 	int ok=0;
 	int is_DEC = 0;
@@ -536,7 +542,7 @@ static void do_code_l(deark *c, lctx *d, de_int64 param_start)
 	}
 }
 
-static void do_code_t(deark *c, lctx *d, de_int64 param_start)
+static void do_code_t(deark *c, lctx *d, i64 param_start)
 {
 	parse_params(c, d, 0, 0);
 
@@ -548,9 +554,9 @@ static void do_code_t(deark *c, lctx *d, de_int64 param_start)
 	{
 		// 24-bit color definition.
 		// Reference: http://picoe.ca/2014/03/07/24-bit-ansi/
-		de_uint32 clr;
+		u32 clr;
 		if(d->opt_disable_24bitcolor) return;
-		clr = (de_uint32)DE_MAKE_RGB(d->parse_results.params[1],
+		clr = (u32)DE_MAKE_RGB(d->parse_results.params[1],
 			d->parse_results.params[2], d->parse_results.params[3]);
 		if(d->parse_results.params[0]==0)
 			d->curr_bgcol = clr;
@@ -568,8 +574,8 @@ static void do_code_t(deark *c, lctx *d, de_int64 param_start)
 // J: Clear screen
 static void do_code_J(deark *c, lctx *d)
 {
-	de_int64 n;
-	de_int64 i, j;
+	i64 n;
+	i64 i, j;
 
 	read_one_int(c, d, d->param_string_buf, &n, 0);
 	// 0 = clear from cursor to end of screen
@@ -599,8 +605,8 @@ static void do_code_J(deark *c, lctx *d)
 // K: Clear line
 static void do_code_K(deark *c, lctx *d)
 {
-	de_int64 n;
-	de_int64 i;
+	i64 n;
+	i64 i;
 
 	read_one_int(c, d, d->param_string_buf, &n, 0);
 	// 0 = clear cursor to end of line
@@ -623,7 +629,7 @@ static void do_code_K(deark *c, lctx *d)
 // A: Up
 static void do_code_A(deark *c, lctx *d)
 {
-	de_int64 n;
+	i64 n;
 	read_one_int(c, d, d->param_string_buf, &n, 1);
 	d->ypos -= n;
 }
@@ -631,7 +637,7 @@ static void do_code_A(deark *c, lctx *d)
 // B: Down
 static void do_code_B(deark *c, lctx *d)
 {
-	de_int64 n;
+	i64 n;
 	read_one_int(c, d, d->param_string_buf, &n, 1);
 	d->ypos += n;
 }
@@ -639,7 +645,7 @@ static void do_code_B(deark *c, lctx *d)
 // C: Forward
 static void do_code_C(deark *c, lctx *d)
 {
-	de_int64 n;
+	i64 n;
 	read_one_int(c, d, d->param_string_buf, &n, 1);
 	d->xpos += n;
 }
@@ -647,7 +653,7 @@ static void do_code_C(deark *c, lctx *d)
 // D: Back
 static void do_code_D(deark *c, lctx *d)
 {
-	de_int64 n;
+	i64 n;
 	read_one_int(c, d, d->param_string_buf, &n, 1);
 	d->xpos -= n;
 	// Some files begin with a code to move the cursor left by a large amount.
@@ -656,14 +662,14 @@ static void do_code_D(deark *c, lctx *d)
 	if(d->xpos<0) d->xpos=0;
 }
 
-static de_byte make_printable_char(de_byte x)
+static u8 make_printable_char(u8 x)
 {
 	if(x>=32 && x<=126) return x;
 	return '?';
 }
 
-static void do_control_sequence(deark *c, lctx *d, de_byte code,
-	de_int64 param_start, de_int64 param_len)
+static void do_control_sequence(deark *c, lctx *d, u8 code,
+	i64 param_start, i64 param_len)
 {
 	if(code>=128) return;
 
@@ -672,7 +678,7 @@ static void do_control_sequence(deark *c, lctx *d, de_byte code,
 			(char)code, (int)param_start, (int)param_len);
 	}
 
-	if(param_len > (de_int64)(sizeof(d->param_string_buf)-1)) {
+	if(param_len > (i64)(sizeof(d->param_string_buf)-1)) {
 		de_warn(c, "Ignoring long control sequence (len %d at %d)",
 			(int)param_len, (int)param_start);
 		goto done;
@@ -731,7 +737,7 @@ done:
 	d->control_seq_seen[(unsigned int)code] = 1;
 }
 
-static void do_2char_code(deark *c, lctx *d, de_byte ch1, de_byte ch2, de_int64 pos)
+static void do_2char_code(deark *c, lctx *d, u8 ch1, u8 ch2, i64 pos)
 {
 	int ok = 0;
 
@@ -785,14 +791,14 @@ static void do_2char_code(deark *c, lctx *d, de_byte ch1, de_byte ch2, de_int64 
 	}
 }
 
-static void do_escape_code(deark *c, lctx *d, de_byte code, de_int64 pos,
-	de_int64 *extra_bytes_to_skip)
+static void do_escape_code(deark *c, lctx *d, u8 code, i64 pos,
+	i64 *extra_bytes_to_skip)
 {
 	if(code>=96) return;
 
 	if(code=='P') { // DCS
-		de_int64 pos2;
-		de_byte b0, b1;
+		i64 pos2;
+		u8 b0, b1;
 
 		// A DCS sequence ends with 1b 5c, or maybe 9c.
 
@@ -828,15 +834,15 @@ static void do_escape_code(deark *c, lctx *d, de_byte code, de_int64 pos,
 
 static void do_main(deark *c, lctx *d)
 {
-	de_int64 pos, nextpos;
-	de_int64 params_start_pos = 0;
+	i64 pos, nextpos;
+	i64 params_start_pos = 0;
 #define STATE_NORMAL 0
 #define STATE_GOT_ESC 1
 #define STATE_READING_PARAM 2
 #define STATE_GOT_1_CHAR 3
 	int state;
-	de_byte first_ch = 0;
-	de_byte ch;
+	u8 first_ch = 0;
+	u8 ch;
 
 	d->xpos = 0; d->ypos = 0;
 	d->curr_bgcol = DEFAULT_BGCOL;
@@ -879,7 +885,7 @@ static void do_main(deark *c, lctx *d)
 			}
 			else if(ch>=64 && ch<=95) {
 				// A 2-character escape sequence
-				de_int64 extra_bytes_to_skip;
+				i64 extra_bytes_to_skip;
 				extra_bytes_to_skip = 0;
 				do_escape_code(c, d, ch, pos, &extra_bytes_to_skip);
 				nextpos += extra_bytes_to_skip;
@@ -919,9 +925,9 @@ static void do_main(deark *c, lctx *d)
 // Consistency is not its strong point.)
 static void fixup_doublesize_rows(deark *c, lctx *d)
 {
-	de_int64 i, j;
+	i64 i, j;
 	struct de_char_cell *r;
-	de_byte size_mode;
+	u8 size_mode;
 
 	for(j=0; j<d->screen->height && j<MAX_ROWS; j++) {
 		size_mode = d->row_data[j].size_mode;
@@ -951,11 +957,12 @@ static void de_run_ansiart(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
 	struct de_char_context *charctx = NULL;
-	de_int64 k;
+	i64 k;
+	struct de_SAUCE_detection_data sdd;
 	struct de_SAUCE_info *si = NULL;
 	int valid_sauce = 0;
 	const char *s;
-	de_int64 width_req = 0;
+	i64 width_req = 0;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -978,8 +985,14 @@ static void de_run_ansiart(deark *c, de_module_params *mparams)
 	charctx = de_malloc(c, sizeof(struct de_char_context));
 
 	// Read SAUCE metadata, if present.
-	si = de_malloc(c, sizeof(struct de_SAUCE_info));
-	if(de_read_SAUCE(c, c->infile, si)) {
+	si = de_fmtutil_create_SAUCE(c);
+	de_fmtutil_detect_SAUCE(c, c->infile, &sdd, 0x1);
+
+	if(sdd.has_SAUCE) {
+		de_dbg_indent(c, 1);
+		de_fmtutil_handle_SAUCE(c, c->infile, si);
+		de_dbg_indent(c, -1);
+
 		d->effective_file_size = si->original_file_size;
 
 		charctx->title = si->title;
@@ -989,7 +1002,7 @@ static void de_run_ansiart(deark *c, de_module_params *mparams)
 		charctx->num_comments = si->num_comments;
 		charctx->comments = si->comments;
 
-		if(si->data_type==1 && (si->file_type==1 || si->file_type==2)) {
+		if(si->is_valid && si->data_type==1 && (si->file_type==1 || si->file_type==2)) {
 			valid_sauce = 1;
 		}
 	}
@@ -1021,7 +1034,7 @@ static void de_run_ansiart(deark *c, de_module_params *mparams)
 	}
 
 	charctx->nscreens = 1;
-	charctx->screens = de_malloc(c, charctx->nscreens*sizeof(struct de_char_screen*));
+	charctx->screens = de_mallocarray(c, charctx->nscreens, sizeof(struct de_char_screen*));
 	charctx->screens[0] = de_malloc(c, sizeof(struct de_char_screen));
 
 	d->screen = charctx->screens[0];
@@ -1041,8 +1054,8 @@ static void de_run_ansiart(deark *c, de_module_params *mparams)
 	// We don't know the height yet. This will be updated as we read the file.
 	d->screen->height = 1;
 
-	d->screen->cell_rows = de_malloc(c, MAX_ROWS * sizeof(struct de_char_cell*));
-	d->row_data = de_malloc(c, MAX_ROWS * sizeof(struct row_data_struct));
+	d->screen->cell_rows = de_mallocarray(c, MAX_ROWS, sizeof(struct de_char_cell*));
+	d->row_data = de_mallocarray(c, MAX_ROWS, sizeof(struct row_data_struct));
 
 	for(k=0; k<16; k++) {
 		charctx->pal[k] = ansi_palette[k];
@@ -1060,18 +1073,18 @@ static void de_run_ansiart(deark *c, de_module_params *mparams)
 
 	de_free_charctx(c, charctx);
 	de_free(c, d->row_data);
-	de_free_SAUCE(c, si);
+	de_fmtutil_free_SAUCE(c, si);
 	de_free(c, d);
 }
 
 static int de_identify_ansiart(deark *c)
 {
-	de_byte buf[4];
+	u8 buf[4];
 	int has_ans_ext;
 
-	if(!c->detection_data.sauce.detection_attempted) {
-		de_err(c, "ansiart internal");
-		de_fatalerror(c);
+	if(!c->detection_data.SAUCE_detection_attempted) {
+		de_err(c, "ansiart detection requires sauce module");
+		return 0;
 	}
 
 	de_read(buf, 0, 4);

@@ -9,37 +9,37 @@
 DE_DECLARE_MODULE(de_module_insetpix);
 
 typedef struct localctx_struct {
-	de_int64 item_count;
-	de_byte hmode;
-	de_byte htype;
-	de_byte graphics_type; // 0=character, 1=bitmap
-	de_byte board_type;
-	de_int64 width, height;
-	de_int64 gfore; // Foreground color bits
-	de_int64 max_sample_value;
-	de_int64 num_pal_bits[4]; // 0=intens, 1=red, 2=green, 3=blue
-	de_int64 haspect, vaspect;
+	i64 item_count;
+	u8 hmode;
+	u8 htype;
+	u8 graphics_type; // 0=character, 1=bitmap
+	u8 board_type;
+	i64 width, height;
+	i64 gfore; // Foreground color bits
+	i64 max_sample_value;
+	i64 num_pal_bits[4]; // 0=intens, 1=red, 2=green, 3=blue
+	i64 haspect, vaspect;
 
-	de_int64 page_rows, page_cols;
-	de_int64 stp_rows, stp_cols;
+	i64 page_rows, page_cols;
+	i64 stp_rows, stp_cols;
 
-	de_int64 rowspan;
-	de_int64 compression_bytes_per_row;
+	i64 rowspan;
+	i64 compression_bytes_per_row;
 	int is_grayscale;
 
-	de_byte max_pal_intensity, max_pal_sample;
+	u8 max_pal_intensity, max_pal_sample;
 
-	de_int64 pal_entries_used;
-	de_uint32 pal[256];
+	i64 pal_entries_used;
+	u32 pal[256];
 } lctx;
 
-static int do_palette(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static int do_palette(deark *c, lctx *d, i64 pos, i64 len)
 {
-	de_int64 pal_entries_in_file;
-	de_int64 i;
-	de_int64 k;
-	de_byte ci1, cr1, cg1, cb1;
-	de_byte ci2, cr2, cg2, cb2;
+	i64 pal_entries_in_file;
+	i64 i;
+	i64 k;
+	u8 ci1, cr1, cg1, cb1;
+	u8 ci2, cr2, cg2, cb2;
 	int retval = 0;
 	double max_color_sample;
 	double pal_sample_scalefactor[4];
@@ -88,9 +88,9 @@ static int do_palette(deark *c, lctx *d, de_int64 pos, de_int64 len)
 			d->pal[i] = DE_MAKE_GRAY(ci2);
 		}
 		else {
-			cr2 = (de_byte)(0.5+ pal_sample_scalefactor[1] * (double)cr1);
-			cg2 = (de_byte)(0.5+ pal_sample_scalefactor[2] * (double)cg1);
-			cb2 = (de_byte)(0.5+ pal_sample_scalefactor[3] * (double)cb1);
+			cr2 = (u8)(0.5+ pal_sample_scalefactor[1] * (double)cr1);
+			cg2 = (u8)(0.5+ pal_sample_scalefactor[2] * (double)cg1);
+			cb2 = (u8)(0.5+ pal_sample_scalefactor[3] * (double)cb1);
 			if(ci1) {
 				// This is just a guess. The spec doesn't say what intensity bits do.
 				// This is pretty much what old PC graphics cards do when the
@@ -114,7 +114,7 @@ static int do_palette(deark *c, lctx *d, de_int64 pos, de_int64 len)
 	return retval;
 }
 
-static int do_image_info(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static int do_image_info(deark *c, lctx *d, i64 pos, i64 len)
 {
 	int retval = 0;
 
@@ -136,18 +136,18 @@ static int do_image_info(deark *c, lctx *d, de_int64 pos, de_int64 len)
 		d->graphics_type?"bitmap":"character");
 	de_dbg(c, "board type: %d", (int)d->board_type);
 
-	d->width = de_getui16le(pos+18);
-	d->height = de_getui16le(pos+20);
+	d->width = de_getu16le(pos+18);
+	d->height = de_getu16le(pos+20);
 	de_dbg_dimensions(c, d->width, d->height);
 
-	d->gfore = (de_int64)de_getbyte(pos+22);
+	d->gfore = (i64)de_getbyte(pos+22);
 	de_dbg(c, "foreground color bits: %d", (int)d->gfore);
-	d->max_sample_value = (de_int64)(1 << (unsigned int)d->gfore) -1;
+	d->max_sample_value = de_pow2(d->gfore) -1;
 
-	d->num_pal_bits[0] = (de_int64)de_getbyte(pos+25);
-	d->num_pal_bits[1] = (de_int64)de_getbyte(pos+26);
-	d->num_pal_bits[2] = (de_int64)de_getbyte(pos+27);
-	d->num_pal_bits[3] = (de_int64)de_getbyte(pos+28);
+	d->num_pal_bits[0] = (i64)de_getbyte(pos+25);
+	d->num_pal_bits[1] = (i64)de_getbyte(pos+26);
+	d->num_pal_bits[2] = (i64)de_getbyte(pos+27);
+	d->num_pal_bits[3] = (i64)de_getbyte(pos+28);
 	de_dbg(c, "\"number of palette bits\" (IRGB): %d,%d,%d,%d",
 		(int)d->num_pal_bits[0], (int)d->num_pal_bits[1],
 		(int)d->num_pal_bits[2], (int)d->num_pal_bits[3] );
@@ -162,7 +162,7 @@ done:
 	return retval;
 }
 
-static int do_tileinfo(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static int do_tileinfo(deark *c, lctx *d, i64 pos, i64 len)
 {
 	int retval = 0;
 
@@ -173,10 +173,10 @@ static int do_tileinfo(deark *c, lctx *d, de_int64 pos, de_int64 len)
 		goto done;
 	}
 
-	d->page_rows = de_getui16le(pos+0);
-	d->page_cols = de_getui16le(pos+2);
-	d->stp_rows = de_getui16le(pos+4);
-	d->stp_cols = de_getui16le(pos+6);
+	d->page_rows = de_getu16le(pos+0);
+	d->page_cols = de_getu16le(pos+2);
+	d->stp_rows = de_getu16le(pos+4);
+	d->stp_cols = de_getu16le(pos+6);
 
 	de_dbg(c, "page_rows=%d, page_cols=%d", (int)d->page_rows, (int)d->page_cols);
 	de_dbg(c, "strip_rows=%d, strip_cols=%d", (int)d->stp_rows, (int)d->stp_cols);
@@ -192,24 +192,24 @@ done:
 	return retval;
 }
 
-static de_byte getbit(const de_byte *m, de_int64 bitnum)
+static u8 getbit(const u8 *m, i64 bitnum)
 {
-	de_byte b;
+	u8 b;
 	b = m[bitnum/8];
 	b = (b>>(7-bitnum%8)) & 0x1;
 	return b;
 }
 
-static void do_uncompress_tile(deark *c, lctx *d, de_int64 tile_num,
-	de_int64 tile_loc, de_int64 tile_len,
-	dbuf *unc_pixels, de_int64 num_rows)
+static void do_uncompress_tile(deark *c, lctx *d, i64 tile_num,
+	i64 tile_loc, i64 tile_len,
+	dbuf *unc_pixels, i64 num_rows)
 {
-	de_byte *rowbuf1 = NULL;
-	de_byte *rowbuf2 = NULL;
-	de_byte *compression_bytes = NULL;
-	de_int64 pos;
-	de_int64 i, j;
-	de_int64 plane;
+	u8 *rowbuf1 = NULL;
+	u8 *rowbuf2 = NULL;
+	u8 *compression_bytes = NULL;
+	i64 pos;
+	i64 i, j;
+	i64 plane;
 
 	// There are d->gfore planes (1-bpp images). The first row of each plane is
 	// uncompressed. The rest are compressed with a delta compression algorithm.
@@ -266,19 +266,19 @@ done:
 }
 
 static void do_render_tile(deark *c, lctx *d, de_bitmap *img,
-	de_int64 tile_num, de_int64 tile_loc, de_int64 tile_len)
+	i64 tile_num, i64 tile_loc, i64 tile_len)
 {
-	de_int64 i, j;
-	de_int64 plane;
-	de_int64 x_pos_in_tiles, y_pos_in_tiles;
-	de_int64 x_origin_in_pixels, y_origin_in_pixels;
-	de_int64 x_pos_in_pixels, y_pos_in_pixels;
-	de_uint32 clr;
+	i64 i, j;
+	i64 plane;
+	i64 x_pos_in_tiles, y_pos_in_tiles;
+	i64 x_origin_in_pixels, y_origin_in_pixels;
+	i64 x_pos_in_pixels, y_pos_in_pixels;
+	u32 clr;
 	unsigned int palent;
-	de_byte b;
+	u8 b;
 	dbuf *unc_pixels = NULL;
-	de_int64 nrows_expected;
-	de_int64 planespan;
+	i64 nrows_expected;
+	i64 planespan;
 
 	x_pos_in_tiles = tile_num % d->stp_cols;
 	y_pos_in_tiles = tile_num / d->stp_cols;
@@ -328,11 +328,11 @@ static void do_render_tile(deark *c, lctx *d, de_bitmap *img,
 
 static void do_bitmap(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_int64 item;
-	de_int64 item_id;
-	de_int64 tile_loc, tile_len;
-	de_int64 tile_num;
+	i64 pos;
+	i64 item;
+	i64 item_id;
+	i64 tile_loc, tile_len;
+	i64 tile_num;
 	de_bitmap *img = NULL;
 
 	de_dbg(c, "reading image data");
@@ -350,11 +350,11 @@ static void do_bitmap(deark *c, lctx *d)
 		pos = 4 + 8*item;
 		if(pos+8 > c->infile->len) break;
 
-		item_id = de_getui16le(pos);
+		item_id = de_getu16le(pos);
 		if(item_id<0x8000 || item_id==0xffff) continue;
 
-		tile_len = de_getui16le(pos+2);
-		tile_loc = de_getui32le(pos+4);
+		tile_len = de_getu16le(pos+2);
+		tile_loc = de_getu32le(pos+4);
 
 		tile_num = item_id-0x8000;
 		de_dbg(c, "item #%d: tile #%d: loc=%d, len=%d", (int)item, (int)tile_num,
@@ -373,22 +373,22 @@ done:
 static void de_run_insetpix(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pix_version;
-	de_int64 item;
-	de_int64 item_id;
-	de_int64 item_loc, item_len;
-	de_int64 pos;
-	de_int64 imginfo_pos=0, imginfo_len=0;
-	de_int64 pal_pos=0, pal_len=0;
-	de_int64 tileinfo_pos=0, tileinfo_len=0;
+	i64 pix_version;
+	i64 item;
+	i64 item_id;
+	i64 item_loc, item_len;
+	i64 pos;
+	i64 imginfo_pos=0, imginfo_len=0;
+	i64 pal_pos=0, pal_len=0;
+	i64 tileinfo_pos=0, tileinfo_len=0;
 	int indent_flag = 0;
 
 	d = de_malloc(c, sizeof(lctx));
 
 	de_warn(c, "The Inset PIX module is experimental, and may not work correctly.");
 
-	pix_version = de_getui16le(0);
-	d->item_count = de_getui16le(2);
+	pix_version = de_getu16le(0);
+	d->item_count = de_getu16le(2);
 	de_dbg(c, "version: %d", (int)pix_version);
 	de_dbg(c, "index at 4, %d items", (int)d->item_count);
 
@@ -400,11 +400,11 @@ static void de_run_insetpix(deark *c, de_module_params *mparams)
 		pos = 4 + 8*item;
 		if(pos+8 > c->infile->len) break;
 
-		item_id = de_getui16le(pos);
+		item_id = de_getu16le(pos);
 		if(item_id>=0x8000) continue; // Skip "tile" items for now
 
-		item_len = de_getui16le(pos+2);
-		item_loc = de_getui32le(pos+4);
+		item_len = de_getu16le(pos+2);
+		item_loc = de_getu32le(pos+4);
 		de_dbg(c, "item #%d: id=%d, loc=%d, len=%d", (int)item,
 			(int)item_id, (int)item_loc, (int)item_len);
 
@@ -486,27 +486,27 @@ done:
 // Inset PIX is hard to identify.
 static int de_identify_insetpix(deark *c)
 {
-	de_int64 pix_version;
-	de_int64 item_count;
-	de_int64 item;
-	de_int64 item_loc, item_len;
+	i64 pix_version;
+	i64 item_count;
+	i64 item;
+	i64 item_loc, item_len;
 
 	if(!de_input_file_has_ext(c, "pix")) return 0;
 
-	pix_version = de_getui16le(0);
+	pix_version = de_getu16le(0);
 	// The only version number I know of is 3, but I don't know what other
 	// versions may exist.
 	if(pix_version<1 || pix_version>4) return 0;
 
-	item_count = de_getui16le(2);
+	item_count = de_getu16le(2);
 	// Need at least 4 items (image info, palette info, tile info, and 1 tile).
 	if(item_count<4) return 0;
 
 	if(4 + 8*item_count >= c->infile->len) return 0;
 
 	for(item=0; item<item_count && item<16; item++) {
-		item_len = de_getui16le(4+8*item+2);
-		item_loc = de_getui32le(4+8*item+4);
+		item_len = de_getu16le(4+8*item+2);
+		item_loc = de_getu32le(4+8*item+4);
 		if(item_loc < 4 + 8*item_count) return 0;
 		if(item_loc+item_len > c->infile->len) return 0;
 	}

@@ -14,7 +14,7 @@ DE_DECLARE_MODULE(de_module_nlm);
 DE_DECLARE_MODULE(de_module_nsl);
 
 typedef struct localctx_struct {
-	de_int64 w, h;
+	i64 w, h;
 	int done_flag;
 } lctx;
 
@@ -24,11 +24,11 @@ typedef struct localctx_struct {
 // Caution: This code is not based on any official specifications.
 // **************************************************************************
 
-static void nol_ngg_read_bitmap(deark *c, lctx *d, de_int64 pos)
+static void nol_ngg_read_bitmap(deark *c, lctx *d, i64 pos)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_byte n;
+	i64 i, j;
+	u8 n;
 
 	img = de_bitmap_create(c, d->w, d->h, 1);
 
@@ -50,8 +50,8 @@ static void de_run_nol(deark *c, de_module_params *mparams)
 
 	d = de_malloc(c, sizeof(lctx));
 
-	d->w = de_getui16le(10);
-	d->h = de_getui16le(12);
+	d->w = de_getu16le(10);
+	d->h = de_getu16le(12);
 	if(!de_good_image_dimensions(c, d->w, d->h)) goto done;
 
 	nol_ngg_read_bitmap(c, d, 20);
@@ -85,8 +85,8 @@ static void de_run_ngg(deark *c, de_module_params *mparams)
 
 	d = de_malloc(c, sizeof(lctx));
 
-	d->w = de_getui16le(6);
-	d->h = de_getui16le(8);
+	d->w = de_getu16le(6);
+	d->h = de_getu16le(8);
 	if(!de_good_image_dimensions(c, d->w, d->h)) goto done;
 
 	nol_ngg_read_bitmap(c, d, 16);
@@ -114,7 +114,7 @@ void de_module_ngg(deark *c, struct deark_module_info *mi)
 // Caution: This code is not based on any official specifications.
 // **************************************************************************
 
-static void npm_nlm_read_bitmap(deark *c, lctx *d, de_int64 pos)
+static void npm_nlm_read_bitmap(deark *c, lctx *d, i64 pos)
 {
 	de_convert_and_write_image_bilevel(c->infile, pos, d->w, d->h, (d->w+7)/8,
 		DE_CVTF_WHITEISZERO, NULL, 0);
@@ -122,23 +122,23 @@ static void npm_nlm_read_bitmap(deark *c, lctx *d, de_int64 pos)
 
 static void de_run_npm(deark *c, de_module_params *mparams)
 {
-	de_int64 txt_len;
-	de_int64 pos;
+	i64 txt_len;
+	i64 pos;
 	lctx *d = NULL;
 
 	d = de_malloc(c, sizeof(lctx));
 
 	pos = 4;
-	txt_len = (de_int64)de_getbyte(pos);
+	txt_len = (i64)de_getbyte(pos);
 	pos += txt_len;
 	if(txt_len>0) de_dbg(c, "text length: %d", (int)txt_len);
 	// TODO: Maybe write the text to a file.
 
 	pos += 2;
 
-	d->w = (de_int64)de_getbyte(pos);
+	d->w = (i64)de_getbyte(pos);
 	pos += 1;
-	d->h = (de_int64)de_getbyte(pos);
+	d->h = (i64)de_getbyte(pos);
 	pos += 1;
 	de_dbg_dimensions(c, d->w, d->h);
 
@@ -171,7 +171,7 @@ void de_module_npm(deark *c, struct deark_module_info *mi)
 static void de_run_nlm(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_byte imgtype;
+	u8 imgtype;
 	const char *s;
 
 	d = de_malloc(c, sizeof(lctx));
@@ -186,8 +186,8 @@ static void de_run_nlm(deark *c, de_module_params *mparams)
 	}
 	de_dbg(c, "image type: %d (%s)", (int)imgtype, s);
 
-	d->w = (de_int64)de_getbyte(7);
-	d->h = (de_int64)de_getbyte(8);
+	d->w = (i64)de_getbyte(7);
+	d->h = (i64)de_getbyte(8);
 	de_dbg_dimensions(c, d->w, d->h);
 
 	npm_nlm_read_bitmap(c, d, 10);
@@ -216,11 +216,11 @@ void de_module_nlm(deark *c, struct deark_module_info *mi)
 // **************************************************************************
 
 
-static void nsl_read_bitmap(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void nsl_read_bitmap(deark *c, lctx *d, i64 pos, i64 len)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_byte x;
+	i64 i, j;
+	u8 x;
 
 	de_dbg(c, "bitmap at %d, len=%d", (int)pos, (int)len);
 	d->done_flag = 1;
@@ -295,14 +295,14 @@ static void de_run_nsl(deark *c, de_module_params *mparams)
 
 static int de_identify_nsl(deark *c)
 {
-	de_int64 x;
+	i64 x;
 
 	// NSL uses a variant of IFF, which is not so easy to identify.
 	// (TODO: Write an IFF format detector.)
 
 	if(dbuf_memcmp(c->infile, 0, "FORM", 4)) return 0;
 
-	x = de_getui16be(4);
+	x = de_getu16be(4);
 	if(x+6 != c->infile->len) return 0;
 
 	if(de_input_file_has_ext(c, "nsl")) {

@@ -11,7 +11,7 @@ DE_DECLARE_MODULE(de_module_pff2);
 
 typedef struct localctx_struct {
 	struct de_bitmap_font *font;
-	de_byte found_CHIX_chunk;
+	u8 found_CHIX_chunk;
 } lctx;
 
 #define CODE_ASCE 0x41534345U
@@ -30,30 +30,30 @@ typedef struct localctx_struct {
 struct pff2_sectiontype_info;
 
 typedef void (*pff2_section_handler_fn)(deark *c, lctx *d,
-	const struct pff2_sectiontype_info *si, de_int64 pos, de_int64 len);
+	const struct pff2_sectiontype_info *si, i64 pos, i64 len);
 
 struct pff2_sectiontype_info {
-	de_uint32 id;
+	u32 id;
 	// 0x1=ASCII, 0x2=uint16be
-	de_uint32 flags;
+	u32 flags;
 	const char *name;
 	pff2_section_handler_fn hfn;
 };
 
-static void do_char(deark *c, lctx *d, de_int64 char_idx, de_int32 codepoint, de_int64 pos)
+static void do_char(deark *c, lctx *d, i64 char_idx, i32 codepoint, i64 pos)
 {
 	struct de_bitmap_font_char *ch;
-	de_int64 bitmap_pos;
-	de_byte *srcbitmap = NULL;
-	de_int64 srcbitmapsize;
-	de_int64 j;
+	i64 bitmap_pos;
+	u8 *srcbitmap = NULL;
+	i64 srcbitmapsize;
+	i64 j;
 
 	ch = &d->font->char_array[char_idx];
 
 	ch->codepoint_unicode = codepoint;
 
-	ch->width = (int)de_getui16be(pos);
-	ch->height = (int)de_getui16be(pos+2);
+	ch->width = (int)de_getu16be(pos);
+	ch->height = (int)de_getu16be(pos+2);
 	if(ch->width > d->font->nominal_width) d->font->nominal_width = ch->width;
 	if(ch->height > d->font->nominal_height) d->font->nominal_height = ch->height;
 
@@ -75,12 +75,12 @@ static void do_char(deark *c, lctx *d, de_int64 char_idx, de_int32 codepoint, de
 }
 
 static void do_code_chix(deark *c, lctx *d, const struct pff2_sectiontype_info *si,
-	de_int64 pos1, de_int64 len)
+	i64 pos1, i64 len)
 {
-	de_int64 i;
-	de_int64 pos;
-	de_int64 defpos;
-	de_int32 codepoint;
+	i64 i;
+	i64 pos;
+	i64 defpos;
+	i32 codepoint;
 	unsigned int storage_flags;
 
 	if(d->found_CHIX_chunk) goto done;
@@ -89,13 +89,13 @@ static void do_code_chix(deark *c, lctx *d, const struct pff2_sectiontype_info *
 	d->font->num_chars = len/9;
 	de_dbg(c, "number of characters: %d", (int)d->font->num_chars);
 
-	d->font->char_array = de_malloc(c, d->font->num_chars * sizeof(struct de_bitmap_font_char));
+	d->font->char_array = de_mallocarray(c, d->font->num_chars, sizeof(struct de_bitmap_font_char));
 
 	for(i=0; i<d->font->num_chars; i++) {
 		pos = pos1 + 9*i;
-		codepoint = (de_int32)de_getui32be(pos);
+		codepoint = (i32)de_getu32be(pos);
 		storage_flags = (unsigned int)de_getbyte(pos+4);
-		defpos = de_getui32be(pos+5);
+		defpos = de_getu32be(pos+5);
 		de_dbg2(c, "code point U+%04X, index at %d, definition at %d",
 			(unsigned int)codepoint, (int)pos, (int)defpos);
 		if((storage_flags&0x07)!=0) {
@@ -127,7 +127,7 @@ static const struct pff2_sectiontype_info pff2_sectiontype_info_arr[] = {
 	{ CODE_WEIG, 0x00000001, "font weight", NULL }
 };
 
-static const struct pff2_sectiontype_info *find_pffs_sectiontype_info(de_uint32 id)
+static const struct pff2_sectiontype_info *find_pffs_sectiontype_info(u32 id)
 {
 	size_t i;
 
@@ -159,8 +159,8 @@ static int my_pff2_chunk_handler(deark *c, struct de_iffctx *ictx)
 		ucstring_destroy(str);
 	}
 	else if(si->flags&0x2) {
-		de_int64 n;
-		n = dbuf_getui16be(ictx->f, ictx->chunkctx->dpos);
+		i64 n;
+		n = dbuf_getu16be(ictx->f, ictx->chunkctx->dpos);
 		de_dbg(c, "value: %d", (int)n);
 	}
 
@@ -194,7 +194,7 @@ static void de_run_pff2(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
 	struct de_iffctx *ictx = NULL;
-	de_int64 i;
+	i64 i;
 
 	d = de_malloc(c, sizeof(lctx));
 	ictx = de_malloc(c, sizeof(struct de_iffctx));

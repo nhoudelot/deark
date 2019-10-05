@@ -11,21 +11,21 @@ DE_DECLARE_MODULE(de_module_qtif);
 
 typedef struct localctx_struct {
 	int idat_found;
-	de_int64 idat_pos;
-	de_int64 idat_size;
+	i64 idat_pos;
+	i64 idat_size;
 
 	int idsc_found;
-	de_int64 idsc_size;
-	de_int64 idat_data_size; // "Data size" reported in idsc (0=unknown)
+	i64 idsc_size;
+	i64 idat_data_size; // "Data size" reported in idsc (0=unknown)
 	struct de_fourcc cmpr4cc;
 
-	de_int64 width, height;
-	de_int64 bitdepth;
-	de_int64 palette_id;
+	i64 width, height;
+	i64 bitdepth;
+	i64 palette_id;
 	double hres, vres;
 } lctx;
 
-static int do_read_idsc(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static int do_read_idsc(deark *c, lctx *d, i64 pos, i64 len)
 {
 	int retval = 0;
 
@@ -33,7 +33,7 @@ static int do_read_idsc(deark *c, lctx *d, de_int64 pos, de_int64 len)
 
 	d->idsc_found = 1;
 
-	d->idsc_size = de_getui32be(pos);
+	d->idsc_size = de_getu32be(pos);
 	de_dbg(c, "idsc size: %d", (int)d->idsc_size);
 
 	dbuf_read_fourcc(c->infile, pos+4, &d->cmpr4cc, 4, 0x0);
@@ -42,16 +42,16 @@ static int do_read_idsc(deark *c, lctx *d, de_int64 pos, de_int64 len)
 	if(len<86) goto done;
 	if(d->idsc_size<86) goto done;
 
-	d->width = de_getui16be(pos+32);
-	d->height = de_getui16be(pos+34);
+	d->width = de_getu16be(pos+32);
+	d->height = de_getu16be(pos+34);
 	d->hres = dbuf_fmtutil_read_fixed_16_16(c->infile, pos+36);
 	d->vres = dbuf_fmtutil_read_fixed_16_16(c->infile, pos+40);
 	de_dbg(c, "dpi: %.2f"DE_CHAR_TIMES"%.2f", d->hres, d->vres);
-	d->idat_data_size = de_getui32be(pos+44);
+	d->idat_data_size = de_getu32be(pos+44);
 	de_dbg(c, "reported data size: %d", (int)d->idat_data_size);
 	if(d->idat_data_size>c->infile->len) d->idat_data_size=0;
-	d->bitdepth = de_getui16be(pos+82);
-	d->palette_id = de_getui16be(pos+84);
+	d->bitdepth = de_getu16be(pos+82);
+	d->palette_id = de_getu16be(pos+84);
 	de_dbg(c, "dimensions: %d"DE_CHAR_TIMES"%d, bitdepth: %d, palette: %d", (int)d->width,
 		(int)d->height, (int)d->bitdepth, (int)d->palette_id);
 	retval = 1;
@@ -62,9 +62,10 @@ done:
 static void do_decode_raw(deark *c, lctx *d)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_int64 rowspan;
-	de_uint32 clr;
+	de_finfo *fi = NULL;
+	i64 i, j;
+	i64 rowspan;
+	u32 clr;
 
 	if(d->bitdepth != 32) {
 		de_err(c, "Unsupported bit depth for raw image (%d)", (int)d->bitdepth);
@@ -74,9 +75,10 @@ static void do_decode_raw(deark *c, lctx *d)
 
 	img = de_bitmap_create(c, d->width, d->height, 3);
 
-	img->density_code = DE_DENSITY_DPI;
-	img->xdens = d->hres;
-	img->ydens = d->vres;
+	fi = de_finfo_create(c);
+	fi->density.code = DE_DENSITY_DPI;
+	fi->density.xdens = d->hres;
+	fi->density.ydens = d->vres;
 
 	// Warning: This code is based on reverse engineering, and may not be correct.
 	// TODO: Is the first sample for transparency?
@@ -95,14 +97,15 @@ static void do_decode_raw(deark *c, lctx *d)
 		}
 	}
 
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, fi, 0);
 done:
 	de_bitmap_destroy(img);
+	de_finfo_destroy(c, fi);
 }
 
 static void do_write_image(deark *c, lctx *d)
 {
-	de_int64 dsize;
+	i64 dsize;
 
 	if(!d->idsc_found) {
 		de_err(c, "Missing idsc atom");
@@ -199,7 +202,7 @@ static void de_run_qtif(deark *c, de_module_params *mparams)
 
 	d = de_malloc(c, sizeof(lctx));
 
-	if(mparams && mparams->in_params.codes && de_strchr(mparams->in_params.codes, 'I')) {
+	if(de_havemodcode(c, mparams, 'I')) {
 		// Raw data from a PICT file
 		do_raw_idsc_data(c, d);
 	}

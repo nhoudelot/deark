@@ -26,7 +26,7 @@ void ucstring_empty(de_ucstring *s)
 // Reduce the string's length to newlen, by deleting the characters after
 // that point.
 // 'newlen' is expected to be no larger than the string's current length.
-void ucstring_truncate(de_ucstring *s, de_int64 newlen)
+void ucstring_truncate(de_ucstring *s, i64 newlen)
 {
 	if(!s) return;
 	if(newlen<0) newlen=0;
@@ -43,7 +43,7 @@ void ucstring_truncate(de_ucstring *s, de_int64 newlen)
 // Delete the first U+0000 character, and everything after it.
 void ucstring_truncate_at_NUL(de_ucstring *s)
 {
-	de_int64 i;
+	i64 i;
 
 	for(i=0; i<s->len; i++) {
 		if(s->str[i]==0x0000) {
@@ -72,7 +72,7 @@ void ucstring_strip_trailing_spaces(de_ucstring *s)
 // Append s2 to s1
 void ucstring_append_ucstring(de_ucstring *s1, const de_ucstring *s2)
 {
-	de_int64 i;
+	i64 i;
 
 	if(!s2) return;
 	// TODO: This could be done more efficiently.
@@ -81,7 +81,7 @@ void ucstring_append_ucstring(de_ucstring *s1, const de_ucstring *s2)
 	}
 }
 
-static void ucstring_vprintf(de_ucstring *s, int encoding, const char *fmt, va_list ap)
+static void ucstring_vprintf(de_ucstring *s, de_encoding encoding, const char *fmt, va_list ap)
 {
 	char buf[1024];
 	de_vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -91,7 +91,7 @@ static void ucstring_vprintf(de_ucstring *s, int encoding, const char *fmt, va_l
 // Appends a formatted C-style string.
 // (Unfortunately, there is no format specifier for a ucstring.)
 // There is a limit to how many characters will be appended.
-void ucstring_printf(de_ucstring *s, int encoding, const char *fmt, ...)
+void ucstring_printf(de_ucstring *s, de_encoding encoding, const char *fmt, ...)
 {
 	va_list ap;
 
@@ -100,7 +100,7 @@ void ucstring_printf(de_ucstring *s, int encoding, const char *fmt, ...)
 	va_end(ap);
 }
 
-de_ucstring *ucstring_clone(de_ucstring *src)
+de_ucstring *ucstring_clone(const de_ucstring *src)
 {
 	de_ucstring *dst;
 
@@ -121,10 +121,15 @@ void ucstring_destroy(de_ucstring *s)
 	}
 }
 
-void ucstring_append_char(de_ucstring *s, de_int32 ch)
+int ucstring_isnonempty(const de_ucstring *s)
 {
-	de_int64 new_len;
-	de_int64 new_alloc;
+	return (s && (s->len > 0));
+}
+
+void ucstring_append_char(de_ucstring *s, i32 ch)
+{
+	i64 new_len;
+	i64 new_alloc;
 
 	if(s->len >= 100000000) {
 		return;
@@ -133,8 +138,7 @@ void ucstring_append_char(de_ucstring *s, de_int32 ch)
 	if(new_len > s->alloc) {
 		new_alloc = s->alloc * 2;
 		if(new_alloc<32) new_alloc=32;
-
-		s->str = de_realloc(s->c, s->str, s->alloc * sizeof(de_int32), new_alloc * sizeof(de_int32));
+		s->str = de_reallocarray(s->c, s->str, s->alloc, sizeof(i32), new_alloc);
 		s->alloc = new_alloc;
 	}
 
@@ -142,20 +146,20 @@ void ucstring_append_char(de_ucstring *s, de_int32 ch)
 	s->len++;
 }
 
-void ucstring_append_bytes(de_ucstring *s, const de_byte *buf, de_int64 buflen,
-	unsigned int conv_flags, int encoding)
+void ucstring_append_bytes(de_ucstring *s, const u8 *buf, i64 buflen,
+	unsigned int conv_flags, de_encoding encoding)
 {
 	int ret;
-	de_int64 pos = 0;
-	de_int32 ch;
-	de_int64 code_len;
+	i64 pos = 0;
+	i32 ch;
+	i64 code_len;
 
 	// Adjust buflen if necessary.
 	if(conv_flags & DE_CONVFLAG_STOP_AT_NUL) {
 		char *tmpp;
 		tmpp = de_memchr(buf, 0, (size_t)buflen);
 		if(tmpp) {
-			buflen = (const de_byte*)tmpp - buf;
+			buflen = (const u8*)tmpp - buf;
 		}
 	}
 
@@ -163,7 +167,7 @@ void ucstring_append_bytes(de_ucstring *s, const de_byte *buf, de_int64 buflen,
 		if(encoding==DE_ENCODING_UTF8) {
 			ret = de_utf8_to_uchar(&buf[pos], buflen-pos, &ch, &code_len);
 			if(!ret) { // Invalid UTF8
-				ch = DE_CODEPOINT_BYTE00 + (de_int32)buf[pos];
+				ch = DE_CODEPOINT_BYTE00 + (i32)buf[pos];
 				code_len = 1;
 			}
 		}
@@ -186,7 +190,7 @@ void ucstring_append_bytes(de_ucstring *s, const de_byte *buf, de_int64 buflen,
 			ch = de_char_to_unicode(s->c, buf[pos], encoding);
 			if(ch==DE_CODEPOINT_INVALID) {
 				// Map unconvertible bytes to a special range.
-				ch = DE_CODEPOINT_BYTE00 + (de_int32)buf[pos];
+				ch = DE_CODEPOINT_BYTE00 + (i32)buf[pos];
 			}
 			code_len = 1;
 		}
@@ -195,16 +199,16 @@ void ucstring_append_bytes(de_ucstring *s, const de_byte *buf, de_int64 buflen,
 	}
 }
 
-void ucstring_append_sz(de_ucstring *s, const char *sz, int encoding)
+void ucstring_append_sz(de_ucstring *s, const char *sz, de_encoding encoding)
 {
-	de_int64 len;
-	len = (de_int64)de_strlen(sz);
-	ucstring_append_bytes(s, (const de_byte*)sz, len, 0, encoding);
+	i64 len;
+	len = (i64)de_strlen(sz);
+	ucstring_append_bytes(s, (const u8*)sz, len, 0, encoding);
 }
 
 static int ucstring_is_ascii(const de_ucstring *s)
 {
-	de_int64 i;
+	i64 i;
 	for(i=0; i<s->len; i++) {
 		if(s->str[i]<0 || s->str[i]>=0x80)
 			return 0;
@@ -212,10 +216,10 @@ static int ucstring_is_ascii(const de_ucstring *s)
 	return 1;
 }
 
-de_int64 ucstring_count_utf8_bytes(de_ucstring *s)
+i64 ucstring_count_utf8_bytes(de_ucstring *s)
 {
-	de_int64 i;
-	de_int64 n = 0;
+	i64 i;
+	i64 n = 0;
 	if(!s) return n;
 	for(i=0; i<s->len; i++) {
 		if(s->str[i]<0 || s->str[i]>0xffff) n+=4;
@@ -231,7 +235,7 @@ de_int64 ucstring_count_utf8_bytes(de_ucstring *s)
 // start with a BOM.
 void ucstring_write_as_utf8(deark *c, de_ucstring *s, dbuf *outf, int add_bom_if_needed)
 {
-	de_int64 i;
+	i64 i;
 
 	if(add_bom_if_needed &&
 		c->write_bom &&
@@ -247,20 +251,19 @@ void ucstring_write_as_utf8(deark *c, de_ucstring *s, dbuf *outf, int add_bom_if
 	}
 }
 
-static int is_printable_uchar(de_int32 ch);
-
 // Note: This function is similar to de_finfo_set_name_from_ucstring().
 // Maybe they should be consolidated.
 // TODO: Should we remove the 'encoding' param, and always assume UTF-8?
-void ucstring_to_sz(de_ucstring *s, char *szbuf, size_t szbuf_len, unsigned int flags, int encoding)
+void ucstring_to_sz(de_ucstring *s, char *szbuf, size_t szbuf_len,
+	unsigned int flags, de_encoding encoding)
 {
-	de_int64 i;
-	de_int64 szpos = 0;
-	de_int32 ch;
-	de_int64 charcodelen;
+	i64 i;
+	i64 szpos = 0;
+	i32 ch;
+	i64 charcodelen;
 	static const char *sc1 = "\x01<"; // DE_CODEPOINT_HL in UTF-8
 	static const char *sc2 = ">\x02"; // DE_CODEPOINT_UNHL
-	de_byte charcodebuf[32];
+	u8 charcodebuf[32];
 
 	if(szbuf_len<1) return;
 
@@ -273,7 +276,7 @@ void ucstring_to_sz(de_ucstring *s, char *szbuf, size_t szbuf_len, unsigned int 
 			// TODO: This may not work right if DE_CONVFLAG_MAKE_PRINTABLE is used,
 			// but currently that never happens.
 			if(ch>=0 && ch<=(encoding==DE_ENCODING_LATIN1?255:127))
-				charcodebuf[0] = (de_byte)ch;
+				charcodebuf[0] = (u8)ch;
 			else
 				charcodebuf[0] = '_';
 			charcodelen = 1;
@@ -282,7 +285,7 @@ void ucstring_to_sz(de_ucstring *s, char *szbuf, size_t szbuf_len, unsigned int 
 		if(flags & DE_CONVFLAG_MAKE_PRINTABLE) {
 			// TODO: This is slightly inefficient, because we're overwriting the
 			// conversion we already did.
-			if(!is_printable_uchar(ch)) {
+			if(!de_is_printable_uchar(ch)) {
 				if(ch==0x0a) {
 					de_snprintf((char*)charcodebuf, sizeof(charcodebuf),
 						"%s\\n%s", sc1, sc2);
@@ -307,12 +310,17 @@ void ucstring_to_sz(de_ucstring *s, char *szbuf, size_t szbuf_len, unsigned int 
 					de_snprintf((char*)charcodebuf, sizeof(charcodebuf),
 						"%sU+%04X%s", sc1, (unsigned int)ch, sc2);
 				}
-				charcodelen = (de_int64)de_strlen((const char*)charcodebuf);
+				charcodelen = (i64)de_strlen((const char*)charcodebuf);
 			}
 		}
 
-		if(szpos + charcodelen + 1 > (de_int64)szbuf_len) break;
-		de_memcpy(&szbuf[szpos], charcodebuf, (size_t)charcodelen);
+		if(szpos + charcodelen + 1 > (i64)szbuf_len) break;
+		if(charcodelen==1) {
+			szbuf[szpos] = charcodebuf[0];
+		}
+		else {
+			de_memcpy(&szbuf[szpos], charcodebuf, (size_t)charcodelen);
+		}
 		szpos += charcodelen;
 	}
 
@@ -325,9 +333,9 @@ void ucstring_to_sz(de_ucstring *s, char *szbuf, size_t szbuf_len, unsigned int 
 // and noncharacters.
 // It would be good to also ban incorrectly-used "combining" and other context-
 // sensitive characters, but that's too difficult.
-static int is_printable_uchar(de_int32 ch)
+int de_is_printable_uchar(i32 ch)
 {
-	struct pr_range { de_int32 n1, n2; };
+	struct pr_range { i32 n1, n2; };
 	static const struct pr_range ranges[] = {
 		{ 0x0020, 0x007e },
 		{ 0x00a0, 0x200d },
@@ -353,9 +361,9 @@ static int is_printable_uchar(de_int32 ch)
 }
 
 static const char *ucstring_getpsz_internal(de_ucstring *s,
-	int has_max, de_int64 max_bytes)
+	int has_max, i64 max_bytes)
 {
-	de_int64 allocsize;
+	i64 allocsize;
 
 	if(!s) {
 		if(has_max && max_bytes<6) return "";
@@ -387,7 +395,7 @@ const char *ucstring_getpsz(de_ucstring *s)
 
 // It might make more sense to limit the number of visible characters, instead
 // of the number of bytes in the encoded string, but that's too difficult.
-const char *ucstring_getpsz_n(de_ucstring *s, de_int64 max_bytes)
+const char *ucstring_getpsz_n(de_ucstring *s, i64 max_bytes)
 {
 	return ucstring_getpsz_internal(s, 1, max_bytes);
 }
@@ -400,4 +408,97 @@ const char *ucstring_getpsz_d(de_ucstring *s)
 void ucstring_append_flags_item(de_ucstring *s, const char *str)
 {
 	ucstring_printf(s, DE_ENCODING_UTF8, "%s%s", (s->len>0)?" | ":"", str);
+}
+
+void ucstring_append_flags_itemf(de_ucstring *s, const char *fmt, ...)
+{
+	va_list ap;
+	char buf[1024];
+
+	va_start(ap, fmt);
+	de_vsnprintf(buf, sizeof(buf), fmt, ap);
+	ucstring_append_flags_item(s, buf);
+	va_end(ap);
+}
+
+// strarray: A mini library, intended mainly to help manage directory paths.
+
+struct de_strarray {
+	deark *c;
+	size_t count;
+	size_t num_alloc;
+	de_ucstring **ss; // array of 'num_alloc' ucstring pointers
+};
+
+struct de_strarray *de_strarray_create(deark *c)
+{
+	struct de_strarray *sa;
+	sa = de_malloc(c, sizeof(struct de_strarray));
+	sa->c = c;
+	return sa;
+}
+
+void de_strarray_destroy(struct de_strarray *sa)
+{
+	deark *c;
+
+	if(!sa) return;
+	c = sa->c;
+	while(sa->count>0) {
+		de_strarray_pop(sa);
+	}
+	de_free(c, sa->ss);
+	de_free(c, sa);
+}
+
+// This makes a copy of 's'. The caller still owns 's'.
+void de_strarray_push(struct de_strarray *sa, de_ucstring *s)
+{
+	deark *c = sa->c;
+	size_t newidx = sa->count;
+
+	if(newidx >= sa->num_alloc) {
+		size_t old_num_alloc = sa->num_alloc;
+		sa->num_alloc *= 2;
+		if(sa->num_alloc<8) sa->num_alloc=8;
+		sa->ss = de_reallocarray(c, sa->ss, old_num_alloc, sizeof(de_ucstring*),
+			sa->num_alloc);
+	}
+	sa->ss[newidx] = ucstring_clone(s);
+	sa->count++;
+}
+
+void de_strarray_pop(struct de_strarray *sa)
+{
+	if(sa->count<1) return;
+	ucstring_destroy(sa->ss[sa->count-1]);
+	sa->ss[sa->count-1] = NULL;
+	sa->count--;
+}
+
+// Replace slashes in a string, starting at the given position.
+static void mp_squash_slashes(de_ucstring *s, i64 pos1)
+{
+	i64 i;
+
+	for(i=pos1; i<s->len; i++) {
+		if(s->str[i]=='/') {
+			s->str[i] = '_';
+		}
+	}
+}
+
+// Caller allocates 'path' to receive the path.
+void de_strarray_make_path(struct de_strarray *sa, de_ucstring *path, unsigned int flags)
+{
+	size_t i;
+
+	for(i=0; i<sa->count; i++) {
+		i64 oldlen = path->len;
+		ucstring_append_ucstring(path, sa->ss[i]);
+		mp_squash_slashes(path, oldlen);
+		if((i+1 < sa->count) || !(flags & DE_MPFLAG_NOTRAILINGSLASH)) {
+			ucstring_append_sz(path, "/", DE_ENCODING_LATIN1);
+		}
+	}
 }

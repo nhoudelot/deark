@@ -5,24 +5,31 @@ file.
 
 ## Mission statement ##
 
+Deark has several related purposes:
+
+* To find interesting things that are stored in files, but usually ignored,
+such as thumbnail images and comments.
+
+* To rescue data from uncommon file formats, and to be a convenient way to
+decode many different formats.
+
+* The "-d" option is a core feature, and can help to learn about a file and its
+format, whether or not anything is extracted from it.
+
+* Digital preservation of information about file formats. Its source code
+encapsulates information about some formats that might otherwise be hard to
+find.
+
 There's not much rhyme or reason to the formats Deark supports, or to its
 features. It exists mainly because I've written too many one-off programs to
 decode file formats, and wanted to put everything in one place. Part of the
 goal is to support (mainly old) formats that are under-served by other
-open-source software. Most of the formats it currently supports are related to
+open-source software. Many of the formats it currently supports are related to
 graphics, but it is not limited to graphics formats.
 
-One of Deark's purposes is as a tool to find interesting things that are stored
-in files, but usually ignored, such as thumbnail images and comments. The "-d"
-option is a core feature, and can often be used to learn a lot about the file
-in question, whether or not anything is extracted from it.
-
-Another purpose is digital preservation. It is meant to encapsulate information
-about old formats that might otherwise be hard to find.
-
-One guideline is that any image format supported by XnView, and not by any
-well-maintained open source software, is a candidate for being supported, no
-matter how obscure it may be.
+One guideline is that any image format supported by the XnView image viewer,
+and not by any well-maintained open source software, is a candidate for being
+supported, no matter how obscure it may be.
 
 ## Security ##
 
@@ -48,18 +55,18 @@ in various circumstances.
 
 Deark essentially throws up its hands and gives up. By default, it names all
 output filenames to start with "output.". It overwrites existing files with no
-warning. It bans all ASCII characters that could conceivably be problematical,
-as well as any non-ASCII characters that don't appear on its whitelist.
+warning (unless you use -n). It bans all ASCII characters that could
+conceivably be problematical, as well as any non-ASCII characters that don't
+appear on its whitelist.
 
-When Deark writes to a ZIP file (the "-zip" option), it doesn't have to worry
-about what to name the internal files. It can palm that problem off onto your
-unzip program. It is slightly more tolerant in this case, but not as tolerant
-as it could be.
+When Deark writes to a ZIP or tar file (the "-zip"/"-tar" option), it doesn't
+have to worry about what to name the internal files. It can palm that problem
+off onto your unzip/untar program. It is more tolerant in this case.
 
-Currently, directory paths are never maintained as such. I.e., Deark never
-writes a file to anything but the current directory (unless the -o option
-contains a "/"). It doesn't even do this when writing to a ZIP file (though
-this may change in future version).
+Directory paths are only maintained as such if you use -zip/-tar (and you don't
+use "-opt archive:subdirs=0"). Deark generally does not write a file anywhere
+other than the current directory, though you can tell it to do so by using -o,
+-arcfn, or -k3.
 
 ## The "Is this one format or two?" problem ##
 
@@ -129,23 +136,32 @@ characters.
 Most file attributes (such as file ownership) are ignored when extracting
 files, but Deark does try to maintain the "executable" status of output
 files, for formats which store this attribute. The Windows version of Deark
-does not use this information, except when writing to a ZIP file.
+does not use this information, except when writing to a ZIP/tar file.
 
 This is a simple yes/no flag. It does not distinguish between
 owner-executable and world-executable, for example.
 
+## Directory "files" and empty directories ##
+
+Some archive formats contain independent representations of subdirectores,
+allowing empty directories, and directory attributes, to be stored. By default,
+Deark retains these entries when writing to a ZIP/tar file, and otherwise
+ignores them. This behavior can be changed with "-opt keepdirentries". Even so,
+Deark never creates directories directly. Instead, it may create marker files
+with a ".dir" extension.
+
+Note that this means the -zip/-tar option can affect the numbering of output
+files used by, e.g., the -get option.
+
 ## Modification times ##
 
 In certain cases, Deark tries to maintain the modification time of the original
-file.
+file. This only happens with timestamps contained inside the input file.
 
 If a timestamp does not include a time zone, the time will be assumed to be in
-Universal Time (UTC). This is usually wrong, but since Deark is intended for
-use with ancient files of unknown provenance, there is really nothing else it
-can do (short of asking the user, which would be annoying, and almost always
-useless). The timestamp was presumably intended to be in the original user's
-time zone, but there is no reason to think that the *current* user's time zone
-would be relevant in any way.
+Universal Time (UTC), unless the -intz option was used. Deark is expected to be
+used with files that were created long ago and far away, so it never assumes
+that the Deark user's time zone is relevant.
 
 Note that if you are extracting to a system that does not store file times in
 UTC (often the case on Windows), the timestamps may not be very accurate.
@@ -157,6 +173,14 @@ This raises the question of whether Deark should use this as the last-modified
 time of the extracted thumbnail file. Currently, Deark *does* do this, but it
 must be acknowledged that there's something not quite right about it, because
 the thumbnail may have been created much later than the original image.
+
+## The .iptctiff and .8bimtiff formats ##
+
+In some cases, Deark saves IPTC metadata, or Photoshop Resources (also
+semi-incorrectly known as "8BIM"), to a file. These data formats don't have a
+good *file* format to use, so Deark wraps them in a minimal TIFF-based
+container. You can reprocess this container file with Deark, and it may decode
+the data (use -d), or extract the raw data to a file.
 
 ## I've never heard of that format! ##
 
@@ -184,6 +208,9 @@ will (hopefully) be sufficient:
 This will build an executable file named "deark". Deark has no dependencies,
 other than the standard C libraries.
 
+It is possible to configure the build by setting certain environment variables.
+See the scripts at scripts/example-build-* for examples.
+
 It is safe to build Deark using "parallel make", i.e. "make -j". This will
 speed up the build, in most cases.
 
@@ -192,8 +219,9 @@ For example:
 
     $ sudo cp deark /usr/local/bin/
 
-For Microsoft Windows, the project files in proj/vs2008 should work for Visual
-Studio 2008 and later. Alternatively, you can use Cygwin.
+For Microsoft Windows, the project files in proj/vs2019 should work for
+sufficiently new versions of Micrsoft Visual Studio. Alternatively, you can use
+Cygwin.
 
 ## Developer notes ##
 

@@ -9,9 +9,9 @@
 DE_DECLARE_MODULE(de_module_j2c);
 
 struct page_ctx {
-	de_int64 ncomp;
-	de_int64 j2c_sot_pos;
-	de_int64 j2c_sot_length;
+	i64 ncomp;
+	i64 j2c_sot_pos;
+	i64 j2c_sot_length;
 };
 
 typedef struct localctx_struct {
@@ -21,12 +21,12 @@ typedef struct localctx_struct {
 struct marker_info;
 
 typedef void (*handler_fn_type)(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos, de_int64 data_size);
+	const struct marker_info *mi, i64 pos, i64 data_size);
 
 #define FLAG_NO_DATA       0x0100
 
 struct marker_info {
-	de_byte seg_type;
+	u8 seg_type;
 	unsigned int flags;
 	char shortname[12];
 	char longname[80];
@@ -35,15 +35,15 @@ struct marker_info {
 
 // Static info about markers/segments.
 struct marker_info1 {
-	de_byte seg_type;
+	u8 seg_type;
 	unsigned int flags;
 	const char *shortname;
 	const char *longname;
 	handler_fn_type hfn;
 };
 
-static void handle_comment(deark *c, lctx *d, de_int64 pos, de_int64 comment_size,
-   int encoding)
+static void handle_comment(deark *c, lctx *d, i64 pos, i64 comment_size,
+   de_encoding encoding)
 {
 	de_ucstring *s = NULL;
 	int write_to_file;
@@ -89,16 +89,16 @@ done:
 }
 
 static void handler_cme(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos, de_int64 data_size)
+	const struct marker_info *mi, i64 pos, i64 data_size)
 {
-	de_int64 reg_val;
-	de_int64 comment_pos;
-	de_int64 comment_size;
+	i64 reg_val;
+	i64 comment_pos;
+	i64 comment_size;
 	const char *name;
 
 	if(data_size<2) goto done;
 
-	reg_val = de_getui16be(pos);
+	reg_val = de_getu16be(pos);
 	switch(reg_val) {
 	case 0: name="binary"; break;
 	case 1: name="text"; break;
@@ -121,41 +121,41 @@ done:
 }
 
 static void handler_siz(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos1, de_int64 len)
+	const struct marker_info *mi, i64 pos1, i64 len)
 {
 	unsigned int capa;
-	de_int64 w, h;
-	de_int64 pos = pos1;
-	de_int64 ncomp;
-	de_int64 k;
+	i64 w, h;
+	i64 pos = pos1;
+	i64 ncomp;
+	i64 k;
 
-	capa = (unsigned int)de_getui16be_p(&pos);
+	capa = (unsigned int)de_getu16be_p(&pos);
 	de_dbg(c, "capabilities: 0x%04x", capa);
 
-	w = de_getui32be_p(&pos);
-	h = de_getui32be_p(&pos);
-	de_dbg(c, "dimensions of reference grid: %"INT64_FMT DE_CHAR_TIMES "%"INT64_FMT, w, h);
+	w = de_getu32be_p(&pos);
+	h = de_getu32be_p(&pos);
+	de_dbg(c, "dimensions of reference grid: %"I64_FMT DE_CHAR_TIMES "%"I64_FMT, w, h);
 
-	w = de_getui32be_p(&pos);
-	h = de_getui32be_p(&pos);
-	de_dbg(c, "offset to image area: %"INT64_FMT",%"INT64_FMT, w, h);
+	w = de_getu32be_p(&pos);
+	h = de_getu32be_p(&pos);
+	de_dbg(c, "offset to image area: %"I64_FMT",%"I64_FMT, w, h);
 
-	w = de_getui32be_p(&pos);
-	h = de_getui32be_p(&pos);
-	de_dbg(c, "dimensions of reference tile: %"INT64_FMT DE_CHAR_TIMES "%"INT64_FMT, w, h);
+	w = de_getu32be_p(&pos);
+	h = de_getu32be_p(&pos);
+	de_dbg(c, "dimensions of reference tile: %"I64_FMT DE_CHAR_TIMES "%"I64_FMT, w, h);
 
-	w = de_getui32be_p(&pos);
-	h = de_getui32be_p(&pos);
-	de_dbg(c, "offset to first tile: %"INT64_FMT",%"INT64_FMT, w, h);
+	w = de_getu32be_p(&pos);
+	h = de_getu32be_p(&pos);
+	de_dbg(c, "offset to first tile: %"I64_FMT",%"I64_FMT, w, h);
 
-	ncomp = de_getui16be_p(&pos);
+	ncomp = de_getu16be_p(&pos);
 	de_dbg(c, "number of components: %d", (int)ncomp);
 
 	for(k=0; k<ncomp; k++) {
-		de_byte prec, xr, yr;
+		u8 prec, xr, yr;
 
 		if(pos >= pos1+len) goto done;
-		de_dbg(c, "component[%d] info at %"INT64_FMT, (int)k, pos);
+		de_dbg(c, "component[%d] info at %"I64_FMT, (int)k, pos);
 		de_dbg_indent(c, 1);
 		prec = de_getbyte_p(&pos);
 		de_dbg(c, "precision: %d", (int)prec);
@@ -170,22 +170,22 @@ done:
 }
 
 static void handler_tlm(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos1, de_int64 len)
+	const struct marker_info *mi, i64 pos1, i64 len)
 {
-	de_byte b;
-	de_byte item_size_code;
-	de_int64 item_size;
-	de_int64 pos = pos1;
-	de_byte t_code, p_code;
-	de_int64 t_size, p_size;
-	de_int64 num_items;
-	de_int64 k;
+	u8 b;
+	u8 item_size_code;
+	i64 item_size;
+	i64 pos = pos1;
+	u8 t_code, p_code;
+	i64 t_size, p_size;
+	i64 num_items;
+	i64 k;
 
 	if(len<2) goto done;
 	b = de_getbyte_p(&pos);
 	de_dbg(c, "index: %d", (int)b);
 
-	item_size_code = (de_int64)de_getbyte_p(&pos);
+	item_size_code = (i64)de_getbyte_p(&pos);
 	de_dbg(c, "item size code: 0x%02x", (unsigned int)item_size_code);
 	de_dbg_indent(c, 1);
 	t_code = (item_size_code & 0x30)>>4;
@@ -205,24 +205,24 @@ static void handler_tlm(deark *c, lctx *d, struct page_ctx *pg,
 	de_dbg(c, "calculated number of items: %d", (int)num_items);
 
 	for(k=0; k<num_items; k++) {
-		de_int64 x;
-		de_dbg(c, "item[%d] at %"INT64_FMT, (int)k, pos);
+		i64 x;
+		de_dbg(c, "item[%d] at %"I64_FMT, (int)k, pos);
 		de_dbg_indent(c, 1);
 		if(t_size>0) {
 			if(t_size==1) {
-				x = (de_int64)de_getbyte_p(&pos);
+				x = (i64)de_getbyte_p(&pos);
 			}
 			else {
-				x = de_getui16be_p(&pos);
+				x = de_getu16be_p(&pos);
 			}
 			de_dbg(c, "tile number: %u", (unsigned int)x);
 		}
 
 		if(p_size==2) {
-			x = de_getui16be_p(&pos);
+			x = de_getu16be_p(&pos);
 		}
 		else {
-			x = de_getui32be_p(&pos);
+			x = de_getu32be_p(&pos);
 		}
 		de_dbg(c, "tile length: %u", (unsigned int)x);
 		de_dbg_indent(c, -1);
@@ -233,20 +233,20 @@ done:
 }
 
 static void handler_sot(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos1, de_int64 len)
+	const struct marker_info *mi, i64 pos1, i64 len)
 {
-	de_int64 x;
-	de_int64 b;
-	de_int64 pos = pos1;
+	i64 x;
+	i64 b;
+	i64 pos = pos1;
 
 	pg->j2c_sot_pos = 0;
 	pg->j2c_sot_length = 0;
 	if(len<8) return;
 
 	pg->j2c_sot_pos = pos1 - 4;
-	x = de_getui16be_p(&pos);
+	x = de_getu16be_p(&pos);
 	de_dbg(c, "tile number: %d", (int)x);
-	pg->j2c_sot_length = de_getui32be_p(&pos);
+	pg->j2c_sot_length = de_getu32be_p(&pos);
 	de_dbg(c, "length: %u", (unsigned int)pg->j2c_sot_length);
 	b = de_getbyte_p(&pos);
 	de_dbg(c, "tile-part instance: %d", (int)b);
@@ -255,13 +255,13 @@ static void handler_sot(deark *c, lctx *d, struct page_ctx *pg,
 }
 
 static void handler_cod(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos1, de_int64 len)
+	const struct marker_info *mi, i64 pos1, i64 len)
 {
-	de_int64 pos = pos1;
-	de_byte coding_style;
+	i64 pos = pos1;
+	u8 coding_style;
 	de_ucstring *s = NULL;
-	de_byte b;
-	de_int64 n;
+	u8 b;
+	i64 n;
 
 	if(len<5) goto done;
 	coding_style = de_getbyte_p(&pos);
@@ -289,7 +289,7 @@ static void handler_cod(deark *c, lctx *d, struct page_ctx *pg,
 
 	b = de_getbyte_p(&pos);
 	de_dbg(c, "progression order: %d", (int)b);
-	n = de_getui16be_p(&pos);
+	n = de_getu16be_p(&pos);
 	de_dbg(c, "number of layers: %d", (int)n);
 	b = de_getbyte_p(&pos);
 
@@ -303,10 +303,10 @@ done:
 }
 
 static void handler_qcd(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos1, de_int64 len)
+	const struct marker_info *mi, i64 pos1, i64 len)
 {
-	de_int64 pos = pos1;
-	de_byte q_style;
+	i64 pos = pos1;
+	u8 q_style;
 
 	if(len<1) goto done;
 	q_style = de_getbyte_p(&pos);
@@ -321,16 +321,16 @@ done:
 }
 
 static void handler_qcc(deark *c, lctx *d, struct page_ctx *pg,
-	const struct marker_info *mi, de_int64 pos1, de_int64 len)
+	const struct marker_info *mi, i64 pos1, i64 len)
 {
-	de_int64 pos = pos1;
-	de_int64 compnum;
+	i64 pos = pos1;
+	i64 compnum;
 
 	if(pg->ncomp<257) {
 		compnum = de_getbyte_p(&pos);
 	}
 	else {
-		compnum = de_getui16be_p(&pos);
+		compnum = de_getu16be_p(&pos);
 	}
 	de_dbg(c, "component number: %d", (int)compnum);
 
@@ -363,16 +363,16 @@ static const struct marker_info1 marker_info1_arr[] = {
 };
 
 // Caller allocates mi
-static int get_marker_info(deark *c, lctx *d, struct page_ctx *pg, de_byte seg_type,
+static int get_marker_info(deark *c, lctx *d, struct page_ctx *pg, u8 seg_type,
 	struct marker_info *mi)
 {
-	de_int64 k;
+	i64 k;
 
-	de_memset(mi, 0, sizeof(struct marker_info));
+	de_zeromem(mi, sizeof(struct marker_info));
 	mi->seg_type = seg_type;
 
 	// First, try to find the segment type in the static marker info.
-	for(k=0; k<(de_int64)DE_ITEMS_IN_ARRAY(marker_info1_arr); k++) {
+	for(k=0; k<(i64)DE_ITEMS_IN_ARRAY(marker_info1_arr); k++) {
 		const struct marker_info1 *mi1 = &marker_info1_arr[k];
 
 		if(mi1->seg_type == seg_type) {
@@ -408,7 +408,7 @@ done:
 }
 
 static void do_segment(deark *c, lctx *d, struct page_ctx *pg, const struct marker_info *mi,
-	de_int64 payload_pos, de_int64 payload_size)
+	i64 payload_pos, i64 payload_size)
 {
 	de_dbg(c, "segment 0x%02x (%s) at %d, dpos=%d, dlen=%d",
 		(unsigned int)mi->seg_type, mi->longname, (int)(payload_pos-4),
@@ -423,10 +423,10 @@ static void do_segment(deark *c, lctx *d, struct page_ctx *pg, const struct mark
 }
 
 static int do_read_scan_data(deark *c, lctx *d, struct page_ctx *pg,
-	de_int64 pos1, de_int64 *bytes_consumed)
+	i64 pos1, i64 *bytes_consumed)
 {
-	de_int64 pos = pos1;
-	de_byte b0, b1;
+	i64 pos = pos1;
+	u8 b0, b1;
 
 	*bytes_consumed = c->infile->len - pos1; // default
 	de_dbg(c, "scan data at %d", (int)pos1);
@@ -437,7 +437,7 @@ static int do_read_scan_data(deark *c, lctx *d, struct page_ctx *pg,
 		// The previous SOT segment may have told us where this scan data ends.
 		*bytes_consumed = pg->j2c_sot_pos + pg->j2c_sot_length - pos1;
 		if(*bytes_consumed < 0) *bytes_consumed = 0;
-		de_dbg(c, "[%"INT64_FMT" bytes of scan data at %"INT64_FMT"]",
+		de_dbg(c, "[%"I64_FMT" bytes of scan data at %"I64_FMT"]",
 			*bytes_consumed, pos1);
 		pg->j2c_sot_pos = 0;
 		pg->j2c_sot_length = 0;
@@ -480,15 +480,15 @@ done:
 // Note: This module is structured like this because the code was split off
 // from the jpeg module. Support for multiple codestreams is disabled, and
 // might never need to be implemented.)
-static int do_j2c_page(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_consumed)
+static int do_j2c_page(deark *c, lctx *d, i64 pos1, i64 *bytes_consumed)
 {
-	de_byte b;
-	de_int64 pos = pos1;
-	de_int64 seg_size;
-	de_byte seg_type;
+	u8 b;
+	i64 pos = pos1;
+	i64 seg_size;
+	u8 seg_type;
 	int found_marker;
 	struct marker_info mi;
-	de_int64 scan_byte_count;
+	i64 scan_byte_count;
 	int retval = 0;
 	struct page_ctx *pg = NULL;
 
@@ -540,7 +540,7 @@ static int do_j2c_page(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_consume
 		}
 
 		// If we get here, we're reading a segment that has a size field.
-		seg_size = de_getui16be(pos);
+		seg_size = de_getu16be(pos);
 		if(pos<2) break; // bogus size
 
 		do_segment(c, d, pg, &mi, pos+2, seg_size-2);
@@ -559,8 +559,8 @@ done:
 
 static void do_j2c_internal(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_int64 bytes_consumed;
+	i64 pos;
+	i64 bytes_consumed;
 
 	pos = 0;
 	if(pos >= c->infile->len) goto done;

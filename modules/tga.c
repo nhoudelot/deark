@@ -8,28 +8,28 @@
 DE_DECLARE_MODULE(de_module_tga);
 
 struct tgaimginfo {
-	de_int64 width, height;
-	de_int64 img_size_in_bytes;
+	i64 width, height;
+	i64 img_size_in_bytes;
 };
 
 typedef struct localctx_struct {
-	de_int64 id_field_len;
+	i64 id_field_len;
 #define FMT_TGA 0
 #define FMT_VST 1
 	int file_format;
-	de_byte color_map_type;
-	de_byte img_type;
+	u8 color_map_type;
+	u8 img_type;
 	struct tgaimginfo main_image;
 	struct tgaimginfo thumbnail_image;
-	de_int64 cmap_start;
-	de_int64 cmap_length;
-	de_int64 cmap_depth;
-	de_int64 pixel_depth;
-	de_byte image_descriptor;
-	de_int64 num_attribute_bits;
-	de_byte attributes_type;
-	de_byte top_down, right_to_left;
-	de_byte interleave_mode;
+	i64 cmap_start;
+	i64 cmap_length;
+	i64 cmap_depth;
+	i64 pixel_depth;
+	u8 image_descriptor;
+	i64 num_attribute_bits;
+	u8 attributes_type;
+	u8 top_down, right_to_left;
+	u8 interleave_mode;
 	int has_signature;
 	int has_extension_area;
 	int has_alpha_channel; // Our guess as to whether the image has transparency.
@@ -44,28 +44,29 @@ typedef struct localctx_struct {
 	int color_type;
 	const char *cmpr_name;
 	const char *clrtype_name;
-	de_int64 bytes_per_pixel; // May be meaningless if pixel_depth is not a multiple of 8
-	de_int64 bytes_per_pal_entry;
-	de_int64 pal_size_in_bytes;
-	de_int64 aspect_ratio_num, aspect_ratio_den;
-	de_int64 thumbnail_offset;
-	de_uint32 pal[256];
+	i64 bytes_per_pixel; // May be meaningless if pixel_depth is not a multiple of 8
+	i64 bytes_per_pal_entry;
+	i64 pal_size_in_bytes;
+	i64 aspect_ratio_num, aspect_ratio_den;
+	i64 thumbnail_offset;
+	u32 pal[256];
+	struct de_timestamp mod_time;
 } lctx;
 
 static void do_decode_image_default(deark *c, lctx *d, struct tgaimginfo *imginfo, dbuf *unc_pixels,
 	de_finfo *fi, unsigned int createflags)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_byte b;
-	de_uint32 clr;
-	de_byte a;
-	de_int64 rowspan;
+	i64 i, j;
+	u8 b;
+	u32 clr;
+	u8 a;
+	i64 rowspan;
 	int output_bypp;
 	unsigned int getrgbflags;
-	de_int64 interleave_stride;
-	de_int64 interleave_pass;
-	de_int64 cur_rownum; // 0-based, does not account for bottom-up orientation
+	i64 interleave_stride;
+	i64 interleave_pass;
+	i64 cur_rownum; // 0-based, does not account for bottom-up orientation
 
 	if(d->pixel_depth==1) {
 		de_warn(c, "1-bit TGA images are not portable, and may not be decoded correctly");
@@ -100,7 +101,7 @@ static void do_decode_image_default(deark *c, lctx *d, struct tgaimginfo *imginf
 	interleave_pass = 0;
 
 	for(j=0; j<imginfo->height; j++) {
-		de_int64 j_adj;
+		i64 j_adj;
 
 		if(d->top_down)
 			j_adj = cur_rownum;
@@ -116,7 +117,7 @@ static void do_decode_image_default(deark *c, lctx *d, struct tgaimginfo *imginf
 		}
 
 		for(i=0; i<imginfo->width; i++) {
-			de_int64 i_adj;
+			i64 i_adj;
 
 			if(d->right_to_left)
 				i_adj = imginfo->width-1-i;
@@ -127,7 +128,7 @@ static void do_decode_image_default(deark *c, lctx *d, struct tgaimginfo *imginf
 				de_convert_row_bilevel(unc_pixels, j*rowspan, img, j_adj, 0);
 			}
 			else if(d->color_type==TGA_CLRTYPE_TRUECOLOR && (d->pixel_depth==15 || d->pixel_depth==16)) {
-				clr = (de_uint32)dbuf_getui16le(unc_pixels, j*rowspan + i*d->bytes_per_pixel);
+				clr = (u32)dbuf_getu16le(unc_pixels, j*rowspan + i*d->bytes_per_pixel);
 				clr = de_rgb555_to_888(clr);
 				de_bitmap_setpixel_rgb(img, i_adj, j_adj, clr);
 			}
@@ -165,7 +166,11 @@ static void do_decode_image(deark *c, lctx *d, struct tgaimginfo *imginfo, dbuf 
 	fi = de_finfo_create(c);
 
 	if(token) {
-		fi->file_name = de_strdup(c, token);
+		de_finfo_set_name_from_sz(c, fi, token, 0, DE_ENCODING_LATIN1);
+	}
+
+	if(d->mod_time.is_valid) {
+		fi->image_mod_time = d->mod_time;
 	}
 
 	do_decode_image_default(c, d, imginfo, unc_pixels, fi, createflags);
@@ -178,9 +183,9 @@ static void do_decode_image(deark *c, lctx *d, struct tgaimginfo *imginfo, dbuf 
 // claim to have transparency but don't, or that claim not to but do...
 static void do_prescan_image(deark *c, lctx *d, dbuf *unc_pixels)
 {
-	de_int64 num_pixels;
-	de_int64 i;
-	de_byte b[4];
+	i64 num_pixels;
+	i64 i;
+	u8 b[4];
 	int has_alpha_0 = 0;
 	int has_alpha_partial = 0;
 	int has_alpha_255 = 0;
@@ -269,13 +274,13 @@ static void do_prescan_image(deark *c, lctx *d, dbuf *unc_pixels)
 	}
 }
 
-static int do_decode_rle(deark *c, lctx *d, de_int64 pos1, dbuf *unc_pixels)
+static int do_decode_rle(deark *c, lctx *d, i64 pos1, dbuf *unc_pixels)
 {
-	de_byte b;
-	de_int64 count;
-	de_int64 k;
-	de_byte buf[8];
-	de_int64 pos = pos1;
+	u8 b;
+	i64 count;
+	i64 k;
+	u8 buf[8];
+	i64 pos = pos1;
 
 	while(1) {
 		if(pos >= c->infile->len) break;
@@ -285,7 +290,7 @@ static int do_decode_rle(deark *c, lctx *d, de_int64 pos1, dbuf *unc_pixels)
 		pos++;
 
 		if(b & 0x80) { // RLE block
-			count = (de_int64)(b - 0x80) + 1;
+			count = (i64)(b - 0x80) + 1;
 			de_read(buf, pos, d->bytes_per_pixel);
 			pos += d->bytes_per_pixel;
 			for(k=0; k<count; k++) {
@@ -293,7 +298,7 @@ static int do_decode_rle(deark *c, lctx *d, de_int64 pos1, dbuf *unc_pixels)
 			}
 		}
 		else { // uncompressed block
-			count = (de_int64)(b) + 1;
+			count = (i64)(b) + 1;
 			dbuf_copy(c->infile, pos, count * d->bytes_per_pixel, unc_pixels);
 			pos += count * d->bytes_per_pixel;
 		}
@@ -306,7 +311,7 @@ static int do_decode_rle(deark *c, lctx *d, de_int64 pos1, dbuf *unc_pixels)
 static void do_decode_thumbnail(deark *c, lctx *d)
 {
 	dbuf *unc_pixels = NULL;
-	de_int64 hdrsize = 2;
+	i64 hdrsize = 2;
 
 	de_dbg(c, "thumbnail image at %d", (int)d->thumbnail_offset);
 	de_dbg_indent(c, 1);
@@ -318,15 +323,15 @@ static void do_decode_thumbnail(deark *c, lctx *d)
 	// it's anybody's guess what format the thumbnail will use.
 
 	// TGA 2.0 spec says the dimensions are one *byte* each.
-	d->thumbnail_image.width = (de_int64)de_getbyte(d->thumbnail_offset);
-	d->thumbnail_image.height = (de_int64)de_getbyte(d->thumbnail_offset+1);
+	d->thumbnail_image.width = (i64)de_getbyte(d->thumbnail_offset);
+	d->thumbnail_image.height = (i64)de_getbyte(d->thumbnail_offset+1);
 	de_dbg(c, "thumbnail dimensions: %d"DE_CHAR_TIMES"%d", (int)d->thumbnail_image.width, (int)d->thumbnail_image.height);
 
 	if(d->thumbnail_image.width!=0 && d->thumbnail_image.height==0) {
 		de_warn(c, "Thumbnail image height is 0. Assuming the file incorrectly uses "
 			"16-bit thumbnail dimensions, instead of 8.");
-		d->thumbnail_image.width = de_getui16le(d->thumbnail_offset);
-		d->thumbnail_image.height = de_getui16le(d->thumbnail_offset+2);
+		d->thumbnail_image.width = de_getu16le(d->thumbnail_offset);
+		d->thumbnail_image.height = de_getu16le(d->thumbnail_offset+2);
 		de_dbg(c, "revised thumbnail dimensions: %d"DE_CHAR_TIMES"%d", (int)d->thumbnail_image.width, (int)d->thumbnail_image.height);
 		hdrsize = 4;
 	}
@@ -342,10 +347,10 @@ done:
 	de_dbg_indent(c, -1);
 }
 
-static int do_read_palette(deark *c, lctx *d, de_int64 pos)
+static int do_read_palette(deark *c, lctx *d, i64 pos)
 {
-	de_int64 i;
-	de_int64 idx;
+	i64 i;
+	i64 idx;
 	unsigned int getrgbflags;
 
 	if(d->color_type != TGA_CLRTYPE_PALETTE) {
@@ -375,9 +380,13 @@ static int do_read_palette(deark *c, lctx *d, de_int64 pos)
 	return 1;
 }
 
-static void do_read_extension_area(deark *c, lctx *d, de_int64 pos)
+static void do_read_extension_area(deark *c, lctx *d, i64 pos)
 {
-	de_int64 ext_area_size;
+	i64 ext_area_size;
+	i64 k;
+	int has_date;
+	de_ucstring *s = NULL;
+	i64 val[6];
 
 	de_dbg(c, "extension area at %d", (int)pos);
 	if(pos > c->infile->len - 2) {
@@ -386,19 +395,78 @@ static void do_read_extension_area(deark *c, lctx *d, de_int64 pos)
 	}
 
 	de_dbg_indent(c, 1);
-	ext_area_size = de_getui16le(pos);
+
+	s = ucstring_create(c);
+
+	ext_area_size = de_getu16le(pos);
 	de_dbg(c, "extension area size: %d", (int)ext_area_size);
 	if(ext_area_size<495) goto done;
 
 	d->has_extension_area = 1;
 
-	// TODO: Retain the aspect ratio. (Need sample files. Nobody seems to use this field.)
-	d->aspect_ratio_num = de_getui16le(pos+474);
-	d->aspect_ratio_den = de_getui16le(pos+476);
-	de_dbg(c, "aspect ratio: %d/%d", (int)d->aspect_ratio_num, (int)d->aspect_ratio_den);
+	ucstring_empty(s);
+	dbuf_read_to_ucstring(c->infile, pos+2, 41, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
+	ucstring_strip_trailing_spaces(s);
+	de_dbg(c, "author: \"%s\"", ucstring_getpsz_d(s));
 
-	d->thumbnail_offset = de_getui32le(pos+486);
+	for(k=0; k<4; k++) {
+		ucstring_empty(s);
+		dbuf_read_to_ucstring(c->infile, pos+43+81*k, 81, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
+		ucstring_strip_trailing_spaces(s);
+		de_dbg(c, "comment line %d: \"%s\"", (int)k, ucstring_getpsz_d(s));
+	}
+
+	// date/time: pos=367, size=12
+	has_date = 0;
+	for(k=0; k<6; k++) {
+		val[k] = de_getu16le(pos+367+2*k);
+		if(val[k]!=0) has_date = 1;
+	}
+	if(has_date) {
+		char timestamp_buf[64];
+
+		de_make_timestamp(&d->mod_time, val[2], val[0], val[1], val[3], val[4], val[5]);
+		d->mod_time.tzcode = DE_TZCODE_LOCAL;
+		de_timestamp_to_string(&d->mod_time, timestamp_buf, sizeof(timestamp_buf), 0);
+		de_dbg(c, "timestamp: %s", timestamp_buf);
+	}
+
+	// Job name: pos=379, size=41 (not implemented)
+	// Job time: pos=420, size=6 (not implemented)
+
+	ucstring_empty(s);
+	dbuf_read_to_ucstring(c->infile, pos+426, 41, s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
+	ucstring_strip_trailing_spaces(s);
+	de_dbg(c, "software id: \"%s\"", ucstring_getpsz_d(s));
+
+	val[0] = de_getu16le(pos+467);
+	val[1] = (i64)de_getbyte(pos+469);
+	if(val[0]!=0 || val[1]!=32) {
+		de_dbg(c, "software version: %u,%u,%u",
+			(unsigned int)(val[0]/100), (unsigned int)(val[0]%100),
+			(unsigned int)val[1]);
+	}
+
+	val[0] = de_getu32le(pos+470);
+	if(val[0]!=0) {
+		de_dbg(c, "background color: 0x%08x", (unsigned int)val[0]);
+	}
+
+	// TODO: Retain the aspect ratio. (Need sample files. Nobody seems to use this field.)
+	d->aspect_ratio_num = de_getu16le(pos+474);
+	d->aspect_ratio_den = de_getu16le(pos+476);
+	if(d->aspect_ratio_den!=0) {
+		de_dbg(c, "aspect ratio: %d/%d", (int)d->aspect_ratio_num, (int)d->aspect_ratio_den);
+	}
+
+	// Gamma: pos=478, size=4 (not implemented)
+	// Color correction table offset: pos=482, size=4 (not implemented)
+
+	d->thumbnail_offset = de_getu32le(pos+486);
 	de_dbg(c, "thumbnail image offset: %d", (int)d->thumbnail_offset);
+
+	val[0] = de_getu32le(pos+490);
+	de_dbg(c, "scan line table offset: %"I64_FMT, val[0]);
 
 	d->attributes_type = de_getbyte(pos+494);
 	de_dbg(c, "attributes type: %d", (int)d->attributes_type);
@@ -410,13 +478,14 @@ static void do_read_extension_area(deark *c, lctx *d, de_int64 pos)
 
 done:
 	de_dbg_indent(c, -1);
+	ucstring_destroy(s);
 }
 
-static void do_read_developer_area(deark *c, lctx *d, de_int64 pos)
+static void do_read_developer_area(deark *c, lctx *d, i64 pos)
 {
-	de_int64 num_tags;
-	de_int64 i;
-	de_int64 tag_id, tag_data_pos, tag_data_size;
+	i64 num_tags;
+	i64 i;
+	i64 tag_id, tag_data_pos, tag_data_size;
 
 	de_dbg(c, "developer area at %d", (int)pos);
 	if(pos > c->infile->len - 2) {
@@ -425,13 +494,13 @@ static void do_read_developer_area(deark *c, lctx *d, de_int64 pos)
 	}
 
 	de_dbg_indent(c, 1);
-	num_tags = de_getui16le(pos);
+	num_tags = de_getu16le(pos);
 	de_dbg(c, "number of tags: %d", (int)num_tags);
 	for(i=0; i<num_tags; i++) {
 		if(i>=200) break;
-		tag_id = de_getui16le(pos + 2 + 10*i);
-		tag_data_pos = de_getui32le(pos + 2 + 10*i + 2);
-		tag_data_size = de_getui32le(pos + 2 + 10*i + 6);
+		tag_id = de_getu16le(pos + 2 + 10*i);
+		tag_data_pos = de_getu32le(pos + 2 + 10*i + 2);
+		tag_data_size = de_getu32le(pos + 2 + 10*i + 6);
 		de_dbg(c, "tag #%d: id=%d, pos=%d, size=%d", (int)i, (int)tag_id,
 			(int)tag_data_pos, (int)tag_data_size);
 
@@ -440,7 +509,7 @@ static void do_read_developer_area(deark *c, lctx *d, de_int64 pos)
 			de_dbg_indent(c, 1);
 			// TODO: We could retrieve the pixel density settings from the Photoshop data,
 			// but it's not clear whether they are ever useful.
-			de_fmtutil_handle_photoshop_rsrc(c, c->infile, tag_data_pos, tag_data_size);
+			de_fmtutil_handle_photoshop_rsrc(c, c->infile, tag_data_pos, tag_data_size, 0x0);
 			de_dbg_indent(c, -1);
 		}
 	}
@@ -449,15 +518,15 @@ static void do_read_developer_area(deark *c, lctx *d, de_int64 pos)
 
 static void do_read_footer(deark *c, lctx *d)
 {
-	de_int64 footerpos;
-	de_int64 ext_offset, dev_offset;
+	i64 footerpos;
+	i64 ext_offset, dev_offset;
 
 	footerpos = c->infile->len - 26;
 	de_dbg(c, "v2 footer at %d", (int)footerpos);
 	de_dbg_indent(c, 1);
-	ext_offset = de_getui32le(footerpos);
+	ext_offset = de_getu32le(footerpos);
 	de_dbg(c, "extension area offset: %d", (int)ext_offset);
-	dev_offset = de_getui32le(footerpos+4);
+	dev_offset = de_getu32le(footerpos+4);
 	de_dbg(c, "developer area offset: %d", (int)dev_offset);
 	de_dbg_indent(c, -1);
 
@@ -476,7 +545,7 @@ static void do_read_image_descriptor(deark *c, lctx *d)
 	de_dbg(c, "descriptor: 0x%02x", (unsigned int)d->image_descriptor);
 
 	de_dbg_indent(c, 1);
-	d->num_attribute_bits = (de_int64)(d->image_descriptor & 0x0f);
+	d->num_attribute_bits = (i64)(d->image_descriptor & 0x0f);
 	de_dbg(c, "number of %s bits: %d",
 		d->file_format==FMT_VST?"alpha channel":"attribute",
 		(int)d->num_attribute_bits);
@@ -500,7 +569,7 @@ static int do_read_tga_headers(deark *c, lctx *d)
 	de_dbg(c, "header at %d", 0);
 	de_dbg_indent(c, 1);
 
-	d->id_field_len = (de_int64)de_getbyte(0);
+	d->id_field_len = (i64)de_getbyte(0);
 	d->color_map_type = de_getbyte(1);
 	de_dbg(c, "color map type: %d", (int)d->color_map_type);
 	d->img_type = de_getbyte(2);
@@ -545,18 +614,18 @@ static int do_read_tga_headers(deark *c, lctx *d)
 	de_dbg_indent(c, -1);
 
 	if(d->color_map_type != 0) {
-		d->cmap_start = de_getui16le(3);
-		d->cmap_length = de_getui16le(5);
-		d->cmap_depth = (de_int64)de_getbyte(7);
+		d->cmap_start = de_getu16le(3);
+		d->cmap_length = de_getu16le(5);
+		d->cmap_depth = (i64)de_getbyte(7);
 		de_dbg(c, "color map start: %d, len: %d, depth: %d", (int)d->cmap_start,
 			(int)d->cmap_length, (int)d->cmap_depth);
 	}
 
-	d->main_image.width = de_getui16le(12);
-	d->main_image.height = de_getui16le(14);
+	d->main_image.width = de_getu16le(12);
+	d->main_image.height = de_getu16le(14);
 	de_dbg_dimensions(c, d->main_image.width, d->main_image.height);
 
-	d->pixel_depth = (de_int64)de_getbyte(16);
+	d->pixel_depth = (i64)de_getbyte(16);
 	de_dbg(c, "pixel depth: %d", (int)d->pixel_depth);
 
 	do_read_image_descriptor(c, d);
@@ -583,7 +652,7 @@ static int do_read_vst_headers(deark *c, lctx *d)
 	de_dbg(c, "header at %d", 0);
 	de_dbg_indent(c, 1);
 
-	d->id_field_len = (de_int64)de_getbyte(0);
+	d->id_field_len = (i64)de_getbyte(0);
 
 	if(d->id_field_len==0) {
 		// ??? XnView seems to do something like this.
@@ -593,11 +662,11 @@ static int do_read_vst_headers(deark *c, lctx *d)
 	d->cmpr_type = TGA_CMPR_NONE;
 	d->cmpr_name = "none";
 
-	d->main_image.width = de_getui16le(12);
-	d->main_image.height = de_getui16le(14);
+	d->main_image.width = de_getu16le(12);
+	d->main_image.height = de_getu16le(14);
 	de_dbg_dimensions(c, d->main_image.width, d->main_image.height);
 
-	d->pixel_depth = (de_int64)de_getbyte(16);
+	d->pixel_depth = (i64)de_getbyte(16);
 	de_dbg(c, "pixel depth: %d", (int)d->pixel_depth);
 	if(d->pixel_depth==8) {
 		d->color_map_type = 1;
@@ -639,7 +708,7 @@ static int has_signature(deark *c)
 static void detect_file_format(deark *c, lctx *d)
 {
 	int has_igch;
-	de_byte img_type;
+	u8 img_type;
 
 	d->has_signature = has_signature(c);
 	de_dbg(c, "has v2 signature: %s", d->has_signature?"yes":"no");
@@ -663,10 +732,10 @@ static void detect_file_format(deark *c, lctx *d)
 static void de_run_tga(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
+	i64 pos;
 	dbuf *unc_pixels = NULL;
 	int saved_indent_level;
-	de_int64 rowspan_tmp;
+	i64 rowspan_tmp;
 
 	de_dbg_indent_save(c, &saved_indent_level);
 	d = de_malloc(c, sizeof(lctx));
@@ -786,8 +855,8 @@ done:
 
 static int de_identify_tga(deark *c)
 {
-	de_byte b[18];
-	de_byte x;
+	u8 b[18];
+	u8 x;
 	int has_tga_ext;
 
 	if(has_signature(c)) {

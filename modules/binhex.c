@@ -6,33 +6,35 @@
 
 #include <deark-config.h>
 #include <deark-private.h>
+#include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_binhex);
 
 typedef struct localctx_struct {
 	dbuf *decoded;
 	dbuf *decompressed;
+	struct de_crcobj *crco;
 } lctx;
 
 // Returns 0-63 if successful, 255 for invalid character.
-static de_byte get_char_value(de_byte b)
+static u8 get_char_value(u8 b)
 {
 	int k;
-	static const de_byte binhexchars[] =
+	static const u8 binhexchars[] =
 		"!\"#$%&'()*+,-012345689@ABCDEFGHIJKLMNPQRSTUVXYZ[`abcdefhijklmpqr";
 
 	for(k=0; k<64; k++) {
-		if(b==binhexchars[k]) return (de_byte)k;
+		if(b==binhexchars[k]) return (u8)k;
 	}
 	return 255;
 }
 
 // Decode the base-64 data, and write to d->decoded.
 // Returns 0 if there was an error.
-static int do_decode_main(deark *c, lctx *d, de_int64 pos)
+static int do_decode_main(deark *c, lctx *d, i64 pos)
 {
-	de_byte b;
-	de_byte x;
-	de_byte pending_byte = 0;
+	u8 b;
+	u8 x;
+	u8 pending_byte = 0;
 	unsigned int pending_bits_used = 0;
 
 	while(1) {
@@ -81,129 +83,130 @@ static int do_decode_main(deark *c, lctx *d, de_int64 pos)
 	return 1;
 }
 
-// Decompress d->decoded, write to d->decompressed
-static int do_decompress(deark *c, lctx *d)
+static void our_writecallback(dbuf *f, const u8 *buf, i64 buf_len)
 {
-	de_int64 pos;
-	de_byte b;
-	de_byte lastbyte = 0x00;
-	de_byte countcode;
+	struct de_crcobj *crco = (struct de_crcobj*)f->userdata;
+	de_crcobj_addbuf(crco, buf, buf_len);
+}
 
-	pos = 0;
-	while(pos < d->decoded->len) {
-		b = dbuf_getbyte(d->decoded, pos);
-		pos++;
-		if(b!=0x90) {
-			dbuf_writebyte(d->decompressed, b);
-			lastbyte = b;
-			continue;
-		}
+// Returns 0 on fatal error.
+static int do_extract_one_file(deark *c, lctx *d, dbuf *inf, i64 pos,
+	i64 len, de_finfo *fi, const char *forkname)
+{
+	u32 crc_reported;
+	u32 crc_calc;
+	dbuf *outf = NULL;
 
-		// b = 0x90, which is a special code.
-		countcode = dbuf_getbyte(d->decoded, pos);
-		pos++;
-
-		if(countcode==0x00) {
-			// Not RLE, just an escaped 0x90 byte.
-			dbuf_writebyte(d->decompressed, 0x90);
-			lastbyte = 0x90;
-			continue;
-		}
-
-		// RLE. We already emitted one byte (because the byte to repeat
-		// comes before the repeat count), so write countcode-1 bytes.
-		dbuf_write_run(d->decompressed, lastbyte, countcode-1);
+	if(len==0) return 1;
+	if(len<0) return 0;
+	if(pos+len > inf->len) {
+		de_err(c, "%s fork goes beyond end of file", forkname);
+		return 0;
 	}
 
-	de_dbg(c, "size after decompression: %d", (int)d->decompressed->len);
+	outf = dbuf_create_output_file(c, NULL, fi, 0);
+
+	outf->writecallback_fn = our_writecallback;
+	outf->userdata = (void*)d->crco;
+	de_crcobj_reset(d->crco);
+
+	dbuf_copy(inf, pos, len, outf);
+
+	dbuf_close(outf);
+
+	// Here, the BinHex spec says we should feed two 0x00 bytes to the CRC
+	// calculation, to account for the CRC field itself. However, if I do
+	// that, none of files I've tested have the correct CRC. If I don't,
+	// all of them have the correct CRC.
+	//de_crcobj_addbuf(d->crco, (const u8*)"\0\0", 2);
+
+	crc_reported = (u32)dbuf_getu16be(inf, pos+len);
+	de_dbg(c, "%s fork crc (reported): 0x%04x", forkname,
+		(unsigned int)crc_reported);
+
+	crc_calc = de_crcobj_getval(d->crco);
+	de_dbg(c, "%s fork crc (calculated): 0x%04x", forkname,
+		(unsigned int)crc_calc);
+
+	if(crc_calc != crc_reported) {
+		de_err(c, "CRC check failed for %s fork", forkname);
+	}
+
 	return 1;
 }
 
 static void do_extract_files(deark *c, lctx *d)
 {
-	de_int64 name_len;
+	i64 name_len;
 	dbuf *f;
 	de_finfo *fi_r = NULL;
 	de_finfo *fi_d = NULL;
-	de_int64 pos;
-	de_int64 dlen, rlen;
-	de_int64 hc, dc, rc; // Checksums
-	char *filename_buf = NULL;
+	i64 pos;
+	i64 dlen, rlen;
+	u32 hc; // Header CRC
+	de_ucstring *fname = NULL;
 
 	f = d->decompressed;
 	pos = 0;
 
 	// Read the header
 
-	name_len = (de_int64)dbuf_getbyte(f, pos);
+	name_len = (i64)dbuf_getbyte(f, pos);
 	pos+=1;
 	de_dbg(c, "name len: %d", (int)name_len);
 
-	// TODO: What encoding does the name use? Can we convert it?
 	fi_r = de_finfo_create(c);
 	fi_d = de_finfo_create(c);
-	filename_buf = de_malloc(c, 5 + name_len +1);
-	dbuf_read(f, (de_byte*)(filename_buf+5), pos, name_len);
-	filename_buf[5+name_len] = '\0';
-	de_memcpy(filename_buf, "rsrc.", 5);
-	de_finfo_set_name_from_sz(c, fi_r, filename_buf, DE_ENCODING_ASCII);
-	de_memcpy(filename_buf, "data.", 5);
-	de_finfo_set_name_from_sz(c, fi_d, filename_buf, DE_ENCODING_ASCII);
+	if(name_len > 0) {
+		fname = ucstring_create(c);
+		dbuf_read_to_ucstring(f, pos, name_len, fname, 0, DE_ENCODING_MACROMAN);
+		de_dbg(c, "name: \"%s\"", ucstring_getpsz(fname));
+		de_finfo_set_name_from_ucstring(c, fi_d, fname, 0);
+		fi_d->original_filename_flag = 1;
+		ucstring_append_sz(fname, ".rsrc", DE_ENCODING_LATIN1);
+		de_finfo_set_name_from_ucstring(c, fi_r, fname, 0);
+	}
+	else {
+		de_finfo_set_name_from_sz(c, fi_r, "rsrc", 0, DE_ENCODING_LATIN1);
+		de_finfo_set_name_from_sz(c, fi_d, "data", 0, DE_ENCODING_LATIN1);
+	}
 
 	pos+=name_len;
 	pos+=1; // Skip the 0x00 byte after the name.
 
 	// The next (& last) 20 bytes of the header have predictable positions.
 
-	dlen = dbuf_getui32be(f, pos+10);
-	rlen = dbuf_getui32be(f, pos+14);
-	hc = dbuf_getui16be(f, pos+18);
+	dlen = dbuf_getu32be(f, pos+10);
+	rlen = dbuf_getu32be(f, pos+14);
+	hc = (u32)dbuf_getu16be(f, pos+18);
 
-	de_dbg(c, "data fork len = %d", (int)dlen);
-	de_dbg(c, "resource fork len = %d", (int)rlen);
-	de_dbg(c, "header checksum = 0x%04x", (unsigned int)hc);
+	de_dbg(c, "data fork len: %d", (int)dlen);
+	de_dbg(c, "resource fork len: %d", (int)rlen);
+	de_dbg(c, "header crc (reported): 0x%04x", (unsigned int)hc);
 
-	// TODO: Verify checksums
+	// TODO: Verify header CRC
 
 	pos+=20;
 
 	// Data fork
 
-	if(pos+dlen > f->len) {
-		de_err(c, "Data fork goes beyond end of file");
-		goto done;
-	}
-
-	if(dlen>0)
-		dbuf_create_file_from_slice(f, pos, dlen, NULL, fi_d, 0);
+	if(!do_extract_one_file(c, d, f, pos, dlen, fi_d, "data")) goto done;
 	pos += dlen;
-
-	dc = dbuf_getui16be(f, pos);
-	pos += 2;
-	de_dbg(c, "data fork checksum = 0x%04x", (unsigned int)dc);
+	pos += 2; // for the CRC
 
 	// Resource fork
 
-	if(pos+rlen > f->len) {
-		de_err(c, "Resource fork goes beyond end of file");
-		goto done;
-	}
-
-	if(rlen>0)
-		dbuf_create_file_from_slice(f, pos, rlen, NULL, fi_r, 0);
+	if(!do_extract_one_file(c, d, f, pos, rlen, fi_r, "resource")) goto done;
 	pos += rlen;
-
-	rc = dbuf_getui16be(f, pos);
-	pos += 2;
-	de_dbg(c, "resource fork checksum = 0x%04x", (unsigned int)rc);
+	pos += 2; // for the CRC
 
 done:
 	de_finfo_destroy(c, fi_r);
 	de_finfo_destroy(c, fi_d);
-	de_free(c, filename_buf);
+	ucstring_destroy(fname);
 }
 
-static void do_binhex(deark *c, lctx *d, de_int64 pos)
+static void do_binhex(deark *c, lctx *d, i64 pos)
 {
 	int ret;
 
@@ -215,27 +218,34 @@ static void do_binhex(deark *c, lctx *d, de_int64 pos)
 	ret = do_decode_main(c, d, pos);
 	if(!ret) goto done;
 
-	ret = do_decompress(c, d);
+	ret = de_fmtutil_decompress_rle90(d->decoded, 0, d->decoded->len, d->decompressed,
+		0, 0, 0);
 	if(!ret) goto done;
+	de_dbg(c, "size after decompression: %d", (int)d->decompressed->len);
+
+	d->crco = de_crcobj_create(c, DE_CRCOBJ_CRC16_CCITT);
 
 	do_extract_files(c, d);
 
 done:
 	dbuf_close(d->decompressed);
+	d->decompressed = NULL;
 	dbuf_close(d->decoded);
 	d->decoded = NULL;
+	de_crcobj_destroy(d->crco);
+	d->crco = NULL;
 }
 
-static int find_start(deark *c, de_int64 *foundpos)
+static int find_start(deark *c, i64 *foundpos)
 {
-	de_int64 pos;
-	de_byte b;
+	i64 pos;
+	u8 b;
 	int ret;
 
 	*foundpos = 0;
 
 	ret = dbuf_search(c->infile,
-		(const de_byte*)"(This file must be converted with BinHex", 40,
+		(const u8*)"(This file must be converted with BinHex", 40,
 		0, 8192, &pos);
 	if(!ret) return 0;
 
@@ -274,7 +284,7 @@ static int find_start(deark *c, de_int64 *foundpos)
 static void de_run_binhex(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
+	i64 pos;
 	int ret;
 
 	d = de_malloc(c, sizeof(lctx));
@@ -294,7 +304,7 @@ done:
 static int de_identify_binhex(deark *c)
 {
 	int ret;
-	de_int64 foundpos;
+	i64 foundpos;
 
 	if(!dbuf_memcmp(c->infile, 0,
 		"(This file must be converted with BinHex", 40))

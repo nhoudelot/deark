@@ -8,39 +8,46 @@
 #include <deark-private.h>
 #include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_ico);
+DE_DECLARE_MODULE(de_module_win1ico);
 
 typedef struct localctx_struct {
 	int is_cur;
 	int extract_unused_masks;
 } lctx;
 
-static void do_extract_png(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void do_extract_png(deark *c, lctx *d, i64 pos, i64 len)
 {
 	char ext[64];
-	de_int64 w, h;
+	i64 w, h;
 
 	// Peek at the PNG data, to figure out the dimensions.
-	w = de_getui32be(pos+16);
-	h = de_getui32be(pos+20);
+	w = de_getu32be(pos+16);
+	h = de_getu32be(pos+20);
 
 	de_snprintf(ext, sizeof(ext), "%dx%d.png", (int)w, (int)h);
 	dbuf_create_file_from_slice(c->infile, pos, len, ext, NULL, 0);
 }
 
-static void do_image_data(deark *c, lctx *d, de_int64 img_num, de_int64 pos1, de_int64 len)
+static void warn_inv_bkgd(deark *c)
+{
+	de_warn(c, "This image contains inverse background pixels, which are not "
+		"fully supported.");
+}
+
+static void do_image_data(deark *c, lctx *d, i64 img_num, i64 pos1, i64 len)
 {
 	struct de_bmpinfo bi;
-	de_int64 fg_start, bg_start;
-	de_int64 i, j;
-	de_uint32 pal[256];
-	de_int64 p;
+	i64 fg_start, bg_start;
+	i64 i, j;
+	u32 pal[256];
+	i64 p;
 	de_bitmap *img = NULL;
-	de_byte x;
-	de_byte cr=0, cg=0, cb=0, ca=0;
+	u8 x;
+	u8 cr=0, cg=0, cb=0, ca=0;
 	int inverse_warned = 0;
 	int use_mask;
 	int has_alpha_channel = 0;
-	de_int64 bitcount_color;
+	i64 bitcount_color;
 	char filename_token[32];
 
 	if(pos1+len > c->infile->len) return;
@@ -97,7 +104,7 @@ static void do_image_data(deark *c, lctx *d, de_int64 img_num, de_int64 pos1, de
 	img->flipped = 1;
 
 	// Read palette
-	de_memset(pal, 0, sizeof(pal));
+	de_zeromem(pal, sizeof(pal));
 	if (bi.pal_entries > 0) {
 		if(bi.pal_entries>256) goto done;
 
@@ -152,7 +159,7 @@ static void do_image_data(deark *c, lctx *d, de_int64 img_num, de_int64 pos1, de
 				// TODO: Should we do this only for cursors, and not icons?
 				if(x==1 && (cr || cg || cb)) {
 					if(!inverse_warned) {
-						de_warn(c, "This image contains inverse background pixels, which are not fully supported.");
+						warn_inv_bkgd(c);
 						inverse_warned = 1;
 					}
 					if((i+j)%2) {
@@ -189,15 +196,21 @@ done:
 	de_bitmap_destroy(img);
 }
 
-static void do_image_dir_entry(deark *c, lctx *d, de_int64 img_num, de_int64 pos)
+static void do_image_dir_entry(deark *c, lctx *d, i64 img_num, i64 pos)
 {
-	de_int64 data_size;
-	de_int64 data_offset;
+	i64 data_size;
+	i64 data_offset;
 
 	de_dbg(c, "image #%d, index at %d", (int)img_num, (int)pos);
 	de_dbg_indent(c, 1);
-	data_size = de_getui32le(pos+8);
-	data_offset = de_getui32le(pos+12);
+	if(d->is_cur) {
+		i64 hotspot_x, hotspot_y;
+		hotspot_x = de_getu16le(pos+4);
+		hotspot_y = de_getu16le(pos+6);
+		de_dbg(c, "hotspot: %d,%d", (int)hotspot_x, (int)hotspot_y);
+	}
+	data_size = de_getu32le(pos+8);
+	data_offset = de_getu32le(pos+12);
 	de_dbg(c, "offset=%d, size=%d", (int)data_offset, (int)data_size);
 
 	do_image_data(c, d, img_num, data_offset, data_size);
@@ -208,14 +221,14 @@ static void do_image_dir_entry(deark *c, lctx *d, de_int64 img_num, de_int64 pos
 static void de_run_ico(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 x;
-	de_int64 num_images;
-	de_int64 i;
+	i64 x;
+	i64 num_images;
+	i64 i;
 
 	d = de_malloc(c, sizeof(lctx));
 	d->extract_unused_masks = (c->extract_level>=2);
 
-	x = de_getui16le(2);
+	x = de_getu16le(2);
 	if(x==1) {
 		d->is_cur=0;
 		de_declare_fmt(c, "Windows Icon");
@@ -229,7 +242,7 @@ static void de_run_ico(deark *c, de_module_params *mparams)
 		goto done;
 	}
 
-	num_images = de_getui16le(4);
+	num_images = de_getu16le(4);
 	de_dbg(c, "images in file: %d", (int)num_images);
 	if(!de_good_image_count(c, num_images)) {
 		goto done;
@@ -247,10 +260,10 @@ done:
 // function tries to screen out other formats.
 static int is_windows_ico_or_cur(deark *c)
 {
-	de_int64 numicons;
-	de_int64 i;
-	de_int64 size, offset;
-	de_byte buf[4];
+	i64 numicons;
+	i64 i;
+	i64 size, offset;
+	u8 buf[4];
 
 	de_read(buf, 0, 4);
 	if(de_memcmp(buf, "\x00\x00\x01\x00", 4) &&
@@ -259,7 +272,7 @@ static int is_windows_ico_or_cur(deark *c)
 		return 0;
 	}
 
-	numicons = de_getui16le(4);
+	numicons = de_getu16le(4);
 
 	// Each icon must use at least 16 bytes for the directory, 40 for the
 	// info header, 4 for the foreground, and 4 for the mask.
@@ -267,8 +280,8 @@ static int is_windows_ico_or_cur(deark *c)
 
 	// Examine the first few icon index entries.
 	for(i=0; i<numicons && i<8; i++) {
-		size = de_getui32le(6+16*i+8);
-		offset = de_getui32le(6+16*i+12);
+		size = de_getu32le(6+16*i+8);
+		offset = de_getu32le(6+16*i+12);
 		if(size<48) return 0;
 		if(offset < 6+numicons*16) return 0;
 		if(offset+size > c->infile->len) return 0;
@@ -287,7 +300,166 @@ static int de_identify_ico(deark *c)
 void de_module_ico(deark *c, struct deark_module_info *mi)
 {
 	mi->id = "ico";
-	mi->desc = "Microsoft Windows icon";
+	mi->desc = "Microsoft Windows icon/cursor";
 	mi->run_fn = de_run_ico;
 	mi->identify_fn = de_identify_ico;
+}
+
+////////////////////////////////////////////////////////////////
+
+typedef struct win1ctx_struct {
+	unsigned int type_code;
+	int is_cur;
+	const char *type_name;
+	i64 bytes_consumed;
+} win1ctx;
+
+static int decode_win1_icon(deark *c, win1ctx *d, i64 pos1)
+{
+	de_bitmap *mask = NULL;
+	de_bitmap *img = NULL;
+	i64 w, h;
+	i64 rowspan;
+	i64 i, j;
+	i64 pos = pos1;
+	int has_inv_bkgd = 0;
+	int retval = 0;
+	int saved_indent_level;
+
+	de_dbg_indent_save(c, &saved_indent_level);
+	if(pos1+12 > c->infile->len) goto done;
+
+	de_dbg(c, "%s at %"I64_FMT, d->type_name, pos);
+	de_dbg_indent(c, 1);
+
+	if(d->is_cur) {
+		i64 hotspot_x, hotspot_y;
+		hotspot_x = de_getu16le(pos);
+		hotspot_y = de_getu16le(pos+2);
+		de_dbg(c, "hotspot: %d,%d", (int)hotspot_x, (int)hotspot_y);
+	}
+	pos += 4;
+
+	w = de_getu16le_p(&pos);
+	h = de_getu16le_p(&pos);
+	de_dbg_dimensions(c, w, h);
+	if(!de_good_image_dimensions(c, w, h)) goto done;
+
+	rowspan = de_getu16le_p(&pos);
+	de_dbg(c, "bytes/row: %d", (int)rowspan);
+
+	if(d->is_cur) {
+		unsigned int csColor;
+		csColor = (unsigned int)de_getu16le(pos);
+		de_dbg(c, "csColor: 0x%04x", csColor);
+	}
+	pos += 2;
+
+	mask = de_bitmap_create(c, w, h, 1);
+	img = de_bitmap_create(c, w, h, 4);
+	de_dbg(c, "mask at %"I64_FMT, pos);
+	de_convert_image_bilevel(c->infile, pos, rowspan, mask, 0);
+	pos += rowspan*h;
+	de_dbg(c, "foreground at %"I64_FMT, pos);
+	de_convert_image_bilevel(c->infile, pos, rowspan, img, 0);
+	pos += rowspan*h;
+
+	// This whole loop does nothing, except handle inverse-background-color
+	// pixels. But we have to do something, because such pixels are not
+	// uncommon.
+	for(j=0; j<h; j++) {
+		for(i=0; i<w; i++) {
+			u8 fgclr, maskclr;
+			u32 newclr;
+
+			maskclr = DE_COLOR_K(de_bitmap_getpixel(mask, i, j));
+			if(maskclr==0) continue;
+			fgclr = DE_COLOR_K(de_bitmap_getpixel(img, i, j));
+			if(fgclr==0) continue;
+			de_bitmap_setpixel_gray(mask, i, j, 255-128);
+			if((i+j)%2) newclr = DE_MAKE_RGB(255,0,128);
+			else newclr = DE_MAKE_RGB(128,0,255);
+			de_bitmap_setpixel_rgb(img, i, j, newclr);
+			has_inv_bkgd = 1;
+		}
+	}
+	if(has_inv_bkgd) {
+		warn_inv_bkgd(c);
+	}
+
+	de_bitmap_apply_mask(img, mask, DE_BITMAPFLAG_WHITEISTRNS);
+	de_bitmap_write_to_file(img, NULL, DE_CREATEFLAG_OPT_IMAGE);
+	d->bytes_consumed = pos - pos1;
+	retval = 1;
+
+done:
+	de_bitmap_destroy(img);
+	de_bitmap_destroy(mask);
+	de_dbg_indent_restore(c, saved_indent_level);
+	return retval;
+}
+
+static void de_run_win1ico(deark *c, de_module_params *mparams)
+{
+	win1ctx *d = NULL;
+	i64 pos = 0;
+
+	d = de_malloc(c, sizeof(win1ctx));
+	d->type_code = (unsigned int)de_getu16le_p(&pos);
+	de_dbg(c, "type code: 0x%04x", d->type_code);
+	if(d->type_code==0x0003 || d->type_code==0x0103 || d->type_code==0x0203) {
+		d->is_cur = 1;
+		d->type_name = "cursor";
+	}
+	else if(d->type_code==0x0001 || d->type_code==0x0101 || d->type_code==0x0201) {
+		d->type_name = "icon";
+	}
+	else {
+		de_err(c, "Not a Windows 1.0 icon/cursor");
+		goto done;
+	}
+	de_declare_fmtf(c, "Windows 1.0 %s", d->type_name);
+
+	if(!decode_win1_icon(c, d, pos)) goto done;
+	pos += d->bytes_consumed;
+	if((d->type_code & 0xff00)==0x0200) {
+		// In this case there are supposed to be two icons (this is untested).
+		if(!decode_win1_icon(c, d, pos)) goto done;
+	}
+
+done:
+	de_free(c, d);
+}
+
+static int de_identify_win1ico(deark *c)
+{
+	u8 tclo, tchi;
+	i64 w, h, wb;
+	int has_ext;
+
+	tclo = de_getbyte(0);
+	tchi = de_getbyte(1);
+	if((tclo==1 || tclo==3) && (tchi<=2)) {
+		;
+	}
+	else {
+		return 0;
+	}
+
+	w = de_getu16le(6);
+	h = de_getu16le(8);
+	wb = de_getu16le(10);
+	if(w<16 || h<16 || w>256 || h>256) return 0;
+	if(wb != ((w+15)/16)*2) return 0;
+	has_ext = de_input_file_has_ext(c, (tclo==3)?"cur":"ico");
+	if((w==32 || w==64) && h==w && has_ext) return 100;
+	return has_ext ? 70 : 6;
+}
+
+void de_module_win1ico(deark *c, struct deark_module_info *mi)
+{
+	mi->id = "win1ico";
+	mi->desc = "Microsoft Windows 1.0 icon/cursor";
+	mi->run_fn = de_run_win1ico;
+	mi->identify_fn = de_identify_win1ico;
 }

@@ -21,7 +21,7 @@ typedef struct localctx_struct {
 	dbuf *outf;
 } lctx;
 
-static const char *get_token(de_byte b)
+static const char *get_token(u8 b)
 {
 	static const char *t[] = {"END","FOR","NEXT","DATA","INPUT#","INPUT","DIM",
 		"READ","LET","GOTO","RUN","IF","RESTORE","GOSUB","RETURN","REM","STOP",
@@ -37,17 +37,17 @@ static const char *get_token(de_byte b)
 	return NULL;
 }
 
-static void process_line(deark *c, lctx *d, de_int64 file_pos, de_int64 mem_pos,
-	de_int64 line_size)
+static void process_line(deark *c, lctx *d, i64 file_pos, i64 mem_pos,
+	i64 line_size)
 {
-	de_int64 line_num;
-	de_int64 pos;
-	de_byte b;
+	i64 line_num;
+	i64 pos;
+	u8 b;
 	const char *token;
 	int in_quote = 0;
 
 	pos = file_pos;
-	line_num = de_getui16le(pos);
+	line_num = de_getu16le(pos);
 	de_dbg(c, "line %d at %d, mem pos=%d, size=%d", (int)line_num, (int)file_pos,
 		(int)mem_pos, (int)line_size);
 	pos += 2;
@@ -92,11 +92,11 @@ static void process_line(deark *c, lctx *d, de_int64 file_pos, de_int64 mem_pos,
 static void de_run_basic_c64(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 file_pos;
-	de_int64 mem_start;
-	de_int64 mem_pos;
-	de_int64 next_line_ptr;
-	de_int64 line_size;
+	i64 file_pos;
+	i64 mem_start;
+	i64 mem_pos;
+	i64 next_line_ptr;
+	i64 line_size;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -110,7 +110,7 @@ static void de_run_basic_c64(deark *c, de_module_params *mparams)
 	while(file_pos < c->infile->len) {
 		mem_pos = file_pos - 2 + mem_start;
 
-		next_line_ptr = de_getui16le(file_pos);
+		next_line_ptr = de_getu16le(file_pos);
 		if(next_line_ptr==0x0000) {
 			break;
 		}
@@ -129,7 +129,7 @@ static void de_run_basic_c64(deark *c, de_module_params *mparams)
 
 static int de_identify_basic_c64(deark *c)
 {
-	de_byte buf[8];
+	u8 buf[8];
 
 	if(de_input_file_has_ext(c, "prg")) {
 		de_read(buf, 0, 2);

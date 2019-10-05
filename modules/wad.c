@@ -9,11 +9,11 @@
 DE_DECLARE_MODULE(de_module_wad);
 
 typedef struct localctx_struct {
-	de_int64 nlumps;
-	de_int64 dir_pos;
+	i64 nlumps;
+	i64 dir_pos;
 } lctx;
 
-static void do_lump_extract(deark *c, lctx *d, de_int64 dpos, de_int64 dlen, struct de_stringreaderdata *srd)
+static void do_lump_extract(deark *c, lctx *d, i64 dpos, i64 dlen, struct de_stringreaderdata *srd)
 {
 	de_finfo *fi = NULL;
 
@@ -22,23 +22,23 @@ static void do_lump_extract(deark *c, lctx *d, de_int64 dpos, de_int64 dlen, str
 	if(dpos<0 || dpos>=c->infile->len || dpos+dlen>c->infile->len) return;
 
 	fi = de_finfo_create(c);
-	de_finfo_set_name_from_ucstring(c, fi, srd->str);
+	de_finfo_set_name_from_ucstring(c, fi, srd->str, 0);
 	fi->original_filename_flag = 1;
 	dbuf_create_file_from_slice(c->infile, dpos, dlen, NULL, fi, 0);
 	de_finfo_destroy(c, fi);
 }
 
-static void do_lump_entry(deark *c, lctx *d, de_int64 lump_idx, de_int64 pos)
+static void do_lump_entry(deark *c, lctx *d, i64 lump_idx, i64 pos)
 {
-	de_int64 lump_pos;
-	de_int64 lump_size;
+	i64 lump_pos;
+	i64 lump_size;
 	struct de_stringreaderdata *srd = NULL;
 
 	de_dbg(c, "lump[%d] dir entry at %d", (int)lump_idx, (int)pos);
 	de_dbg_indent(c, 1);
-	lump_pos = de_getui32le(pos);
+	lump_pos = de_getu32le(pos);
 	de_dbg(c, "data pos: %d", (int)lump_pos);
-	lump_size = de_getui32le(pos+4);
+	lump_size = de_getu32le(pos+4);
 	de_dbg(c, "data size: %d", (int)lump_size);
 
 	// dbuf_read_string is used (instead of dbuf_read_to_ucstring) because
@@ -53,9 +53,9 @@ static void do_lump_entry(deark *c, lctx *d, de_int64 lump_idx, de_int64 pos)
 	de_destroy_stringreaderdata(c, srd);
 }
 
-static int do_directory(deark *c, lctx *d, de_int64 pos)
+static int do_directory(deark *c, lctx *d, i64 pos)
 {
-	de_int64 k;
+	i64 k;
 	de_dbg(c, "directory at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
@@ -72,13 +72,13 @@ done:
 	return 1;
 }
 
-static int do_header(deark *c, lctx *d, de_int64 pos)
+static int do_header(deark *c, lctx *d, i64 pos)
 {
 	de_dbg(c, "header at %d", (int)pos);
 	de_dbg_indent(c, 1);
-	d->nlumps = de_getui32le(pos+4);
+	d->nlumps = de_getu32le(pos+4);
 	de_dbg(c, "#lumps: %d", (int)d->nlumps);
-	d->dir_pos = de_getui32le(pos+8);
+	d->dir_pos = de_getu32le(pos+8);
 	de_dbg(c, "dir pos: %d", (int)d->dir_pos);
 	de_dbg_indent(c, -1);
 	return 1;
@@ -87,7 +87,7 @@ static int do_header(deark *c, lctx *d, de_int64 pos)
 static void de_run_wad(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
+	i64 pos;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -104,7 +104,7 @@ done:
 static int de_identify_wad(deark *c)
 {
 	if(!dbuf_memcmp(c->infile, 1, "WAD", 3)) {
-		de_byte b0;
+		u8 b0;
 		b0 = de_getbyte(0);
 		if(b0=='I' || b0=='P') return 80;
 	}

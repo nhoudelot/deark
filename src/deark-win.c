@@ -8,9 +8,7 @@
 #define DE_NOT_IN_MODULE
 #include "deark-config.h"
 
-#ifndef DE_WINDOWS
-#error "This file is only for Windows builds"
-#endif
+#ifdef DE_WINDOWS
 
 #include <windows.h>
 
@@ -23,13 +21,14 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <time.h>
-#include <sys/utime.h>
 
-int de_strcasecmp(const char *a, const char *b)
-{
-	return _stricmp(a, b);
-}
+// Windows-specific contextual data, mainly for console settings.
+struct de_platform_data {
+	HANDLE msgs_HANDLE;
+	int msgs_HANDLE_is_console;
+	WORD orig_console_attribs;
+	WORD inverse_console_attribs;
+};
 
 void de_vsnprintf(char *buf, size_t buflen, const char *fmt, va_list ap)
 {
@@ -49,7 +48,7 @@ char *de_strdup(deark *c, const char *s)
 	return s2;
 }
 
-de_int64 de_strtoll(const char *string, char **endptr, int base)
+i64 de_strtoll(const char *string, char **endptr, int base)
 {
 	return _strtoi64(string, endptr, base);
 }
@@ -61,6 +60,18 @@ void de_utf8_to_oem(deark *c, const char *src, char *dst, size_t dstlen)
 
 	srcW = de_utf8_to_utf16_strdup(c, src);
 
+	// FIXME: An issue is that WideCharToMultiByte translates some printable
+	// Unicode characters to OEM graphics characters below 0x20. For example, for
+	// CP437, U+000A (LINE FEED) and U+25D9 (INVERSE WHITE CIRCLE) are both
+	// translated to 0x0a.
+	// The printf-like functions we will use on the translated string interpret
+	// bytes below 0x20 as ASCII control characters, so U+25D9 will end up being
+	// misinterpreted as a newline.
+	// I am not sure what to do about this. It might be possible to change the
+	// mode that printf uses, but we at least need newlines to work.
+	// Ideally, we should probably redesign some things so that de_utf8_to_oem()
+	// is not used with strings that contain newlines. But that's a lot of work
+	// for an obscure feature.
 	ret = WideCharToMultiByte(CP_OEMCP, 0, srcW, -1, dst, (int)dstlen, NULL, NULL);
 	if(ret<1) {
 		dst[0]='\0';
@@ -80,7 +91,7 @@ static char *de_utf16_to_utf8_strdup(deark *c, const WCHAR *src)
 	if(ret<1) return NULL;
 
 	dstlen = ret;
-	dst = (char*)de_malloc(c, dstlen*sizeof(char));
+	dst = (char*)de_malloc(c, dstlen);
 
 	ret = WideCharToMultiByte(CP_UTF8, 0, src, -1, dst, dstlen, NULL, NULL);
 	if(ret<1) {
@@ -105,7 +116,7 @@ wchar_t *de_utf8_to_utf16_strdup(deark *c, const char *src)
 	}
 
 	dstlen = ret;
-	dst = (WCHAR*)de_malloc(c, dstlen*sizeof(WCHAR));
+	dst = (WCHAR*)de_mallocarray(c, dstlen, sizeof(WCHAR));
 
 	ret = MultiByteToWideChar(CP_UTF8, 0, src, -1, dst, dstlen);
 	if(ret<1) {
@@ -143,18 +154,13 @@ void de_utf8_to_utf16_to_FILE(deark *c, const char *src, FILE *f)
 	de_free(c, dst_large);
 }
 
-static FILE* de_fopen(deark *c, const char *fn, const WCHAR *modeW,
+static FILE* de_fopenW(deark *c, const WCHAR *fnW, const WCHAR *modeW,
 	char *errmsg, size_t errmsg_len)
 {
 	FILE *f = NULL;
 	errno_t errcode;
-	WCHAR *fnW;
-
-	fnW = de_utf8_to_utf16_strdup(c, fn);
 
 	errcode = _wfopen_s(&f, fnW, modeW);
-
-	de_free(c, fnW);
 
 	errmsg[0] = '\0';
 
@@ -165,7 +171,7 @@ static FILE* de_fopen(deark *c, const char *fn, const WCHAR *modeW,
 	return f;
 }
 
-static int de_examine_file_by_fd(deark *c, int fd, de_int64 *len,
+static int de_examine_file_by_fd(deark *c, int fd, i64 *len,
 	char *errmsg, size_t errmsg_len, unsigned int *returned_flags)
 {
 	struct __stat64 stbuf;
@@ -173,7 +179,7 @@ static int de_examine_file_by_fd(deark *c, int fd, de_int64 *len,
 
 	*returned_flags = 0;
 
-	de_memset(&stbuf, 0, sizeof(struct __stat64));
+	de_zeromem(&stbuf, sizeof(struct __stat64));
 
 	if(0 != _fstat64(fd, &stbuf)) {
 		strerror_s(errmsg, (size_t)errmsg_len, errno);
@@ -185,7 +191,7 @@ static int de_examine_file_by_fd(deark *c, int fd, de_int64 *len,
 		return 0;
 	}
 
-	*len = (de_int64)stbuf.st_size;
+	*len = (i64)stbuf.st_size;
 
 	retval = 1;
 
@@ -193,13 +199,19 @@ done:
 	return retval;
 }
 
-FILE* de_fopen_for_read(deark *c, const char *fn, de_int64 *len,
+FILE* de_fopen_for_read(deark *c, const char *fn, i64 *len,
 	char *errmsg, size_t errmsg_len, unsigned int *returned_flags)
 {
 	int ret;
 	FILE *f;
+	WCHAR *fnW;
 
-	f = de_fopen(c, fn, L"rb", errmsg, errmsg_len);
+	fnW = de_utf8_to_utf16_strdup(c, fn);
+
+	f = de_fopenW(c, fnW, L"rb", errmsg, errmsg_len);
+
+	de_free(c, fnW);
+
 	if(!f) {
 		return NULL;
 	}
@@ -216,11 +228,39 @@ FILE* de_fopen_for_read(deark *c, const char *fn, de_int64 *len,
 
 // flags: 0x1 = append instead of overwriting
 FILE* de_fopen_for_write(deark *c, const char *fn,
-	char *errmsg, size_t errmsg_len, unsigned int flags)
+	char *errmsg, size_t errmsg_len, int overwrite_mode,
+	unsigned int flags)
 {
 	const WCHAR *modeW;
+	WCHAR *fnW = NULL;
+	FILE *f_ret = NULL;
+
 	modeW = (flags&0x1) ? L"ab" : L"wb";
-	return de_fopen(c, fn, modeW, errmsg, errmsg_len);
+	fnW = de_utf8_to_utf16_strdup(c, fn);
+
+	if(overwrite_mode==DE_OVERWRITEMODE_NEVER) {
+		DWORD fa = GetFileAttributesW(fnW);
+		if(fa != INVALID_FILE_ATTRIBUTES) {
+			de_strlcpy(errmsg, "Output file already exists", errmsg_len);
+			goto done;
+		}
+	}
+
+	f_ret = de_fopenW(c, fnW, modeW, errmsg, errmsg_len);
+
+done:
+	de_free(c, fnW);
+	return f_ret;
+}
+
+int de_fseek(FILE *fp, i64 offs, int whence)
+{
+	return _fseeki64(fp, (__int64)offs, whence);
+}
+
+i64 de_ftell(FILE *fp)
+{
+	return (i64)_ftelli64(fp);
 }
 
 int de_fclose(FILE *fp)
@@ -235,21 +275,35 @@ void de_update_file_perms(dbuf *f)
 
 void de_update_file_time(dbuf *f)
 {
-	WCHAR *fnW;
-	struct __utimbuf64 times;
+	WCHAR *fnW = NULL;
+	HANDLE fh = INVALID_HANDLE_VALUE;
+	i64 ft;
+	FILETIME crtime, actime, wrtime;
 	deark *c;
 
 	if(f->btype!=DBUF_TYPE_OFILE) return;
-	if(!f->mod_time.is_valid) return;
+	if(!f->fi_copy) return;
+	if(!f->fi_copy->mod_time.is_valid) return;
 	if(!f->name) return;
 	c = f->c;
 
+	ft = de_timestamp_to_FILETIME(&f->fi_copy->mod_time);
+	if(ft==0) goto done;
 	fnW = de_utf8_to_utf16_strdup(c, f->name);
+	fh = CreateFileW(fnW, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, NULL,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if(fh==INVALID_HANDLE_VALUE) goto done;
 
-	times.modtime = de_timestamp_to_unix_time(&f->mod_time);
-	times.actime = times.modtime;
-	_wutime64(fnW, &times);
+	wrtime.dwHighDateTime = (DWORD)(((u64)ft)>>32);
+	wrtime.dwLowDateTime = (DWORD)(((u64)ft)&0xffffffffULL);
+	actime = wrtime;
+	crtime = wrtime;
+	SetFileTime(fh, &crtime, &actime, &wrtime);
 
+done:
+	if(fh != INVALID_HANDLE_VALUE) {
+		CloseHandle(fh);
+	}
 	de_free(c, fnW);
 }
 
@@ -258,7 +312,7 @@ char **de_convert_args_to_utf8(int argc, wchar_t **argvW)
 	int i;
 	char **argvUTF8;
 
-	argvUTF8 = (char**)de_malloc(NULL, argc*sizeof(char*));
+	argvUTF8 = (char**)de_mallocarray(NULL, argc, sizeof(char*));
 
 	// Convert parameters to UTF-8
 	for(i=0;i<argc;i++) {
@@ -278,99 +332,130 @@ void de_free_utf8_args(int argc, char **argv)
 	de_free(NULL, argv);
 }
 
-// Return an output HANDLE that can be passed to other winconsole functions.
-// n: 1=stdout, 2=stderr
-void *de_winconsole_get_handle(int n)
+struct de_platform_data *de_platformdata_create(deark *c)
 {
-	return (void*)GetStdHandle((n==2)?STD_ERROR_HANDLE:STD_OUTPUT_HANDLE);
+	struct de_platform_data *plctx;
+
+	plctx = de_malloc(c, sizeof(struct de_platform_data));
+	return plctx;
 }
 
-// Does the given HANDLE (cast to void*) seem to be a Windows console?
-int de_winconsole_is_console(void *h1)
+void de_platformdata_destroy(deark *c, struct de_platform_data *plctx)
+{
+	if(!plctx) return;
+	de_free(c, plctx);
+}
+
+// Set the plctx->msgs_HANDLE field, for later use.
+// n: 1=stdout, 2=stderr
+void de_winconsole_init_handle(struct de_platform_data *plctx, int n)
 {
 	DWORD consolemode=0;
-	BOOL n;
+	BOOL b;
 
-	n=GetConsoleMode((HANDLE)h1, &consolemode);
-	return n ? 1 : 0;
+	plctx->msgs_HANDLE = GetStdHandle((n==2)?STD_ERROR_HANDLE:STD_OUTPUT_HANDLE);
+
+	b = GetConsoleMode(plctx->msgs_HANDLE, &consolemode);
+	plctx->msgs_HANDLE_is_console = b ? 1 : 0;
 }
 
-int de_get_current_windows_attributes(void *handle, unsigned int *attrs)
+// Does plctx->msgs_HANDLE seem to be a Windows console?
+int de_winconsole_is_console(struct de_platform_data *plctx)
+{
+	return plctx->msgs_HANDLE_is_console;
+}
+
+// Save current attribs to plctx.
+// Returns 1 on success.
+void de_winconsole_record_current_attributes(struct de_platform_data *plctx)
 {
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
-	if(!GetConsoleScreenBufferInfo((HANDLE)handle, &csbi))
-		return 0;
-	*attrs = (unsigned int)csbi.wAttributes;
+
+	if(GetConsoleScreenBufferInfo(plctx->msgs_HANDLE, &csbi)) {
+		plctx->orig_console_attribs = csbi.wAttributes;
+	}
+	else {
+		plctx->orig_console_attribs = 0x0007;
+	}
+
+	plctx->inverse_console_attribs =
+		(plctx->orig_console_attribs&0xff00) |
+		((plctx->orig_console_attribs&0x000f)<<4) |
+		((plctx->orig_console_attribs&0x00f0)>>4);
+}
+
+// If we think this computer supports 24-bit color ANSI, enable it (if needed)
+// and return 1.
+// Otherwise return 0.
+int de_winconsole_try_enable_ansi24(struct de_platform_data *plctx)
+{
+	// Note: Maybe we should check for Windows 10 (e.g. using
+	// IsWindows10OrGreater()) before calling SetConsoleMode(), but maybe that's
+	// just be a waste of time. Also, IsWindows10OrGreater() is fragile because
+	// it requires a .manifest file with certain properties.
+
+	// TODO: This is not correct. AFAIK, there is a range of Windows 10 builds
+	// that support ANSI codes, but do not support 24-bit color ANSI.
+	// I don't know a *good* way to detect 24-bit color support.
+	// Querying the Windows build number is possible, but requires some hackery,
+	// because Microsoft *really* does not want applications to do that.
+	return de_winconsole_enable_ansi(plctx);
+}
+
+int de_winconsole_enable_ansi(struct de_platform_data *plctx)
+{
+	BOOL b;
+	DWORD oldmode = 0;
+
+	if(!plctx->msgs_HANDLE_is_console) return 1;
+
+	b = GetConsoleMode(plctx->msgs_HANDLE, &oldmode);
+	if(!b) return 0;
+	if(oldmode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) return 1; // Already enabled
+
+	// The ENABLE_VIRTUAL_TERMINAL_PROCESSING mode is what enables interpretation
+	// of ANSI escape codes.
+
+	// Note: This mode seems to be specific to the console window, not to the specific
+	// I/O handle that we pass to SetConsoleMode.
+	// I.e. if both stderr and stdout refer to the console, it doesn't matter which
+	// one we use here.
+	// And if we write an ANSI code to stderr, it could also affect stdout.
+	// That's not what we want, but it shouldn't cause much of a problem for us.
+
+	// Note: This mode seems to get reset automatically when the process ends.
+	// It doesn't affect future processes that run in the same console.
+	// So we don't have to try to set it back when we're done.
+
+	b = SetConsoleMode(plctx->msgs_HANDLE, oldmode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+	if(!b) return 0;
 	return 1;
 }
 
-void de_windows_highlight(void *handle1, unsigned int orig_attr, int x)
+void de_winconsole_highlight(struct de_platform_data *plctx, int x)
 {
 	if(x) {
-		SetConsoleTextAttribute((void*)handle1,
-			(orig_attr&0xff00) |
-			((orig_attr&0x000fU)<<4) |
-			((orig_attr&0x00f0U)>>4) );
+		SetConsoleTextAttribute(plctx->msgs_HANDLE, plctx->inverse_console_attribs);
 	}
 	else {
-		SetConsoleTextAttribute((void*)handle1, (WORD)orig_attr);
+		SetConsoleTextAttribute(plctx->msgs_HANDLE, plctx->orig_console_attribs);
 	}
-}
-
-// Note: Need to keep this function in sync with the implementation in deark-unix.c.
-void de_timestamp_to_string(const struct de_timestamp *ts,
-	char *buf, size_t buf_len, unsigned int flags)
-{
-	de_int64 tmpt_int64;
-	__time64_t tmpt;
-	struct tm tm1;
-	const char *tzlabel;
-	errno_t ret;
-
-	if(!ts->is_valid) {
-		de_strlcpy(buf, "[invalid timestamp]", buf_len);
-		return;
-	}
-
-	de_memset(&tm1, 0, sizeof(struct tm));
-	tmpt_int64 = de_timestamp_to_unix_time(ts);
-	tmpt = (__time64_t)tmpt_int64;
-
-	// _gmtime64_s is documented as supporting times in the range:
-	//  1970-01-01 00:00:00 UTC, through
-	//  3000-12-31 23:59:59 UTC.
-	// I tested it, and on my computer it worked from:
-	//  1969-12-31 12:00:00 UTC, through
-	//  3001-01-01 20:59:59 UTC.
-	// [The behavior of _gmtime64_s does not depend on the user's current
-	// timezone settings, right? I hope?]
-	// TODO: At the very least, we need to support the range ~1900 to 2108,
-	// to cover most of the traditional formats. We probably need a custom
-	// gmtime function.
-	ret = _gmtime64_s(&tm1, &tmpt);
-	if(ret!=0) {
-		de_snprintf(buf, buf_len, "[timestamp out of range: %"INT64_FMT"]", tmpt_int64);
-		return;
-	}
-
-	tzlabel = (flags&0x1)?" UTC":"";
-	de_snprintf(buf, buf_len, "%04d-%02d-%02d %02d:%02d:%02d%s",
-		1900+tm1.tm_year, 1+tm1.tm_mon, tm1.tm_mday,
-		tm1.tm_hour, tm1.tm_min, tm1.tm_sec, tzlabel);
 }
 
 // Note: Need to keep this function in sync with the implementation in deark-unix.c.
 void de_current_time_to_timestamp(struct de_timestamp *ts)
 {
-	__time64_t t;
+	FILETIME ft1;
+	i64 ft;
 
-	de_memset(ts, 0, sizeof(struct de_timestamp));
-	_time64(&t);
-	ts->unix_time = (de_int64)t;
-	ts->is_valid = 1;
+	GetSystemTimeAsFileTime(&ft1);
+	ft = (i64)(((u64)ft1.dwHighDateTime)<<32 | ft1.dwLowDateTime);
+	de_FILETIME_to_timestamp(ft, ts, 0x1);
 }
 
 void de_exitprocess(void)
 {
 	exit(1);
 }
+
+#endif // DE_WINDOWS

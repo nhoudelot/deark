@@ -10,13 +10,13 @@ DE_DECLARE_MODULE(de_module_msp);
 
 typedef struct localctx_struct {
 	int ver; // 1 or 2
-	de_int64 width, height;
+	i64 width, height;
 	dbuf *rowbuf;
 } lctx;
 
 static void do_ver1(deark *c, lctx *d)
 {
-	de_int64 src_rowspan;
+	i64 src_rowspan;
 
 	// TODO: Are version-1 MSP files padded this way?
 	// (Maybe the width is always a multiple of 8, so it doesn't matter.)
@@ -27,12 +27,12 @@ static void do_ver1(deark *c, lctx *d)
 }
 
 static void do_decompress_scanline(deark *c, lctx *d, de_bitmap *img,
-	de_int64 rownum, de_int64 rowoffset, de_int64 bytes_in_row)
+	i64 rownum, i64 rowoffset, i64 bytes_in_row)
 {
-	de_int64 i;
-	de_byte runtype;
-	de_int64 runcount;
-	de_byte value;
+	i64 i;
+	u8 runtype;
+	i64 runcount;
+	u8 value;
 
 	de_dbg2(c, "decompressing row %d", (int)rownum);
 
@@ -48,7 +48,7 @@ static void do_decompress_scanline(deark *c, lctx *d, de_bitmap *img,
 		runtype = de_getbyte(rowoffset+i);
 		i++;
 		if(runtype==0x00) {
-			runcount = (de_int64)de_getbyte(rowoffset+i);
+			runcount = (i64)de_getbyte(rowoffset+i);
 			i++;
 			value = de_getbyte(rowoffset+i);
 			i++;
@@ -57,7 +57,7 @@ static void do_decompress_scanline(deark *c, lctx *d, de_bitmap *img,
 			dbuf_write_run(d->rowbuf, value, runcount);
 		}
 		else {
-			runcount = (de_int64)runtype;
+			runcount = (i64)runtype;
 			de_dbg2(c, "%d bytes uncompressed", (int)runcount);
 			dbuf_copy(c->infile, rowoffset+i, runcount, d->rowbuf);
 			i+=runcount;
@@ -69,17 +69,17 @@ static void do_decompress_scanline(deark *c, lctx *d, de_bitmap *img,
 
 static void do_ver2(deark *c, lctx *d)
 {
-	de_int64 j;
-	de_int64 *rowoffset;
-	de_int64 *rowsize;
+	i64 j;
+	i64 *rowoffset;
+	i64 *rowsize;
 	de_bitmap *img = NULL;
 
-	rowoffset = de_malloc(c, d->height * sizeof(de_int64));
-	rowsize = de_malloc(c, d->height * sizeof(de_int64));
+	rowoffset = de_mallocarray(c, d->height, sizeof(i64));
+	rowsize = de_mallocarray(c, d->height, sizeof(i64));
 
 	// Read the scanline map, and record the row sizes.
 	for(j=0; j<d->height; j++) {
-		rowsize[j] = de_getui16le(32+2*j);
+		rowsize[j] = de_getu16le(32+2*j);
 	}
 
 	// Calculate the position, in the file, of each row.
@@ -113,18 +113,17 @@ static void de_run_msp(deark *c, de_module_params *mparams)
 	d = de_malloc(c, sizeof(lctx));
 
 	d->ver = de_getbyte(0) == 0x4c ? 2 : 1;
-	de_dbg(c, "MSP version %d", (int)d->ver);
+	de_dbg(c, "version: %d", d->ver);
+	de_declare_fmtf(c, "MS Paint v%d", d->ver);
 
-	d->width = de_getui16le(4);
-	d->height = de_getui16le(6);
+	d->width = de_getu16le(4);
+	d->height = de_getu16le(6);
 	de_dbg_dimensions(c, d->width, d->height);
 
 	if(d->ver==1) {
-		de_declare_fmt(c, "MS Paint v1");
 		do_ver1(c, d);
 	}
 	else {
-		de_declare_fmt(c, "MS Paint v2");
 		do_ver2(c, d);
 	}
 
@@ -133,7 +132,7 @@ static void de_run_msp(deark *c, de_module_params *mparams)
 
 static int de_identify_msp(deark *c)
 {
-	de_byte b[4];
+	u8 b[4];
 	de_read(b, 0, 4);
 
 	if(b[0]==0x44 && b[1]==0x61 && b[2]==0x6e && b[3]==0x4d)

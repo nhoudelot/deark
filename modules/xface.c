@@ -18,7 +18,7 @@ static int has_x_header(dbuf *f)
 {
 	char b[8];
 
-	dbuf_read(f, (de_byte*)b, 0, 8);
+	dbuf_read(f, (u8*)b, 0, 8);
 	if((b[0]=='X' || b[0]=='x') &&
 		(b[1]=='-') &&
 		(b[2]=='F' || b[2]=='f') &&
@@ -67,21 +67,21 @@ void de_module_xface(deark *c, struct deark_module_info *mi)
 
 struct compfacei_ctx {
 	de_bitmap *img;
-	de_int64 imgpos_x, imgpos_y;
+	i64 imgpos_x, imgpos_y;
 
-	de_int64 input_parse_pos;
+	i64 input_parse_pos;
 	size_t tokenbuf_strlen;
 	int token_numdigits;
 	unsigned int token_val;
 #define CFI_TOKENBUFLEN 32
-	de_byte tokenbuf[CFI_TOKENBUFLEN];
+	u8 tokenbuf[CFI_TOKENBUFLEN];
 };
 
-static int cfi_is_whitespace(de_byte ch)
+static int cfi_is_whitespace(u8 ch)
 {
 	return (ch==9 || ch==10 || ch==13 || ch==' ');
 }
-static int cfi_is_alnum(de_byte ch)
+static int cfi_is_alnum(u8 ch)
 {
 	return ((ch>='0' && ch<='9') ||
 		(ch>='A' && ch<='Z') ||
@@ -95,7 +95,7 @@ static int cfi_is_alnum(de_byte ch)
 static int cfi_get_next_token_lowlevel(deark *c, struct compfacei_ctx *cfictx)
 {
 	int retval = 0;
-	de_byte ch;
+	u8 ch;
 
 	cfictx->tokenbuf_strlen = 0;
 
@@ -167,13 +167,13 @@ static int cfi_get_next_token(deark *c, struct compfacei_ctx *cfictx)
 	return 1;
 }
 
-static void cfi_set_image_byte(deark *c, struct compfacei_ctx *cfictx, de_byte ch)
+static void cfi_set_image_byte(deark *c, struct compfacei_ctx *cfictx, u8 ch)
 {
 	unsigned int k;
 	for(k=0; k<8; k++) {
 		if(((ch>>(7-k))&0x1)==0) {
 			de_bitmap_setpixel_gray(cfictx->img,
-				cfictx->imgpos_x+(de_int64)k, cfictx->imgpos_y, 255);
+				cfictx->imgpos_x+(i64)k, cfictx->imgpos_y, 255);
 		}
 	}
 	cfictx->imgpos_x += 8;
@@ -185,7 +185,7 @@ static void cfi_set_image_byte(deark *c, struct compfacei_ctx *cfictx, de_byte c
 
 static void de_run_compfacei(deark *c, de_module_params *mparams)
 {
-	de_int64 image_bytes_processed = 0;
+	i64 image_bytes_processed = 0;
 	struct compfacei_ctx *cfictx = NULL;
 
 	cfictx = de_malloc(c, sizeof(struct compfacei_ctx));
@@ -197,11 +197,11 @@ static void de_run_compfacei(deark *c, de_module_params *mparams)
 			goto done;
 		}
 		if(cfictx->token_numdigits==2) {
-			cfi_set_image_byte(c, cfictx, (de_byte)cfictx->token_val);
+			cfi_set_image_byte(c, cfictx, (u8)cfictx->token_val);
 		}
 		else { // Assume numdigits==4
-			cfi_set_image_byte(c, cfictx, (de_byte)(cfictx->token_val>>8));
-			cfi_set_image_byte(c, cfictx, (de_byte)(cfictx->token_val&0xff));
+			cfi_set_image_byte(c, cfictx, (u8)(cfictx->token_val>>8));
+			cfi_set_image_byte(c, cfictx, (u8)(cfictx->token_val&0xff));
 		}
 		image_bytes_processed += cfictx->token_numdigits/2;
 	}
@@ -217,5 +217,4 @@ void de_module_compfacei(deark *c, struct deark_module_info *mi)
 	mi->id = "compfacei";
 	mi->desc = "Compface intermediate format";
 	mi->run_fn = de_run_compfacei;
-	mi->identify_fn = de_identify_none;
 }

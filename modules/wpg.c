@@ -9,32 +9,33 @@
 DE_DECLARE_MODULE(de_module_wpg);
 
 typedef struct localctx_struct {
-	de_int64 start_of_data;
-	de_byte ver_major, ver_minor;
+	i64 start_of_data;
+	u8 ver_major, ver_minor;
 	int opt_fixpal;
 	int has_pal;
-	de_uint32 pal[256];
+	u32 pal[256];
 
 	// Fields used only by the "summary" debug line:
-	de_int64 num_pal_entries; // 0 if no palette
+	i64 num_pal_entries; // 0 if no palette
 	int start_wpg_data_record_ver; // Highest "Start of WPG data" record type
 	int bitmap_record_ver; // Highest "Bitmap" record type
-	de_int64 bitmap_count;
-	de_int64 bpp_of_first_bitmap;
-	de_int64 width_of_first_bitmap;
-	de_int64 height_of_first_bitmap;
+	i64 bitmap_count;
+	i64 bpp_of_first_bitmap;
+	i64 width_of_first_bitmap;
+	i64 height_of_first_bitmap;
+	u8 has_eps1, has_eps2;
 } lctx;
 
-static int do_read_header(deark *c, lctx *d, de_int64 pos1)
+static int do_read_header(deark *c, lctx *d, i64 pos1)
 {
-	de_int64 pos = pos1;
+	i64 pos = pos1;
 
 	de_dbg(c, "header at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
 	pos += 4; // FileId
 
-	d->start_of_data = de_getui32le(pos);
+	d->start_of_data = de_getu32le(pos);
 	de_dbg(c, "start of data: %u", (unsigned int)d->start_of_data);
 	pos += 4;
 
@@ -49,23 +50,23 @@ static int do_read_header(deark *c, lctx *d, de_int64 pos1)
 	return 1;
 }
 
-typedef void (*record_handler_fn)(deark *c, lctx *d, de_byte rectype, de_int64 dpos,
-	de_int64 dlen);
+typedef void (*record_handler_fn)(deark *c, lctx *d, u8 rectype, i64 dpos,
+	i64 dlen);
 
 struct wpg_rectype_info {
-	de_byte rectype;
+	u8 rectype;
 	const char *name;
 	record_handler_fn fn;
 };
 
-static int do_uncompress_rle(deark *c, lctx *d, dbuf *f, de_int64 pos1, de_int64 len,
-	de_int64 rowspan, dbuf *unc_pixels)
+static int do_uncompress_rle(deark *c, lctx *d, dbuf *f, i64 pos1, i64 len,
+	i64 rowspan, dbuf *unc_pixels)
 {
-	de_int64 pos;
-	de_byte b, b2;
-	de_int64 count;
-	de_int64 endpos;
-	de_int64 k;
+	i64 pos;
+	u8 b, b2;
+	i64 count;
+	i64 endpos;
+	i64 k;
 
 	pos = pos1;
 	endpos = pos1+len;
@@ -77,7 +78,7 @@ static int do_uncompress_rle(deark *c, lctx *d, dbuf *f, de_int64 pos1, de_int64
 		b = dbuf_getbyte(f, pos++);
 
 		if(b==0x00) { // repeat scanline
-			de_int64 src_line_pos;
+			i64 src_line_pos;
 
 			count = dbuf_getbyte(f, pos++);
 
@@ -89,16 +90,16 @@ static int do_uncompress_rle(deark *c, lctx *d, dbuf *f, de_int64 pos1, de_int64
 			}
 		}
 		else if(b<=0x7f) { // uncompressed run
-			count = (de_int64)b;
+			count = (i64)b;
 			dbuf_copy(f, pos, count, unc_pixels);
 			pos += count;
 		}
 		else if(b==0x80) { // Special 0xff compression
-			count = (de_int64)dbuf_getbyte(f, pos++);
+			count = (i64)dbuf_getbyte(f, pos++);
 			dbuf_write_run(unc_pixels, 0xff, count);
 		}
 		else { // byte RLE compression
-			count = (de_int64)(b&0x7f);
+			count = (i64)(b&0x7f);
 			b2 = dbuf_getbyte(f, pos++);
 			dbuf_write_run(unc_pixels, b2, count);
 		}
@@ -109,10 +110,10 @@ static int do_uncompress_rle(deark *c, lctx *d, dbuf *f, de_int64 pos1, de_int64
 
 // Make a copy of the global palette, possibly adjusting it in some way.
 // Caller supplies finalpal[256].
-static void get_final_palette(deark *c, lctx *d, de_uint32 *finalpal, de_int64 bpp)
+static void get_final_palette(deark *c, lctx *d, u32 *finalpal, i64 bpp)
 {
-	de_int64 k;
-	de_byte cr, cg, cb;
+	i64 k;
+	u8 cr, cg, cb;
 	int has_3plusbitpal = 0;
 	int has_5plusbitpal = 0;
 	int has_nonblack_color = 0;
@@ -186,20 +187,21 @@ static void get_final_palette(deark *c, lctx *d, de_uint32 *finalpal, de_int64 b
 	}
 }
 
-static void handler_bitmap(deark *c, lctx *d, de_byte rectype, de_int64 dpos1, de_int64 dlen)
+static void handler_bitmap(deark *c, lctx *d, u8 rectype, i64 dpos1, i64 dlen)
 {
-	de_int64 w, h;
-	de_int64 xdens, ydens;
-	de_int64 bpp;
-	de_int64 pos = dpos1;
-	de_int64 rowspan;
+	i64 w, h;
+	i64 xdens, ydens;
+	i64 bpp;
+	i64 pos = dpos1;
+	i64 rowspan;
 	int is_bilevel;
 	int is_grayscale;
 	int output_bypp;
 	int record_version;
 	dbuf *unc_pixels = NULL;
 	de_bitmap *img = NULL;
-	de_uint32 finalpal[256];
+	de_finfo *fi = NULL;
+	u32 finalpal[256];
 
 	d->bitmap_count++;
 
@@ -216,19 +218,19 @@ static void handler_bitmap(deark *c, lctx *d, de_byte rectype, de_int64 dpos1, d
 		d->bitmap_record_ver = record_version;
 	}
 
-	w = de_getui16le(pos);
+	w = de_getu16le(pos);
 	pos += 2;
-	h = de_getui16le(pos);
+	h = de_getu16le(pos);
 	pos += 2;
 	de_dbg_dimensions(c, w, h);
 
-	bpp = de_getui16le(pos);
+	bpp = de_getu16le(pos);
 	de_dbg(c, "bits/pixel: %d", (int)bpp);
 	pos += 2;
 
-	xdens = de_getui16le(pos);
+	xdens = de_getu16le(pos);
 	pos += 2;
-	ydens = de_getui16le(pos);
+	ydens = de_getu16le(pos);
 	pos += 2;
 	de_dbg(c, "density: %d"DE_CHAR_TIMES"%d dpi", (int)xdens, (int)ydens);
 
@@ -253,7 +255,7 @@ static void handler_bitmap(deark *c, lctx *d, de_byte rectype, de_int64 dpos1, d
 	}
 	else {
 		get_final_palette(c, d, finalpal, bpp);
-		is_grayscale = de_is_grayscale_palette(finalpal, (de_int64)1<<bpp);
+		is_grayscale = de_is_grayscale_palette(finalpal, (i64)1<<bpp);
 	}
 
 	if(is_bilevel || is_grayscale)
@@ -271,10 +273,12 @@ static void handler_bitmap(deark *c, lctx *d, de_byte rectype, de_int64 dpos1, d
 
 	img = de_bitmap_create(c, w, h, output_bypp);
 
+	fi = de_finfo_create(c);
+
 	if(xdens>0 && ydens>0) {
-		img->density_code = DE_DENSITY_DPI;
-		img->xdens = (double)xdens;
-		img->ydens = (double)ydens;
+		fi->density.code = DE_DENSITY_DPI;
+		fi->density.xdens = (double)xdens;
+		fi->density.ydens = (double)ydens;
 	}
 
 	if(is_bilevel) {
@@ -290,25 +294,26 @@ static void handler_bitmap(deark *c, lctx *d, de_byte rectype, de_int64 dpos1, d
 		de_convert_image_paletted(unc_pixels, 0, bpp, rowspan, finalpal, img, 0);
 	}
 
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, fi, 0);
 
 done:
 	de_bitmap_destroy(img);
+	de_finfo_destroy(c, fi);
 	dbuf_close(unc_pixels);
 }
 
-static void handler_colormap(deark *c, lctx *d, de_byte rectype, de_int64 dpos1, de_int64 dlen)
+static void handler_colormap(deark *c, lctx *d, u8 rectype, i64 dpos1, i64 dlen)
 {
-	de_int64 start_index;
-	de_int64 num_entries;
-	de_int64 pos = dpos1;
+	i64 start_index;
+	i64 num_entries;
+	i64 pos = dpos1;
 
 	d->has_pal = 1;
-	start_index = de_getui16le(pos);
+	start_index = de_getu16le(pos);
 	de_dbg(c, "start index: %d", (int)start_index);
 	pos += 2;
 
-	num_entries = de_getui16le(pos);
+	num_entries = de_getu16le(pos);
 	de_dbg(c, "num entries: %d", (int)num_entries);
 	pos += 2;
 
@@ -323,7 +328,7 @@ static void handler_colormap(deark *c, lctx *d, de_byte rectype, de_int64 dpos1,
 		256-start_index, 0);
 }
 
-static void handler_start_of_wpg_data(deark *c, lctx *d, de_byte rectype, de_int64 dpos1, de_int64 dlen)
+static void handler_start_of_wpg_data(deark *c, lctx *d, u8 rectype, i64 dpos1, i64 dlen)
 {
 	int record_version;
 
@@ -338,6 +343,19 @@ static void handler_start_of_wpg_data(deark *c, lctx *d, de_byte rectype, de_int
 	if(record_version > d->start_wpg_data_record_ver) {
 		d->start_wpg_data_record_ver = record_version;
 	}
+}
+
+static void handler_eps_type_1(deark *c, lctx *d, u8 rectype, i64 dpos1, i64 dlen)
+{
+	d->has_eps1 = 1;
+	if(dlen<=8) return;
+	dbuf_create_file_from_slice(c->infile, dpos1+8, dlen-8, "eps", NULL, 0);
+}
+
+static void handler_eps_type_2(deark *c, lctx *d, u8 rectype, i64 dpos1, i64 dlen)
+{
+	d->has_eps2 = 1;
+	// TODO
 }
 
 static const struct wpg_rectype_info wpg_rectype_info_arr[] = {
@@ -356,7 +374,7 @@ static const struct wpg_rectype_info wpg_rectype_info_arr[] = {
 	{ 0x0e, "Color map", handler_colormap },
 	{ 0x0f, "Start of WPG data", handler_start_of_wpg_data },
 	{ 0x10, "End of WPG data", NULL },
-	{ 0x11, "PostScript data, Type 1", NULL },
+	{ 0x11, "PostScript data, Type 1", handler_eps_type_1 },
 	{ 0x12, "Output attributes", NULL },
 	{ 0x13, "Curved polyline", NULL },
 	{ 0x14, "Bitmap, Type 2", handler_bitmap },
@@ -366,13 +384,13 @@ static const struct wpg_rectype_info wpg_rectype_info_arr[] = {
 	{ 0x18, "Graphics text, Type 2", NULL },
 	{ 0x19, "Start of WPG data, Type 2", handler_start_of_wpg_data },
 	{ 0x1a, "Graphics text, Type 3", NULL },
-	{ 0x1b, "PostScript data, Type 2", NULL }
+	{ 0x1b, "PostScript data, Type 2", handler_eps_type_2 }
 };
 
-static const struct wpg_rectype_info *find_wpg_rectype_info(de_byte rectype)
+static const struct wpg_rectype_info *find_wpg_rectype_info(u8 rectype)
 {
-	de_int64 i;
-	for(i=0; i<(de_int64)DE_ITEMS_IN_ARRAY(wpg_rectype_info_arr); i++) {
+	i64 i;
+	for(i=0; i<(i64)DE_ITEMS_IN_ARRAY(wpg_rectype_info_arr); i++) {
 		if(wpg_rectype_info_arr[i].rectype == rectype) {
 			return &wpg_rectype_info_arr[i];
 		}
@@ -380,11 +398,11 @@ static const struct wpg_rectype_info *find_wpg_rectype_info(de_byte rectype)
 	return NULL;
 }
 
-static int do_record(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_consumed)
+static int do_record(deark *c, lctx *d, i64 pos1, i64 *bytes_consumed)
 {
-	de_int64 pos = pos1;
-	de_byte rectype;
-	de_int64 rec_dlen;
+	i64 pos = pos1;
+	u8 rectype;
+	i64 rec_dlen;
 	int retval = 0;
 	const char *name;
 	const struct wpg_rectype_info *wri;
@@ -396,7 +414,7 @@ static int do_record(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_consumed)
 	de_dbg(c, "record type 0x%02x (%s) at %d", (unsigned int)rectype, name, (int)pos1);
 	de_dbg_indent(c, 1);
 
-	rec_dlen = (de_int64)de_getbyte(pos++);
+	rec_dlen = (i64)de_getbyte(pos++);
 
 	// As far as I can tell, the variable-length integer works as follows.
 	// An integer uses either 1, 3, or 5 bytes.
@@ -410,13 +428,13 @@ static int do_record(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_consumed)
 
 	if(rec_dlen==0xff) {
 		// Not an 8-bit value. Could be 16-bit or 32-bit.
-		rec_dlen = de_getui16le(pos);
+		rec_dlen = de_getu16le(pos);
 		pos += 2;
 
 		if(rec_dlen & 0x8000) { // A 32-bit value
-			de_int64 n;
+			i64 n;
 
-			n = de_getui16le(pos);
+			n = de_getu16le(pos);
 			pos += 2;
 			rec_dlen = ((rec_dlen&0x7fff)<<16) | n;
 		}
@@ -435,12 +453,12 @@ static int do_record(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_consumed)
 	return retval;
 }
 
-static int do_record_area(deark *c, lctx *d, de_int64 pos)
+static int do_record_area(deark *c, lctx *d, i64 pos)
 {
 	de_dbg(c, "record area at %d", (int)pos);
 	de_dbg_indent(c, 1);
 	while(1) {
-		de_int64 bytes_consumed = 0;
+		i64 bytes_consumed = 0;
 		int ret;
 
 		if(pos >= c->infile->len) break;
@@ -470,7 +488,7 @@ static void de_run_wpg(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
 	const char *s;
-	de_int64 pos;
+	i64 pos;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -488,12 +506,13 @@ static void de_run_wpg(deark *c, de_module_params *mparams)
 
 	// This debug line is mainly to help find interesting WPG files.
 	de_dbg(c, "summary: ver=%d.%d dataver=%d pal=%d bitmaps=%d "
-		"bitmapver=%d bpp=%d dimensions=%d"DE_CHAR_TIMES"%d",
+		"bitmapver=%d bpp=%d dimensions=%d"DE_CHAR_TIMES"%d%s%s",
 		(int)d->ver_major, (int)d->ver_minor, d->start_wpg_data_record_ver,
 		(int)d->num_pal_entries,
 		(int)d->bitmap_count, d->bitmap_record_ver,
 		(int)d->bpp_of_first_bitmap,
-		(int)d->width_of_first_bitmap, (int)d->height_of_first_bitmap);
+		(int)d->width_of_first_bitmap, (int)d->height_of_first_bitmap,
+		d->has_eps1?" eps1":"", d->has_eps2?" eps2":"");
 
 done:
 	de_free(c, d);
@@ -501,8 +520,13 @@ done:
 
 static int de_identify_wpg(deark *c)
 {
-	if(!dbuf_memcmp(c->infile, 0, "\xff\x57\x50\x43", 4))
+	u8 buf[10];
+	de_read(buf, 0, 10);
+	if(!de_memcmp(buf, "\xff\x57\x50\x43", 4) &&
+		buf[8]==0x01 && buf[9]==0x16)
+	{
 		return 100;
+	}
 	return 0;
 }
 

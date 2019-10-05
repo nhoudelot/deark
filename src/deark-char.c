@@ -11,26 +11,26 @@
 #include "deark-private.h"
 
 struct screen_stats {
-	de_uint32 fgcol_count[16];
-	de_uint32 bgcol_count[16];
-	de_uint32 most_used_fgcol;
-	de_uint32 most_used_bgcol;
+	u32 fgcol_count[16];
+	u32 bgcol_count[16];
+	u32 most_used_fgcol;
+	u32 most_used_bgcol;
 };
 
 struct charextractx {
-	de_byte vga_9col_mode; // Flag: Render an extra column, like VGA does
-	de_byte uses_custom_font;
-	de_byte used_underline;
-	de_byte used_strikethru;
-	de_byte used_blink;
-	de_byte used_24bitcolor;
-	de_byte used_fgcol[16];
-	de_byte used_bgcol[16];
+	u8 vga_9col_mode; // Flag: Render an extra column, like VGA does
+	u8 uses_custom_font;
+	u8 used_underline;
+	u8 used_strikethru;
+	u8 used_blink;
+	u8 used_24bitcolor;
+	u8 used_fgcol[16];
+	u8 used_bgcol[16];
 	struct de_bitmap_font *standard_font;
 	struct de_bitmap_font *font_to_use;
 
-	de_int64 char_width_in_pixels;
-	de_int64 char_height_in_pixels;
+	i64 char_width_in_pixels;
+	i64 char_height_in_pixels;
 
 	struct screen_stats *scrstats; // pointer to array of struct screen_stats
 };
@@ -40,8 +40,8 @@ struct charextractx {
 // Does not free the ucstring fields.
 void de_free_charctx(deark *c, struct de_char_context *charctx)
 {
-	de_int64 pgnum;
-	de_int64 j;
+	i64 pgnum;
+	i64 j;
 
 	if(charctx) {
 		if(charctx->screens) {
@@ -63,13 +63,13 @@ void de_free_charctx(deark *c, struct de_char_context *charctx)
 }
 
 static void do_prescan_screen(deark *c, struct de_char_context *charctx,
-	struct charextractx *ectx, de_int64 screen_idx)
+	struct charextractx *ectx, i64 screen_idx)
 {
 	const struct de_char_cell *cell;
 	int i, j;
 	struct de_char_screen *screen;
-	de_uint32 highest_fgcol_count;
-	de_uint32 highest_bgcol_count;
+	u32 highest_fgcol_count;
+	u32 highest_bgcol_count;
 
 	screen = charctx->screens[screen_idx];
 
@@ -108,21 +108,21 @@ static void do_prescan_screen(deark *c, struct de_char_context *charctx,
 	for(i=1; i<16; i++) {
 		if(ectx->scrstats[screen_idx].fgcol_count[i] > highest_fgcol_count) {
 			highest_fgcol_count = ectx->scrstats[screen_idx].fgcol_count[i];
-			ectx->scrstats->most_used_fgcol = (de_uint32)i;
+			ectx->scrstats->most_used_fgcol = (u32)i;
 		}
 		if(ectx->scrstats[screen_idx].bgcol_count[i] > highest_bgcol_count) {
 			highest_bgcol_count = ectx->scrstats[screen_idx].bgcol_count[i];
-			ectx->scrstats->most_used_bgcol = (de_uint32)i;
+			ectx->scrstats->most_used_bgcol = (u32)i;
 		}
 	}
 }
 
 struct span_info {
-	de_uint32 fgcol, bgcol;
-	de_byte underline;
-	de_byte strikethru;
-	de_byte blink;
-	de_byte is_suppressed;
+	u32 fgcol, bgcol;
+	u8 underline;
+	u8 strikethru;
+	u8 blink;
+	u8 is_suppressed;
 };
 
 // This may modify sp->is_suppressed.
@@ -229,31 +229,31 @@ static void span_close(deark *c, dbuf *ofile, struct span_info *sp)
 }
 
 static void do_output_html_screen(deark *c, struct de_char_context *charctx,
-	struct charextractx *ectx, de_int64 screen_idx, dbuf *ofile)
+	struct charextractx *ectx, i64 screen_idx, dbuf *ofile)
 {
 	const struct de_char_cell *cell;
 	struct de_char_cell blank_cell;
 	struct de_char_screen *screen;
 	int i, j;
-	de_int32 n;
+	i32 n;
 	int in_span = 0;
 	int need_newline = 0;
-	de_uint32 active_fgcol = 0;
-	de_uint32 active_bgcol = 0;
-	de_byte active_underline = 0;
-	de_byte active_strikethru = 0;
-	de_byte active_blink = 0;
+	u32 active_fgcol = 0;
+	u32 active_bgcol = 0;
+	u8 active_underline = 0;
+	u8 active_strikethru = 0;
+	u8 active_blink = 0;
 	int is_blank_char;
 	struct span_info default_span;
 	struct span_info cur_span;
 
-	de_memset(&default_span, 0, sizeof(struct span_info));
-	de_memset(&cur_span, 0, sizeof(struct span_info));
+	de_zeromem(&default_span, sizeof(struct span_info));
+	de_zeromem(&cur_span, sizeof(struct span_info));
 
 	screen = charctx->screens[screen_idx];
 
 	// In case a cell is missing, we'll use this one:
-	de_memset(&blank_cell, 0, sizeof(struct de_char_cell));
+	de_zeromem(&blank_cell, sizeof(struct de_char_cell));
 	blank_cell.codepoint = 32;
 	blank_cell.codepoint_unicode = 32;
 
@@ -350,8 +350,8 @@ static void do_output_html_screen(deark *c, struct de_char_context *charctx,
 	dbuf_puts(ofile, "</td>\n</tr></table>\n");
 }
 
-static void output_css_color_block(deark *c, dbuf *ofile, de_uint32 *pal,
-	const char *selectorprefix, const char *prop, const de_byte *used_flags)
+static void output_css_color_block(deark *c, dbuf *ofile, u32 *pal,
+	const char *selectorprefix, const char *prop, const u8 *used_flags)
 {
 	char tmpbuf[16];
 	int i;
@@ -366,9 +366,9 @@ static void output_css_color_block(deark *c, dbuf *ofile, de_uint32 *pal,
 
 static void write_ucstring_to_html(deark *c, const de_ucstring *s, dbuf *f)
 {
-	de_int64 i;
+	i64 i;
 	int prev_space = 0;
-	de_int32 ch;
+	i32 ch;
 
 	if(!s) return;
 
@@ -400,7 +400,7 @@ static void print_header_item(deark *c, dbuf *ofile, const char *name_rawhtml, c
 	int k;
 
 	dbuf_puts(ofile, "<td class=htc>");
-	if(value && value->len>0) {
+	if(ucstring_isnonempty(value)) {
 		dbuf_printf(ofile, "<span class=hn>%s:&nbsp; </span><span class=hv>", name_rawhtml);
 		write_ucstring_to_html(c, value, ofile);
 		dbuf_puts(ofile, "</span>");
@@ -440,13 +440,20 @@ static void print_comments(deark *c, struct de_char_context *charctx, dbuf *ofil
 	dbuf_puts(ofile, "</tr></table>\n");
 }
 
+static void timestamp_to_ucstring(const struct de_timestamp *ts, de_ucstring *s)
+{
+	char timestamp_buf[64];
+	de_timestamp_to_string(ts, timestamp_buf, sizeof(timestamp_buf), 0);
+	ucstring_append_sz(s, timestamp_buf, DE_ENCODING_UTF8);
+}
+
 static void do_output_html_header(deark *c, struct de_char_context *charctx,
 	struct charextractx *ectx, dbuf *ofile)
 {
 	int has_metadata; // metadata other than comments
 
 	has_metadata = charctx->title || charctx->artist || charctx->organization ||
-		charctx->creation_date;
+		(charctx->creation_date.is_valid);
 	if(c->write_bom && !c->ascii_html) dbuf_write_uchar_as_utf8(ofile, 0xfeff);
 	dbuf_puts(ofile, "<!DOCTYPE html>\n");
 	dbuf_puts(ofile, "<html>\n");
@@ -507,11 +514,17 @@ static void do_output_html_header(deark *c, struct de_char_context *charctx,
 	dbuf_puts(ofile, "<body>\n");
 
 	if(has_metadata) {
+		de_ucstring *tmps = NULL;
 		dbuf_puts(ofile, "<table class=htt><tr>\n");
 		print_header_item(c, ofile, "Title", charctx->title);
 		print_header_item(c, ofile, "Organization", charctx->organization);
 		print_header_item(c, ofile, "Artist", charctx->artist);
-		print_header_item(c, ofile, "Date", charctx->creation_date);
+		tmps = ucstring_create(c);
+		if(charctx->creation_date.is_valid) {
+			timestamp_to_ucstring(&charctx->creation_date, tmps);
+		}
+		print_header_item(c, ofile, "Date", tmps);
+		ucstring_destroy(tmps);
 		dbuf_puts(ofile, "</tr></table>\n");
 	}
 
@@ -527,7 +540,7 @@ static void do_output_html_footer(deark *c, struct de_char_context *charctx,
 static void de_char_output_to_html_file(deark *c, struct de_char_context *charctx,
 	struct charextractx *ectx)
 {
-	de_int64 i;
+	i64 i;
 	dbuf *ofile = NULL;
 
 	if(charctx->font && !charctx->suppress_custom_font_warning) {
@@ -536,7 +549,7 @@ static void de_char_output_to_html_file(deark *c, struct de_char_context *charct
 	}
 
 	if(ectx->used_24bitcolor) {
-		de_msg(c, "Note: This file uses 24-bit colors, which are supported but "
+		de_info(c, "Note: This file uses 24-bit colors, which are supported but "
 			"not optimized. The HTML file may be very large.");
 	}
 
@@ -553,13 +566,13 @@ static void de_char_output_to_html_file(deark *c, struct de_char_context *charct
 
 static void do_render_character(deark *c, struct de_char_context *charctx,
 	struct charextractx *ectx, de_bitmap *img,
-	de_int64 xpos, de_int64 ypos,
-	de_int32 codepoint, int codepoint_is_unicode,
-	de_uint32 fgcol, de_uint32 bgcol,
+	i64 xpos, i64 ypos,
+	i32 codepoint, int codepoint_is_unicode,
+	u32 fgcol, u32 bgcol,
 	unsigned int extra_flags)
 {
-	de_int64 xpos_in_pix, ypos_in_pix;
-	de_uint32 fgcol_rgb, bgcol_rgb;
+	i64 xpos_in_pix, ypos_in_pix;
+	u32 fgcol_rgb, bgcol_rgb;
 	unsigned int flags;
 
 	xpos_in_pix = xpos * ectx->char_width_in_pixels;
@@ -582,13 +595,13 @@ static void do_render_character(deark *c, struct de_char_context *charctx,
 			xpos_in_pix, ypos_in_pix, fgcol_rgb, bgcol_rgb, flags);
 	}
 	else {
-		de_font_paint_character_idx(c, img, ectx->font_to_use, (de_int64)codepoint,
+		de_font_paint_character_idx(c, img, ectx->font_to_use, (i64)codepoint,
 			xpos_in_pix, ypos_in_pix, fgcol_rgb, bgcol_rgb, flags);
 	}
 }
 
 static void set_density(deark *c, struct de_char_context *charctx,
-	struct charextractx *ectx, de_bitmap *img)
+	struct charextractx *ectx, de_finfo *fi)
 {
 	// FIXME: This is quick and dirty. Need to put more thought into how to
 	// figure out the pixel density.
@@ -597,23 +610,24 @@ static void set_density(deark *c, struct de_char_context *charctx,
 
 	if(ectx->char_height_in_pixels==16 && ectx->char_width_in_pixels==8) {
 		// Assume the intended display is 640x400.
-		img->density_code = DE_DENSITY_UNK_UNITS;
-		img->xdens = 480.0;
-		img->ydens = 400.0;
+		fi->density.code = DE_DENSITY_UNK_UNITS;
+		fi->density.xdens = 480.0;
+		fi->density.ydens = 400.0;
 	}
 	else if(ectx->char_height_in_pixels==16 && ectx->char_width_in_pixels==9) {
 		// Assume the intended display is 720x400.
-		img->density_code = DE_DENSITY_UNK_UNITS;
-		img->xdens = 540.0;
-		img->ydens = 400.0;
+		fi->density.code = DE_DENSITY_UNK_UNITS;
+		fi->density.xdens = 540.0;
+		fi->density.ydens = 400.0;
 	}
 }
 
 static void de_char_output_screen_to_image_file(deark *c, struct de_char_context *charctx,
 	struct charextractx *ectx, struct de_char_screen *screen)
 {
-	de_int64 screen_width_in_pixels, screen_height_in_pixels;
+	i64 screen_width_in_pixels, screen_height_in_pixels;
 	de_bitmap *img = NULL;
+	de_finfo *fi = NULL;
 	int i, j;
 	const struct de_char_cell *cell;
 	unsigned int flags;
@@ -625,7 +639,15 @@ static void de_char_output_screen_to_image_file(deark *c, struct de_char_context
 
 	img = de_bitmap_create(c, screen_width_in_pixels, screen_height_in_pixels, 3);
 
-	set_density(c, charctx, ectx, img);
+	fi = de_finfo_create(c);
+	set_density(c, charctx, ectx, fi);
+
+	if(charctx->creation_date.is_valid) {
+		// The ->creation_date field is most likely from a SAUCE record, for which the
+		// only date field is documented as "The date the file was created".
+		// We intentionally treat it as a last-modified timestamp.
+		fi->image_mod_time = charctx->creation_date;
+	}
 
 	for(j=0; j<screen->height; j++) {
 		for(i=0; i<screen->width; i++) {
@@ -654,13 +676,14 @@ static void de_char_output_screen_to_image_file(deark *c, struct de_char_context
 		}
 	}
 
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, fi, 0);
 done:
 	de_bitmap_destroy(img);
+	de_finfo_destroy(c, fi);
 }
 
 #define NUM_EXTRA_FONT_CHARS 13
-static const de_byte extra_font_data[NUM_EXTRA_FONT_CHARS*16] = {
+static const u8 extra_font_data[NUM_EXTRA_FONT_CHARS*16] = {
 	0,0,0,126,66,66,66,66,66,66,66,126,0,0,0,0, // replacement char
 	0,0,0,0,16,56,124,254,124,56,16,0,0,0,0,0,  // 25c6 diamond
 	0,0,216,216,248,216,216,0,30,12,12,12,12,0,0,0, // 2409 "HT"
@@ -675,16 +698,16 @@ static const de_byte extra_font_data[NUM_EXTRA_FONT_CHARS*16] = {
 	0,0,0,0,0,0,0,0,0,0,0,0,0,255,0,0, // 23bd scan 9
 	0,0,0,2,4,126,8,16,126,32,64,0,0,0,0,0  // 2260 not equal
 };
-static const de_int32 extra_font_codepoints[NUM_EXTRA_FONT_CHARS] = {
+static const i32 extra_font_codepoints[NUM_EXTRA_FONT_CHARS] = {
 	0xfffd,0x25c6,0x2409,0x240c,0x240d,0x240a,0x2424,0x240b,
 	0x23ba,0x23bb,0x23bc,0x23bd,0x2260
 };
 
 static void do_create_standard_font(deark *c, struct charextractx *ectx)
 {
-	de_int64 i;
+	i64 i;
 	struct de_bitmap_font *font;
-	const de_byte *vga_cp437_font_data;
+	const u8 *vga_cp437_font_data;
 	struct de_bitmap_font_char *ch;
 
 	font = de_create_bitmap_font(c);
@@ -698,7 +721,7 @@ static void do_create_standard_font(deark *c, struct charextractx *ectx)
 	font->has_nonunicode_codepoints = 1;
 	font->has_unicode_codepoints = 1;
 
-	font->char_array = de_malloc(c, font->num_chars * sizeof(struct de_bitmap_font_char));
+	font->char_array = de_mallocarray(c, font->num_chars, sizeof(struct de_bitmap_font_char));
 
 	// Set defaults for each character
 	for(i=0; i<font->num_chars; i++) {
@@ -710,9 +733,9 @@ static void do_create_standard_font(deark *c, struct charextractx *ectx)
 
 	for(i=0; i<font->num_chars; i++) {
 		ch = &font->char_array[i];
-		ch->codepoint_nonunicode = (de_int32)i;
-		ch->codepoint_unicode = de_char_to_unicode(c, (de_int32)i, DE_ENCODING_CP437_G);
-		ch->bitmap = (de_byte*)&vga_cp437_font_data[i*16];
+		ch->codepoint_nonunicode = (i32)i;
+		ch->codepoint_unicode = de_char_to_unicode(c, (i32)i, DE_ENCODING_CP437_G);
+		ch->bitmap = (u8*)&vga_cp437_font_data[i*16];
 	}
 
 	// Add vt100 characters that aren't in CP437
@@ -720,7 +743,7 @@ static void do_create_standard_font(deark *c, struct charextractx *ectx)
 		ch = &font->char_array[256+i];
 		ch->codepoint_nonunicode = DE_CODEPOINT_INVALID;
 		ch->codepoint_unicode = extra_font_codepoints[i];
-		ch->bitmap = (de_byte*)&extra_font_data[i*16];
+		ch->bitmap = (u8*)&extra_font_data[i*16];
 	}
 	font->index_of_replacement_char = 256;
 }
@@ -728,7 +751,7 @@ static void do_create_standard_font(deark *c, struct charextractx *ectx)
 static void de_char_output_to_image_files(deark *c, struct de_char_context *charctx,
 	struct charextractx *ectx)
 {
-	de_int64 i;
+	i64 i;
 
 	if(ectx->used_blink) {
 		de_warn(c, "This file uses blinking characters, which are not supported with "
@@ -764,7 +787,7 @@ static void de_char_output_to_image_files(deark *c, struct de_char_context *char
 
 void de_char_output_to_file(deark *c, struct de_char_context *charctx)
 {
-	de_int64 i;
+	i64 i;
 	int outfmt = 0;
 	const char *s;
 	int n;
@@ -800,7 +823,7 @@ void de_char_output_to_file(deark *c, struct de_char_context *charctx)
 		}
 	}
 
-	ectx->scrstats = de_malloc(c, charctx->nscreens * sizeof(struct screen_stats));
+	ectx->scrstats = de_mallocarray(c, charctx->nscreens, sizeof(struct screen_stats));
 
 	for(i=0; i<charctx->nscreens; i++) {
 		do_prescan_screen(c, charctx, ectx, i);

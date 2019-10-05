@@ -14,9 +14,9 @@ DE_DECLARE_MODULE(de_module_gif);
 #define DISPOSE_PREVIOUS  3
 
 struct gceinfo {
-	de_byte disposal_method;
-	de_byte trns_color_idx_valid;
-	de_byte trns_color_idx;
+	u8 disposal_method;
+	u8 trns_color_idx_valid;
+	u8 trns_color_idx;
 };
 
 typedef struct localctx_struct {
@@ -25,36 +25,36 @@ typedef struct localctx_struct {
 	int dump_screen;
 	int dump_plaintext_ext;
 
-	de_int64 screen_w, screen_h;
+	i64 screen_w, screen_h;
 	int has_global_color_table;
-	de_byte aspect_ratio_code;
-	de_int64 global_color_table_size; // Number of colors stored in the file
-	de_uint32 global_ct[256];
+	i64 global_color_table_size; // Number of colors stored in the file
+	u32 global_ct[256];
 
 	de_bitmap *screen_img;
 	struct gceinfo *gce; // The Graphic Control Ext. in effect for the next image
+	de_finfo *fi; // Reused for each image
 } lctx;
 
 // Data about a single image
 struct gif_image_data {
 	de_bitmap *img;
-	de_int64 xpos, ypos;
-	de_int64 width, height;
-	de_int64 pixels_set;
+	i64 xpos, ypos;
+	i64 width, height;
+	i64 pixels_set;
 	int interlaced;
 	int has_local_color_table;
-	de_int64 local_color_table_size;
-	de_uint16 *interlace_map;
-	de_uint32 local_ct[256];
+	i64 local_color_table_size;
+	u16 *interlace_map;
+	u32 local_ct[256];
 };
 
 static void do_record_pixel(deark *c, lctx *d, struct gif_image_data *gi, unsigned int coloridx,
 	int offset)
 {
-	de_int64 pixnum;
-	de_int64 xi, yi;
-	de_int64 yi1;
-	de_uint32 clr;
+	i64 pixnum;
+	i64 xi, yi;
+	i64 yi1;
+	u32 clr;
 
 	if(coloridx>255) return;
 
@@ -93,10 +93,10 @@ static void do_record_pixel(deark *c, lctx *d, struct gif_image_data *gi, unsign
 ////////////////////////////////////////////////////////
 
 struct lzw_tableentry {
-	de_uint16 parent; // pointer to previous table entry (if not a root code)
-	de_uint16 length;
-	de_byte firstchar;
-	de_byte lastchar;
+	u16 parent; // pointer to previous table entry (if not a root code)
+	u16 length;
+	u8 firstchar;
+	u8 lastchar;
 };
 
 struct lzwdeccontext {
@@ -121,7 +121,7 @@ static int lzw_init(deark *c, struct lzwdeccontext *lz, unsigned int root_codesi
 {
 	unsigned int i;
 
-	de_memset(lz, 0, sizeof(struct lzwdeccontext));
+	de_zeromem(lz, sizeof(struct lzwdeccontext));
 
 	if(root_codesize<2 || root_codesize>11) {
 		de_err(c, "Invalid LZW root codesize (%u)", root_codesize);
@@ -135,8 +135,8 @@ static int lzw_init(deark *c, struct lzwdeccontext *lz, unsigned int root_codesi
 	for(i=0; i<lz->num_root_codes; i++) {
 		lz->ct[i].parent = 0;
 		lz->ct[i].length = 1;
-		lz->ct[i].lastchar = (de_byte)i;
-		lz->ct[i].firstchar = (de_byte)i;
+		lz->ct[i].lastchar = (u8)i;
+		lz->ct[i].firstchar = (u8)i;
 	}
 
 	return 1;
@@ -175,7 +175,7 @@ static void lzw_emit_code(deark *c, lctx *d, struct gif_image_data *gi, struct l
 // Add a code to the dictionary.
 // Sets d->last_code_added to the position where it was added.
 // Returns 1 if successful, 2 if table is full, 0 on error.
-static int lzw_add_to_dict(deark *c, struct lzwdeccontext *lz, unsigned int oldcode, de_byte val)
+static int lzw_add_to_dict(deark *c, struct lzwdeccontext *lz, unsigned int oldcode, u8 val)
 {
 	static const unsigned int last_code_of_size[] = {
 		// The first 3 values are unused.
@@ -197,7 +197,7 @@ static int lzw_add_to_dict(deark *c, struct lzwdeccontext *lz, unsigned int oldc
 
 	lz->ct_used++;
 
-	lz->ct[newpos].parent = (de_uint16)oldcode;
+	lz->ct[newpos].parent = (u16)oldcode;
 	lz->ct[newpos].length = lz->ct[oldcode].length + 1;
 	lz->ct[newpos].firstchar = lz->ct[oldcode].firstchar;
 	lz->ct[newpos].lastchar = val;
@@ -274,9 +274,9 @@ static int lzw_process_code(deark *c, lctx *d, struct gif_image_data *gi, struct
 // Any unfinished business is recorded, to be continued the next time
 // this function is called.
 static int lzw_process_bytes(deark *c, lctx *d, struct gif_image_data *gi, struct lzwdeccontext *lz,
-	de_byte *data, de_int64 data_size)
+	u8 *data, i64 data_size)
 {
-	de_int64 i;
+	i64 i;
 	int b;
 	int retval=0;
 
@@ -308,7 +308,7 @@ done:
 
 ////////////////////////////////////////////////////////
 
-static int do_read_header(deark *c, lctx *d, de_int64 pos)
+static int do_read_header(deark *c, lctx *d, i64 pos)
 {
 	de_ucstring *ver = NULL;
 
@@ -322,18 +322,19 @@ static int do_read_header(deark *c, lctx *d, de_int64 pos)
 	return 1;
 }
 
-static int do_read_screen_descriptor(deark *c, lctx *d, de_int64 pos)
+static int do_read_screen_descriptor(deark *c, lctx *d, i64 pos)
 {
-	de_int64 bgcol_index;
-	de_byte packed_fields;
+	i64 bgcol_index;
+	u8 packed_fields;
+	u8 aspect_ratio_code;
 	unsigned int n;
 	unsigned int global_color_table_size_code;
 
 	de_dbg(c, "screen descriptor at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
-	d->screen_w = de_getui16le(pos);
-	d->screen_h = de_getui16le(pos+2);
+	d->screen_w = de_getu16le(pos);
+	d->screen_h = de_getu16le(pos+2);
 	de_dbg(c, "screen dimensions: %d"DE_CHAR_TIMES"%d", (int)d->screen_w, (int)d->screen_h);
 
 	packed_fields = de_getbyte(pos+4);
@@ -353,7 +354,7 @@ static int do_read_screen_descriptor(deark *c, lctx *d, de_int64 pos)
 
 	if(d->has_global_color_table) {
 		global_color_table_size_code = (unsigned int)(packed_fields&0x07);
-		d->global_color_table_size = (de_int64)(1<<(global_color_table_size_code+1));
+		d->global_color_table_size = de_pow2((i64)global_color_table_size_code+1);
 		de_dbg(c, "global color table size: %u (%d colors)",
 			global_color_table_size_code, (int)d->global_color_table_size);
 	}
@@ -364,23 +365,28 @@ static int do_read_screen_descriptor(deark *c, lctx *d, de_int64 pos)
 	// background is transparent.
 	// TODO: If we ever support writing background-color chunks to PNG files,
 	// then we should look up this color and use it.
-	bgcol_index = (de_int64)de_getbyte(pos+5);
+	bgcol_index = (i64)de_getbyte(pos+5);
 	de_dbg(c, "background color index: %d", (int)bgcol_index);
 
-	d->aspect_ratio_code = de_getbyte(pos+6);
-	de_dbg(c, "aspect ratio code: %d", (int)d->aspect_ratio_code);
+	aspect_ratio_code = de_getbyte(pos+6);
+	de_dbg(c, "aspect ratio code: %d", (int)aspect_ratio_code);
+	if(aspect_ratio_code!=0 && aspect_ratio_code!=49) {
+		d->fi->density.code = DE_DENSITY_UNK_UNITS;
+		d->fi->density.xdens = 64.0;
+		d->fi->density.ydens = 15.0 + (double)aspect_ratio_code;
+	}
 
 	de_dbg_indent(c, -1);
 	return 1;
 }
 
-static void do_read_color_table(deark *c, lctx *d, de_int64 pos, de_int64 ncolors,
-	de_uint32 *ct)
+static void do_read_color_table(deark *c, lctx *d, i64 pos, i64 ncolors,
+	u32 *ct)
 {
 	de_read_palette_rgb(c->infile, pos, ncolors, 3, ct, 256, 0);
 }
 
-static int do_read_global_color_table(deark *c, lctx *d, de_int64 pos, de_int64 *bytesused)
+static int do_read_global_color_table(deark *c, lctx *d, i64 pos, i64 *bytesused)
 {
 	if(!d->has_global_color_table) return 1;
 	de_dbg(c, "global color table at %d", (int)pos);
@@ -393,15 +399,15 @@ static int do_read_global_color_table(deark *c, lctx *d, de_int64 pos, de_int64 
 	return 1;
 }
 
-static void do_skip_subblocks(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesused)
+static void do_skip_subblocks(deark *c, lctx *d, i64 pos1, i64 *bytesused)
 {
-	de_int64 pos;
-	de_int64 n;
+	i64 pos;
+	i64 n;
 
 	pos = pos1;
 	while(1) {
 		if(pos >= c->infile->len) break;
-		n = (de_int64)de_getbyte(pos++);
+		n = (i64)de_getbyte(pos++);
 		if(n==0) break;
 		pos += n;
 	}
@@ -410,18 +416,18 @@ static void do_skip_subblocks(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesu
 }
 
 static void do_copy_subblocks_to_dbuf(deark *c, lctx *d, dbuf *outf,
-	de_int64 pos1, int has_max, de_int64 maxlen)
+	i64 pos1, int has_max, i64 maxlen)
 {
-	de_int64 pos = pos1;
-	de_int64 nbytes_copied = 0;
+	i64 pos = pos1;
+	i64 nbytes_copied = 0;
 
 	while(1) {
-		de_int64 n;
-		de_int64 nbytes_to_copy;
+		i64 n;
+		i64 nbytes_to_copy;
 
 		if(pos >= c->infile->len) break;
 		if(has_max && (nbytes_copied >= maxlen)) break;
-		n = (de_int64)de_getbyte_p(&pos);
+		n = (i64)de_getbyte_p(&pos);
 		if(n==0) break;
 		nbytes_to_copy = n;
 		if(has_max) {
@@ -443,18 +449,18 @@ static void discard_current_gce_data(deark *c, lctx *d)
 	}
 }
 
-static void do_graphic_control_extension(deark *c, lctx *d, de_int64 pos)
+static void do_graphic_control_extension(deark *c, lctx *d, i64 pos)
 {
-	de_int64 n;
-	de_byte packed_fields;
-	de_byte user_input_flag;
-	de_int64 delay_time_raw;
+	i64 n;
+	u8 packed_fields;
+	u8 user_input_flag;
+	i64 delay_time_raw;
 	double delay_time;
 	const char *name;
 
 	discard_current_gce_data(c, d);
 
-	n = (de_int64)de_getbyte(pos);
+	n = (i64)de_getbyte(pos);
 	if(n!=4) {
 		de_warn(c, "Wrong graphic control ext. block size (expected 4, is %d)",
 			(int)n);
@@ -483,7 +489,7 @@ static void do_graphic_control_extension(deark *c, lctx *d, de_int64 pos)
 	de_dbg(c, "disposal method: %d (%s)", (int)d->gce->disposal_method, name);
 	de_dbg_indent(c, -1);
 
-	delay_time_raw = de_getui16le(pos+2);
+	delay_time_raw = de_getu16le(pos+2);
 	delay_time = ((double)delay_time_raw)/100.0;
 	de_dbg(c, "delay time: %d (%.02f sec)", (int)delay_time_raw, delay_time);
 
@@ -493,11 +499,11 @@ static void do_graphic_control_extension(deark *c, lctx *d, de_int64 pos)
 	}
 }
 
-static void do_comment_extension(deark *c, lctx *d, de_int64 pos)
+static void do_comment_extension(deark *c, lctx *d, i64 pos)
 {
 	dbuf *f = NULL;
 	de_ucstring *s = NULL;
-	de_int64 n;
+	i64 n;
 
 	// Either write the comment to a file, or store it in a string.
 	if(c->extract_level>=2) {
@@ -509,7 +515,7 @@ static void do_comment_extension(deark *c, lctx *d, de_int64 pos)
 
 	while(1) {
 		if(pos >= c->infile->len) break;
-		n = (de_int64)de_getbyte(pos++);
+		n = (i64)de_getbyte(pos++);
 		if(n==0) break;
 
 		if(f) {
@@ -529,10 +535,10 @@ static void do_comment_extension(deark *c, lctx *d, de_int64 pos)
 	dbuf_close(f);
 }
 
-static void decode_text_color(deark *c, lctx *d, const char *name, de_byte clr_idx,
-	de_uint32 *pclr)
+static void decode_text_color(deark *c, lctx *d, const char *name, u8 clr_idx,
+	u32 *pclr)
 {
-	de_uint32 clr;
+	u32 clr;
 	const char *alphastr;
 	char csamp[32];
 
@@ -553,13 +559,13 @@ static void decode_text_color(deark *c, lctx *d, const char *name, de_byte clr_i
 		alphastr, csamp);
 }
 
-static void render_plaintext_char(deark *c, lctx *d, de_byte ch,
-	de_int64 pos_x, de_int64 pos_y, de_int64 size_x, de_int64 size_y,
-	de_uint32 fgclr, de_uint32 bgclr)
+static void render_plaintext_char(deark *c, lctx *d, u8 ch,
+	i64 pos_x, i64 pos_y, i64 size_x, i64 size_y,
+	u32 fgclr, u32 bgclr)
 {
-	de_int64 i, j;
-	const de_byte *fontdata;
-	const de_byte *chardata;
+	i64 i, j;
+	const u8 *fontdata;
+	const u8 *chardata;
 
 	fontdata = de_get_8x8ascii_font_ptr();
 
@@ -570,7 +576,7 @@ static void render_plaintext_char(deark *c, lctx *d, de_byte ch,
 		for(i=0; i<size_x; i++) {
 			unsigned int x2, y2;
 			int isbg;
-			de_uint32 clr;
+			u32 clr;
 
 			// TODO: Better character-rendering facilities.
 			// de_font_paint_character_idx() doesn't quite do what we need.
@@ -592,25 +598,25 @@ static void render_plaintext_char(deark *c, lctx *d, de_byte ch,
 	}
 }
 
-static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
+static void do_plaintext_extension(deark *c, lctx *d, i64 pos)
 {
 	dbuf *f = NULL;
-	de_int64 n;
-	de_int64 text_pos_x, text_pos_y; // In pixels
-	de_int64 text_size_x, text_size_y; // In pixels
-	de_int64 text_width_in_chars;
-	de_int64 char_width, char_height;
-	de_int64 char_count;
-	de_int64 k;
-	de_uint32 fgclr, bgclr;
-	de_byte fgclr_idx, bgclr_idx;
-	de_byte b;
+	i64 n;
+	i64 text_pos_x, text_pos_y; // In pixels
+	i64 text_size_x, text_size_y; // In pixels
+	i64 text_width_in_chars;
+	i64 char_width, char_height;
+	i64 char_count;
+	i64 k;
+	u32 fgclr, bgclr;
+	u8 fgclr_idx, bgclr_idx;
+	u8 b;
 	unsigned char disposal_method = 0;
 	int ok_to_render = 1;
 	de_bitmap *prev_img = NULL;
 
 	// The first sub-block is the header
-	n = (de_int64)de_getbyte(pos++);
+	n = (i64)de_getbyte(pos++);
 	if(n<12) goto done;
 
 	if(d->gce) {
@@ -621,12 +627,12 @@ static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 		ok_to_render = 0;
 	}
 
-	text_pos_x = de_getui16le(pos);
-	text_pos_y = de_getui16le(pos+2);
-	text_size_x = de_getui16le(pos+4);
-	text_size_y = de_getui16le(pos+6);
-	char_width = (de_int64)de_getbyte(pos+8);
-	char_height = (de_int64)de_getbyte(pos+9);
+	text_pos_x = de_getu16le(pos);
+	text_pos_y = de_getu16le(pos+2);
+	text_size_x = de_getu16le(pos+4);
+	text_size_y = de_getu16le(pos+6);
+	char_width = (i64)de_getbyte(pos+8);
+	char_height = (i64)de_getbyte(pos+9);
 	de_dbg(c, "text-area pos: %d,%d pixels", (int)text_pos_x, (int)text_pos_y);
 	de_dbg(c, "text-area size: %d"DE_CHAR_TIMES"%d pixels", (int)text_size_x, (int)text_size_y);
 	de_dbg(c, "character size: %d"DE_CHAR_TIMES"%d pixels", (int)char_width, (int)char_height);
@@ -656,7 +662,7 @@ static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 	}
 
 	if(ok_to_render && (disposal_method==DISPOSE_PREVIOUS)) {
-		de_int64 tmpw, tmph;
+		i64 tmpw, tmph;
 		// We need to save a copy of the pixels that may be overwritten.
 		tmpw = text_size_x;
 		if(tmpw>d->screen_w) tmpw = d->screen_w;
@@ -671,7 +677,7 @@ static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 	char_count = 0;
 	while(1) {
 		if(pos >= c->infile->len) break;
-		n = (de_int64)de_getbyte(pos++);
+		n = (i64)de_getbyte(pos++);
 		if(n==0) break;
 
 		for(k=0; k<n; k++) {
@@ -698,7 +704,7 @@ static void do_plaintext_extension(deark *c, lctx *d, de_int64 pos)
 	}
 
 	if(d->compose) {
-		de_bitmap_write_to_file(d->screen_img, NULL, DE_CREATEFLAG_OPT_IMAGE);
+		de_bitmap_write_to_file_finfo(d->screen_img, d->fi, DE_CREATEFLAG_OPT_IMAGE);
 
 		// TODO: Too much code is duplicated with do_image().
 		if(disposal_method==DISPOSE_BKGD) {
@@ -718,13 +724,13 @@ done:
 	discard_current_gce_data(c, d);
 }
 
-static void do_animation_extension(deark *c, lctx *d, de_int64 pos)
+static void do_animation_extension(deark *c, lctx *d, i64 pos)
 {
-	de_int64 sub_block_len;
-	de_byte sub_block_id;
+	i64 sub_block_len;
+	u8 sub_block_id;
 	const char *name;
 
-	sub_block_len = (de_int64)de_getbyte(pos++);
+	sub_block_len = (i64)de_getbyte(pos++);
 	if(sub_block_len<1) return;
 
 	sub_block_id = de_getbyte(pos++);
@@ -736,16 +742,16 @@ static void do_animation_extension(deark *c, lctx *d, de_int64 pos)
 	de_dbg(c, "netscape extension type: %d (%s)", (int)sub_block_id, name);
 
 	if(sub_block_id==1 && sub_block_len>=3) {
-		de_int64 loop_count;
-		loop_count = de_getui16le(pos);
+		i64 loop_count;
+		loop_count = de_getu16le(pos);
 		de_dbg(c, "loop count: %d%s", (int)loop_count,
 			(loop_count==0)?" (infinite)":"");
 	}
 }
 
-static void do_xmp_extension(deark *c, lctx *d, de_int64 pos)
+static void do_xmp_extension(deark *c, lctx *d, i64 pos)
 {
-	de_int64 nbytes_tot, nbytes_payload;
+	i64 nbytes_tot, nbytes_payload;
 
 	// XMP abuses GIF's subblock structure. Instead of being split into
 	// subblocks as GIF expects, XMP is stored as a single blob of bytes,
@@ -758,7 +764,7 @@ static void do_xmp_extension(deark *c, lctx *d, de_int64 pos)
 	dbuf_create_file_from_slice(c->infile, pos, nbytes_payload, "xmp", NULL, DE_CREATEFLAG_IS_AUX);
 }
 
-static void do_iccprofile_extension(deark *c, lctx *d, de_int64 pos)
+static void do_iccprofile_extension(deark *c, lctx *d, i64 pos)
 {
 	dbuf *outf = NULL;
 
@@ -767,12 +773,12 @@ static void do_iccprofile_extension(deark *c, lctx *d, de_int64 pos)
 	dbuf_close(outf);
 }
 
-static void do_imagemagick_extension(deark *c, lctx *d, de_int64 pos)
+static void do_imagemagick_extension(deark *c, lctx *d, i64 pos)
 {
-	de_int64 sub_block_len;
+	i64 sub_block_len;
 	de_ucstring *s = NULL;
 
-	sub_block_len = (de_int64)de_getbyte_p(&pos);
+	sub_block_len = (i64)de_getbyte_p(&pos);
 	if(sub_block_len<1) goto done;
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring(c->infile, pos, sub_block_len, s, 0, DE_ENCODING_ASCII);
@@ -781,25 +787,25 @@ done:
 	ucstring_destroy(s);
 }
 
-static void do_mgk8bim_extension(deark *c, lctx *d, de_int64 pos)
+static void do_mgk8bim_extension(deark *c, lctx *d, i64 pos)
 {
 	dbuf *tmpf = NULL;
 	tmpf = dbuf_create_membuf(c, 0, 0);
 	do_copy_subblocks_to_dbuf(c, d, tmpf, pos, 1, 4*1048576);
-	de_fmtutil_handle_photoshop_rsrc(c, tmpf, 0, tmpf->len);
+	de_fmtutil_handle_photoshop_rsrc(c, tmpf, 0, tmpf->len, 0x0);
 	dbuf_close(tmpf);
 }
 
-static void do_mgkiptc_extension(deark *c, lctx *d, de_int64 pos)
+static void do_mgkiptc_extension(deark *c, lctx *d, i64 pos)
 {
 	dbuf *tmpf = NULL;
 	tmpf = dbuf_create_membuf(c, 0, 0);
 	do_copy_subblocks_to_dbuf(c, d, tmpf, pos, 1, 4*1048576);
-	de_fmtutil_handle_iptc(c, tmpf, 0, tmpf->len);
+	de_fmtutil_handle_iptc(c, tmpf, 0, tmpf->len, 0x0);
 	dbuf_close(tmpf);
 }
 
-static void do_unknown_extension(deark *c, lctx *d, de_int64 pos)
+static void do_unknown_extension(deark *c, lctx *d, i64 pos)
 {
 	dbuf *tmpf = NULL;
 	tmpf = dbuf_create_membuf(c, 0, 0);
@@ -808,13 +814,13 @@ static void do_unknown_extension(deark *c, lctx *d, de_int64 pos)
 	dbuf_close(tmpf);
 }
 
-static void do_application_extension(deark *c, lctx *d, de_int64 pos)
+static void do_application_extension(deark *c, lctx *d, i64 pos)
 {
 	de_ucstring *s = NULL;
-	de_byte app_id[11];
-	de_int64 n;
+	u8 app_id[11];
+	i64 n;
 
-	n = (de_int64)de_getbyte(pos++);
+	n = (i64)de_getbyte(pos++);
 	if(n<11) return;
 
 	de_read(app_id, pos, 11);
@@ -850,11 +856,11 @@ static void do_application_extension(deark *c, lctx *d, de_int64 pos)
 	}
 }
 
-static int do_read_extension(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesused)
+static int do_read_extension(deark *c, lctx *d, i64 pos1, i64 *bytesused)
 {
-	de_int64 bytesused2 = 0;
-	de_byte ext_type;
-	de_int64 pos;
+	i64 bytesused2 = 0;
+	u8 ext_type;
+	i64 pos;
 	const char *ext_name;
 
 	de_dbg_indent(c, 1);
@@ -900,19 +906,19 @@ static int do_read_extension(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesus
 }
 
 // Read 9-byte image header
-static void do_read_image_descriptor(deark *c, lctx *d, struct gif_image_data *gi, de_int64 pos)
+static void do_read_image_descriptor(deark *c, lctx *d, struct gif_image_data *gi, i64 pos)
 {
-	de_byte packed_fields;
+	u8 packed_fields;
 	unsigned int local_color_table_size_code;
 
 	de_dbg(c, "image descriptor at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
-	gi->xpos = de_getui16le(pos);
-	gi->ypos = de_getui16le(pos+2);
+	gi->xpos = de_getu16le(pos);
+	gi->ypos = de_getu16le(pos+2);
 	de_dbg(c, "image position: (%d,%d)", (int)gi->xpos, (int)gi->ypos);
-	gi->width = de_getui16le(pos+4);
-	gi->height = de_getui16le(pos+6);
+	gi->width = de_getu16le(pos+4);
+	gi->height = de_getu16le(pos+6);
 	de_dbg(c, "image dimensions: %d"DE_CHAR_TIMES"%d", (int)gi->width, (int)gi->height);
 
 	packed_fields = de_getbyte(pos+8);
@@ -932,7 +938,7 @@ static void do_read_image_descriptor(deark *c, lctx *d, struct gif_image_data *g
 
 	if(gi->has_local_color_table) {
 		local_color_table_size_code = (unsigned int)(packed_fields&0x07);
-		gi->local_color_table_size = (de_int64)(1<<(local_color_table_size_code+1));
+		gi->local_color_table_size = de_pow2((i64)local_color_table_size_code+1);
 		de_dbg(c, "local color table size: %u (%d colors)",
 			local_color_table_size_code, (int)gi->local_color_table_size);
 	}
@@ -944,12 +950,12 @@ static void do_read_image_descriptor(deark *c, lctx *d, struct gif_image_data *g
 static void do_create_interlace_map(deark *c, lctx *d, struct gif_image_data *gi)
 {
 	int pass;
-	de_int64 startrow, rowskip;
-	de_int64 row;
-	de_int64 rowcount = 0;
+	i64 startrow, rowskip;
+	i64 row;
+	i64 rowcount = 0;
 
 	if(!gi->interlaced) return;
-	gi->interlace_map = de_malloc(c, gi->height * sizeof(de_uint16));
+	gi->interlace_map = de_mallocarray(c, gi->height, sizeof(u16));
 
 	for(pass=1; pass<=4; pass++) {
 		if(pass==1) { startrow=0; rowskip=8; }
@@ -958,7 +964,7 @@ static void do_create_interlace_map(deark *c, lctx *d, struct gif_image_data *gi
 		else { startrow=1; rowskip=2; }
 
 		for(row=startrow; row<gi->height; row+=rowskip) {
-			gi->interlace_map[rowcount] = (de_uint16)row;
+			gi->interlace_map[rowcount] = (u16)row;
 			rowcount++;
 		}
 	}
@@ -967,17 +973,17 @@ static void do_create_interlace_map(deark *c, lctx *d, struct gif_image_data *gi
 // Returns nonzero if parsing can continue.
 // If an image was successfully decoded, also sets gi->img.
 static int do_image_internal(deark *c, lctx *d,
-	struct gif_image_data *gi, de_int64 pos1, de_int64 *bytesused)
+	struct gif_image_data *gi, i64 pos1, i64 *bytesused)
 {
 	int retval = 0;
-	de_int64 pos;
-	de_int64 n;
+	i64 pos;
+	i64 n;
 	int bypp;
 	int failure_flag = 0;
 	int saved_indent_level;
 	unsigned int lzw_min_code_size;
 	struct lzwdeccontext *lz = NULL;
-	de_byte buf[256];
+	u8 buf[256];
 
 	de_dbg_indent_save(c, &saved_indent_level);
 	pos = pos1;
@@ -1029,12 +1035,6 @@ static int do_image_internal(deark *c, lctx *d,
 		gi->img = de_bitmap_create(c, gi->width, gi->height, bypp);
 	}
 
-	if(d->aspect_ratio_code!=0 && d->aspect_ratio_code!=49) {
-		gi->img->density_code = DE_DENSITY_UNK_UNITS;
-		gi->img->xdens = 64.0;
-		gi->img->ydens = 15.0 + (double)d->aspect_ratio_code;
-	}
-
 	lz = de_malloc(c, sizeof(struct lzwdeccontext));
 	if(!lzw_init(c, lz, lzw_min_code_size)) {
 		failure_flag = 1;
@@ -1049,7 +1049,7 @@ static int do_image_internal(deark *c, lctx *d,
 
 	while(1) {
 		if(pos >= c->infile->len) break;
-		n = (de_int64)de_getbyte(pos);
+		n = (i64)de_getbyte(pos);
 		if(n==0)
 			de_dbg(c, "block terminator at %d", (int)pos);
 		else
@@ -1082,12 +1082,12 @@ done:
 	return retval;
 }
 
-static int do_image(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesused)
+static int do_image(deark *c, lctx *d, i64 pos1, i64 *bytesused)
 {
 	int retval = 0;
 	struct gif_image_data *gi = NULL;
 	de_bitmap *prev_img = NULL;
-	de_byte disposal_method = 0;
+	u8 disposal_method = 0;
 
 	de_dbg_indent(c, 1);
 	gi = de_malloc(c, sizeof(struct gif_image_data));
@@ -1117,7 +1117,7 @@ static int do_image(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesused)
 			0, 0, d->screen_img->width, d->screen_img->height,
 			gi->xpos, gi->ypos, DE_BITMAPFLAG_MERGE);
 
-		de_bitmap_write_to_file(d->screen_img, NULL, DE_CREATEFLAG_OPT_IMAGE);
+		de_bitmap_write_to_file_finfo(d->screen_img, d->fi, DE_CREATEFLAG_OPT_IMAGE);
 
 		if(disposal_method == DISPOSE_BKGD) {
 			de_bitmap_rect(d->screen_img, gi->xpos, gi->ypos, gi->width, gi->height,
@@ -1130,7 +1130,7 @@ static int do_image(deark *c, lctx *d, de_int64 pos1, de_int64 *bytesused)
 		}
 	}
 	else {
-		de_bitmap_write_to_file(gi->img, NULL, 0);
+		de_bitmap_write_to_file_finfo(gi->img, d->fi, 0);
 	}
 
 done:
@@ -1152,13 +1152,14 @@ done:
 static void de_run_gif(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 bytesused = 0;
-	de_byte block_type;
+	i64 pos;
+	i64 bytesused = 0;
+	u8 block_type;
 	const char *blk_name;
 
 	d = de_malloc(c, sizeof(lctx));
 	d->compose = 1;
+	d->fi = de_finfo_create(c);
 
 	if(de_get_ext_option(c, "gif:raw")) {
 		d->compose = 0;
@@ -1236,18 +1237,21 @@ done:
 	if(d) {
 		if(d->screen_img) {
 			if(d->dump_screen) {
-				de_bitmap_write_to_file(d->screen_img, "screen", DE_CREATEFLAG_OPT_IMAGE);
+				de_finfo_set_name_from_sz(c, d->fi, "screen", 0, DE_ENCODING_LATIN1);
+				de_bitmap_write_to_file_finfo(d->screen_img, d->fi, DE_CREATEFLAG_OPT_IMAGE);
+				de_finfo_set_name_from_sz(c, d->fi, NULL, 0, DE_ENCODING_LATIN1);
 			}
 			de_bitmap_destroy(d->screen_img);
 		}
 		discard_current_gce_data(c, d);
+		de_finfo_destroy(c, d->fi);
 		de_free(c, d);
 	}
 }
 
 static int de_identify_gif(deark *c)
 {
-	de_byte buf[6];
+	u8 buf[6];
 
 	de_read(buf, 0, 6);
 	if(!de_memcmp(buf, "GIF87a", 6)) return 100;

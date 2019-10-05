@@ -22,9 +22,9 @@ struct fmtinfo_struct {
 // it sets ->confidence to 0.
 static void get_fmt(deark *c, struct fmtinfo_struct *fmti)
 {
-	de_byte b[32];
+	u8 b[32];
 
-	de_memset(fmti, 0, sizeof(struct fmtinfo_struct));
+	de_zeromem(fmti, sizeof(struct fmtinfo_struct));
 
 	de_read(b, 0, sizeof(b));
 
@@ -81,6 +81,30 @@ static void get_fmt(deark *c, struct fmtinfo_struct *fmti)
 		return;
 	}
 
+	if(!de_memcmp(b, "\xff" "WPC", 4)) {
+		fmti->confidence = 40;
+		fmti->descr = "a WordPerfect document";
+		return;
+	}
+
+	if(!de_memcmp(b, "Rar!\x1a\x07", 6)) {
+		fmti->confidence = 90;
+		fmti->descr = "a RAR archive";
+		return;
+	}
+
+	if((!de_memcmp(b, "StuffIt", 7)) && (b[7]=='!' || b[7]=='?')) {
+		fmti->confidence = 90;
+		fmti->descr = "a StuffIt X archive";
+		return;
+	}
+
+	if(!de_memcmp(b, "\x60\xea", 2)) {
+		fmti->confidence = 9;
+		fmti->descr = "an ARJ archive";
+		return;
+	}
+
 	if(!de_memcmp(b, "ICE!", 4) ||
 		!de_memcmp(b, "Ice!", 4))
 	{
@@ -99,6 +123,13 @@ static void get_fmt(deark *c, struct fmtinfo_struct *fmti)
 	if(!de_memcmp(b, "AutoCAD Slide\r\n\x1a", 16)) {
 		fmti->confidence = 100;
 		fmti->descr = "an AutoCAD Slide file";
+		return;
+	}
+
+	if(!de_memcmp(b, "Top!", 4)) {
+		// A format often found alongside RISC OS Draw files
+		fmti->confidence = 9;
+		fmti->descr = "an ArtWorks image";
 		return;
 	}
 

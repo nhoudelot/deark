@@ -13,18 +13,18 @@ DE_DECLARE_MODULE(de_module_dcx);
 #define PCX_HDRSIZE 128
 
 typedef struct localctx_struct {
-	de_byte version;
-	de_byte encoding;
-	de_int64 bits;
-	de_int64 bits_per_pixel;
-	de_int64 margin_L, margin_T, margin_R, margin_B;
-	de_int64 planes;
-	de_int64 rowspan_raw;
-	de_int64 rowspan;
-	de_int64 ncolors;
-	de_byte palette_info;
-	de_byte reserved1;
-	de_int64 width, height;
+	u8 version;
+	u8 encoding;
+	i64 bits;
+	i64 bits_per_pixel;
+	i64 margin_L, margin_T, margin_R, margin_B;
+	i64 planes;
+	i64 rowspan_raw;
+	i64 rowspan;
+	i64 ncolors;
+	u8 palette_info;
+	u8 reserved1;
+	i64 width, height;
 	int is_mswordscr;
 	int has_vga_pal;
 	int has_transparency;
@@ -34,13 +34,13 @@ typedef struct localctx_struct {
 	int default_pal_set;
 
 	dbuf *unc_pixels;
-	de_uint32 pal[256];
+	u32 pal[256];
 } lctx;
 
 static int do_read_header(deark *c, lctx *d)
 {
 	int retval = 0;
-	de_int64 hres, vres;
+	i64 hres, vres;
 	const char *imgtypename = "";
 
 	de_dbg(c, "header at %d", 0);
@@ -48,14 +48,14 @@ static int do_read_header(deark *c, lctx *d)
 
 	d->version = de_getbyte(1);
 	d->encoding = de_getbyte(2);
-	d->bits = (de_int64)de_getbyte(3); // Bits per pixel per plane
-	d->margin_L = de_getui16le(4);
-	d->margin_T = de_getui16le(6);
-	d->margin_R = de_getui16le(8);
-	d->margin_B = de_getui16le(10);
+	d->bits = (i64)de_getbyte(3); // Bits per pixel per plane
+	d->margin_L = de_getu16le(4);
+	d->margin_T = de_getu16le(6);
+	d->margin_R = de_getu16le(8);
+	d->margin_B = de_getu16le(10);
 
-	hres = de_getui16le(12);
-	vres = de_getui16le(14);
+	hres = de_getu16le(12);
+	vres = de_getu16le(14);
 
 	// The palette (offset 16-63) will be read later.
 
@@ -63,8 +63,8 @@ static int do_read_header(deark *c, lctx *d)
 	// the intended video mode. Documentation is lacking, though.
 	d->reserved1 = de_getbyte(64);
 
-	d->planes = (de_int64)de_getbyte(65);
-	d->rowspan_raw = de_getui16le(66);
+	d->planes = (i64)de_getbyte(65);
+	d->rowspan_raw = de_getu16le(66);
 	d->palette_info = de_getbyte(68);
 
 	de_dbg(c, "format version: %d, encoding: %d, planes: %d, bits: %d", (int)d->version,
@@ -163,7 +163,7 @@ done:
 
 static int do_read_vga_palette(deark *c, lctx *d)
 {
-	de_int64 pos;
+	i64 pos;
 
 	if(d->version<5) return 0;
 	if(d->ncolors!=256) return 0;
@@ -191,9 +191,9 @@ static int do_read_alt_palette_file(deark *c, lctx *d)
 	const char *palfn;
 	dbuf *palfile = NULL;
 	int retval = 0;
-	de_int64 k,z;
-	de_byte b1[3];
-	de_byte b2[3];
+	i64 k,z;
+	u8 b1[3];
+	u8 b2[3];
 	int badflag = 0;
 	char tmps[64];
 
@@ -237,7 +237,7 @@ done:
 // 16-color palettes to use, if there is no palette in the file.
 // (8-color version-3 PCXs apparently use only the first 8 colors of the
 // palette.)
-static const de_uint32 ega16pal[2][16] = {
+static const u32 ega16pal[2][16] = {
 	// This palette seems to be correct for at least some files.
 	{0x000000,0x000080,0x008000,0x008080,0x800000,0x800080,0x808000,0x808080,
 	 0xc0c0c0,0x0000ff,0x00ff00,0x00ffff,0xff0000,0xff00ff,0xffff00,0xffffff},
@@ -250,7 +250,7 @@ static const de_uint32 ega16pal[2][16] = {
 
 static void do_palette_stuff(deark *c, lctx *d)
 {
-	de_int64 k;
+	i64 k;
 
 	if(d->ncolors>256) {
 		return;
@@ -278,10 +278,10 @@ static void do_palette_stuff(deark *c, lctx *d)
 
 	if(d->version==3 && d->ncolors>=8 && d->ncolors<=16) {
 		if(!d->default_pal_set) {
-			de_msg(c, "Note: This paletted PCX file does not contain a palette. "
+			de_info(c, "Note: This paletted PCX file does not contain a palette. "
 				"If it is not decoded correctly, try \"-opt pcx:pal=1\".");
 		}
-		de_dbg(c, "Using a default EGA palette");
+		de_dbg(c, "using a default EGA palette");
 		for(k=0; k<16; k++) {
 			d->pal[k] = ega16pal[d->default_pal_num][k];
 		}
@@ -298,18 +298,17 @@ static void do_palette_stuff(deark *c, lctx *d)
 	}
 
 	if(d->ncolors==4) {
-		de_byte p0, p3;
+		u8 p0, p3;
 		unsigned int bgcolor;
 		unsigned int fgpal;
 
 		de_warn(c, "4-color PCX images might not be supported correctly");
-		de_dbg(c, "using a CGA palette");
 
 		p0 = de_getbyte(16);
 		p3 = de_getbyte(19);
 		bgcolor = p0>>4;
 		fgpal = p3>>5;
-		de_dbg(c, "palette #%d, background color %d", (int)fgpal, (int)bgcolor);
+		de_dbg(c, "using a CGA palette: palette #%d, bkgd color %d", (int)fgpal, (int)bgcolor);
 
 		// Set first pal entry to background color
 		d->pal[0] = de_palette_pc16(bgcolor);
@@ -346,13 +345,14 @@ static void do_palette_stuff(deark *c, lctx *d)
 
 static int do_uncompress(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_byte b, b2;
-	de_int64 count;
-	de_int64 expected_bytes;
-	de_int64 endpos;
+	i64 pos;
+	u8 b, b2;
+	i64 count;
+	i64 expected_bytes;
+	i64 endpos;
 
 	pos = PCX_HDRSIZE;
+	de_dbg(c, "compressed bitmap at %d", (int)pos);
 
 	expected_bytes = d->rowspan * d->height;
 	d->unc_pixels = dbuf_create_membuf(c, expected_bytes, 0);
@@ -374,7 +374,7 @@ static int do_uncompress(deark *c, lctx *d)
 		b = de_getbyte(pos++);
 
 		if(b>=0xc0) {
-			count = (de_int64)(b&0x3f);
+			count = (i64)(b&0x3f);
 			b2 = de_getbyte(pos++);
 			dbuf_write_run(d->unc_pixels, b2, count);
 		}
@@ -384,7 +384,7 @@ static int do_uncompress(deark *c, lctx *d)
 	}
 
 	if(d->unc_pixels->len < expected_bytes) {
-		de_warn(c, "Expected %d bytes of image data, but only found %d",
+		de_warn(c, "Expected %d bytes of image data, only found %d",
 			(int)expected_bytes, (int)d->unc_pixels->len);
 	}
 
@@ -402,9 +402,9 @@ static void do_bitmap_1bpp(deark *c, lctx *d)
 static void do_bitmap_paletted(deark *c, lctx *d)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_int64 plane;
-	de_byte b;
+	i64 i, j;
+	i64 plane;
+	u8 b;
 	unsigned int palent;
 
 	img = de_bitmap_create(c, d->width, d->height, 3);
@@ -429,9 +429,9 @@ static void do_bitmap_paletted(deark *c, lctx *d)
 static void do_bitmap_24bpp(deark *c, lctx *d)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_int64 plane;
-	de_byte s[4];
+	i64 i, j;
+	i64 plane;
+	u8 s[4];
 
 	de_memset(s, 0xff, sizeof(s));
 	img = de_bitmap_create(c, d->width, d->height, d->has_transparency?4:3);
@@ -487,7 +487,7 @@ static void de_run_pcx_internal(deark *c, lctx *d, de_module_params *mparams)
 	if(d->encoding==0) {
 		// Uncompressed PCXs are probably not standard, but support for them is not
 		// uncommon. Imagemagick, for example, will create them if you ask it to.
-		de_dbg(c, "assuming pixels are uncompressed (encoding=0)");
+		de_dbg(c, "uncompressed bitmap at %d", (int)PCX_HDRSIZE);
 		d->unc_pixels = dbuf_open_input_subfile(c->infile,
 			PCX_HDRSIZE, c->infile->len-PCX_HDRSIZE);
 	}
@@ -514,7 +514,7 @@ static void de_run_pcx(deark *c, de_module_params *mparams)
 
 static int de_identify_pcx(deark *c)
 {
-	de_byte buf[8];
+	u8 buf[8];
 
 	de_read(buf, 0, 8);
 	if(buf[0]==0x0a && (buf[1]==0 || buf[1]==2 || buf[1]==3
@@ -524,7 +524,7 @@ static int de_identify_pcx(deark *c)
 		if(de_input_file_has_ext(c, "pcx"))
 			return 100;
 
-		return 10;
+		return 16;
 	}
 	return 0;
 }
@@ -561,7 +561,7 @@ static void de_run_mswordscr(deark *c, de_module_params *mparams)
 
 static int de_identify_mswordscr(deark *c)
 {
-	de_byte buf[8];
+	u8 buf[8];
 
 	de_read(buf, 0, 8);
 	if(buf[0]==0xcd && (buf[1]==0 || buf[1]==2 || buf[1]==3
@@ -590,15 +590,15 @@ void de_module_mswordscr(deark *c, struct deark_module_info *mi)
 
 static void de_run_dcx(deark *c, de_module_params *mparams)
 {
-	de_uint32 *page_offset;
-	de_int64 num_pages;
-	de_int64 page;
-	de_int64 page_size;
+	u32 *page_offset;
+	i64 num_pages;
+	i64 page;
+	i64 page_size;
 
-	page_offset = de_malloc(c, 1023 * sizeof(de_uint32));
+	page_offset = de_mallocarray(c, 1023, sizeof(u32));
 	num_pages = 0;
 	while(num_pages < 1023) {
-		page_offset[num_pages] = (de_uint32)de_getui32le(4 + 4*num_pages);
+		page_offset[num_pages] = (u32)de_getu32le(4 + 4*num_pages);
 		if(page_offset[num_pages]==0)
 			break;
 		num_pages++;

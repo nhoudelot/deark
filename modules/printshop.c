@@ -23,23 +23,23 @@ typedef struct localctx_struct {
 	dbuf *namefile;
 } lctx;
 
-static void do_printshop_etc_image(deark *c, lctx *d, de_int64 imgnum,
-	de_int64 pos, de_int64 *bytes_consumed)
+static void do_printshop_etc_image(deark *c, lctx *d, i64 imgnum,
+	i64 pos, i64 *bytes_consumed)
 {
-	de_int64 width, height;
-	de_int64 rowspan;
-	de_int64 imgspan;
-	de_int64 imgoffset = 0;
+	i64 width, height;
+	i64 rowspan;
+	i64 imgspan;
+	i64 imgoffset = 0;
 	de_finfo *fi = NULL;
-	de_byte x;
+	u8 x;
 
 	*bytes_consumed = 0;
 
 	if(d->fmt==PRINTSHOP_FMT_SHP) {
 		x = de_getbyte(pos);
 		if(x!=0x0b) goto done; // No more images?
-		height = (de_int64)de_getbyte(pos+1);
-		width = (de_int64)de_getbyte(pos+2);
+		height = (i64)de_getbyte(pos+1);
+		width = (i64)de_getbyte(pos+2);
 		if(width==0 || height==0) goto done;
 		rowspan = (width+7)/8; // This is just a guess.
 		imgoffset = 4;
@@ -64,7 +64,7 @@ static void do_printshop_etc_image(deark *c, lctx *d, de_int64 imgnum,
 		name = ucstring_create(c);
 		dbuf_read_to_ucstring(d->namefile, imgnum*16, 16, name, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
 		de_dbg(c, "name: \"%s\"", ucstring_getpsz(name));
-		de_finfo_set_name_from_ucstring(c, fi, name);
+		de_finfo_set_name_from_ucstring(c, fi, name, 0);
 		ucstring_destroy(name);
 	}
 
@@ -80,12 +80,12 @@ done:
 
 static void do_printshop_etc(deark *c, lctx *d)
 {
-	de_int64 headersize = 0;
+	i64 headersize = 0;
 	const char *namefile_fn = NULL;
-	de_int64 bytes_consumed;
-	de_int64 pos;
-	de_int64 img_count;
-	de_int64 num_images = 0;
+	i64 bytes_consumed;
+	i64 pos;
+	i64 img_count;
+	i64 num_images = 0;
 	int num_images_is_known = 0;
 
 	namefile_fn = de_get_ext_option(c, "namefile");
@@ -99,7 +99,7 @@ static void do_printshop_etc(deark *c, lctx *d)
 	}
 
 	if(d->fmt == PRINTSHOP_FMT_POG) {
-		num_images = de_getui16le(8);
+		num_images = de_getu16le(8);
 		de_dbg(c, "number of images: %d", (int)num_images);
 		num_images_is_known = 1;
 		headersize = 10;
@@ -214,7 +214,7 @@ static void de_run_printmaster(deark *c, de_module_params *mparams)
 
 static int de_identify_printmaster(deark *c)
 {
-	de_byte b[4];
+	u8 b[4];
 	int sdr_ext;
 
 	sdr_ext = de_input_file_has_ext(c, "sdr");

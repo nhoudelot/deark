@@ -13,29 +13,29 @@ DE_DECLARE_MODULE(de_module_bmi);
 
 struct table_item {
 	unsigned int tag_num;
-	de_int64 tag_offs;
+	i64 tag_offs;
 };
 
 struct imageinfo {
-	de_int64 w, h;
+	i64 w, h;
 	unsigned int palmode;
-	de_int64 bpp;
-	de_int64 num_pal_entries;
-	de_uint32 pal[256];
+	i64 bpp;
+	i64 num_pal_entries;
+	u32 pal[256];
 };
 
 typedef struct localctx_struct {
 	int input_encoding;
-	de_int64 fixed_header_size;
-	de_int64 num_table_items;
+	i64 fixed_header_size;
+	i64 num_table_items;
 	struct table_item *table;
 	struct imageinfo globalimg;
 } lctx;
 
-static void read_palette(deark *c, lctx *d, struct imageinfo *ii, de_int64 pos1)
+static void read_palette(deark *c, lctx *d, struct imageinfo *ii, i64 pos1)
 {
 	if(ii->num_pal_entries<1) return;
-	de_dbg(c, "palette at %"INT64_FMT", %d entries", pos1, (int)ii->num_pal_entries);
+	de_dbg(c, "palette at %"I64_FMT", %d entries", pos1, (int)ii->num_pal_entries);
 	de_dbg_indent(c, 1);
 	de_read_palette_rgb(c->infile, pos1, ii->num_pal_entries, 4,
 		ii->pal, 256, DE_GETRGBFLAG_BGR);
@@ -43,9 +43,9 @@ static void read_palette(deark *c, lctx *d, struct imageinfo *ii, de_int64 pos1)
 }
 
 // Read the fixed part of the header
-static int do_header(deark *c, lctx *d, de_int64 pos1)
+static int do_header(deark *c, lctx *d, i64 pos1)
 {
-	de_int64 pos = pos1;
+	i64 pos = pos1;
 	int retval = 0;
 
 	de_dbg(c, "header at %d", (int)pos1);
@@ -53,23 +53,23 @@ static int do_header(deark *c, lctx *d, de_int64 pos1)
 
 	pos += 9; // signature
 
-	d->globalimg.w = de_getui16le_p(&pos);
-	d->globalimg.h = de_getui16le_p(&pos);
+	d->globalimg.w = de_getu16le_p(&pos);
+	d->globalimg.h = de_getu16le_p(&pos);
 	de_dbg_dimensions(c, d->globalimg.w, d->globalimg.h);
 
-	d->globalimg.palmode = (unsigned int)de_getui16le_p(&pos);
+	d->globalimg.palmode = (unsigned int)de_getu16le_p(&pos);
 	de_dbg(c, "palette mode: %u", d->globalimg.palmode);
 
-	d->globalimg.bpp = de_getui16le_p(&pos);
+	d->globalimg.bpp = de_getu16le_p(&pos);
 	de_dbg(c, "bits/pixel: %d", (int)d->globalimg.bpp);
 
 	if(d->globalimg.palmode && d->globalimg.bpp>=1 && d->globalimg.bpp<=8) {
-		d->globalimg.num_pal_entries = (de_int64)(1U<<((unsigned int)d->globalimg.bpp));
+		d->globalimg.num_pal_entries = de_pow2(d->globalimg.bpp);
 	}
 
 	pos += 2;
 
-	d->num_table_items = de_getui16le_p(&pos);
+	d->num_table_items = de_getu16le_p(&pos);
 	if(d->num_table_items>100) goto done;
 
 	d->fixed_header_size = pos - pos1;
@@ -83,20 +83,20 @@ done:
 	return retval;
 }
 
-static int do_read_table(deark *c, lctx *d, de_int64 pos1)
+static int do_read_table(deark *c, lctx *d, i64 pos1)
 {
-	de_int64 pos = pos1;
-	de_int64 k;
+	i64 pos = pos1;
+	i64 k;
 
 	de_dbg(c, "table at %d, %d items", (int)pos1, (int)d->num_table_items);
-	d->table = de_malloc(c, d->num_table_items*sizeof(struct table_item));
+	d->table = de_mallocarray(c, d->num_table_items, sizeof(struct table_item));
 
 	de_dbg_indent(c, 1);
 
 	for(k=0; k<d->num_table_items; k++) {
-		d->table[k].tag_num = (unsigned int)de_getui16le_p(&pos);
-		d->table[k].tag_offs = de_getui32le_p(&pos);
-		de_dbg(c, "item[%d]: tag=0x%x, offset=%"INT64_FMT, (int)k,
+		d->table[k].tag_num = (unsigned int)de_getu16le_p(&pos);
+		d->table[k].tag_offs = de_getu32le_p(&pos);
+		de_dbg(c, "item[%d]: tag=0x%x, offset=%"I64_FMT, (int)k,
 			d->table[k].tag_num, d->table[k].tag_offs);
 	}
 
@@ -104,33 +104,34 @@ static int do_read_table(deark *c, lctx *d, de_int64 pos1)
 	return 1;
 }
 
-static void do_bitmap(deark *c, lctx *d, de_int64 pos1)
+static void do_bitmap(deark *c, lctx *d, i64 pos1)
 {
 	int saved_indent_level;
-	de_int64 pos = pos1;
-	de_int64 unc_data_size;
-	de_int64 max_uncmpr_block_size;
-	de_int64 i, j;
-	de_int64 rowspan;
+	i64 pos = pos1;
+	i64 unc_data_size_reported;
+	i64 unc_data_size_calc;
+	i64 max_uncmpr_block_size;
+	i64 i, j;
+	i64 rowspan;
 	de_bitmap *img = NULL;
 	dbuf *unc_pixels = NULL;
 	struct imageinfo ii;
-	const de_uint32 *pal_to_use = d->globalimg.pal;
+	const u32 *pal_to_use = d->globalimg.pal;
 
-	de_memset(&ii, 0, sizeof(struct imageinfo));
+	de_zeromem(&ii, sizeof(struct imageinfo));
 
 	de_dbg_indent_save(c, &saved_indent_level);
 
-	de_dbg(c, "bitmap at %"INT64_FMT, pos1);
+	de_dbg(c, "bitmap at %"I64_FMT, pos1);
 	de_dbg_indent(c, 1);
-	ii.w = de_getui16le_p(&pos);
-	ii.h = de_getui16le_p(&pos);
+	ii.w = de_getu16le_p(&pos);
+	ii.h = de_getu16le_p(&pos);
 	de_dbg_dimensions(c, ii.w, ii.h);
 
-	ii.bpp = de_getui16le_p(&pos);
+	ii.bpp = de_getu16le_p(&pos);
 	de_dbg(c, "bits/pixel: %d", (int)ii.bpp);
 
-	ii.palmode = (unsigned int)de_getui16le_p(&pos);
+	ii.palmode = (unsigned int)de_getu16le_p(&pos);
 	de_dbg(c, "palette mode: %u", ii.palmode);
 
 	if(ii.palmode) {
@@ -138,17 +139,25 @@ static void do_bitmap(deark *c, lctx *d, de_int64 pos1)
 	}
 
 	if(ii.palmode && ii.bpp>=1 && ii.bpp<=8) {
-		ii.num_pal_entries = (de_int64)(1U<<((unsigned int)ii.bpp));
+		ii.num_pal_entries = de_pow2(ii.bpp);
 	}
 
 	pos += 2;
 
-	unc_data_size = de_getui32le_p(&pos);
-	de_dbg(c, "uncmpr data size: %"INT64_FMT, unc_data_size);
-	if(unc_data_size>DE_MAX_FILE_SIZE) goto done;
+	unc_data_size_reported = de_getu32le_p(&pos);
+	de_dbg(c, "uncmpr data size (reported): %"I64_FMT, unc_data_size_reported);
 
-	max_uncmpr_block_size = de_getui16le_p(&pos);
+	rowspan = de_pad_to_n(ii.w*ii.bpp, 32)/8;
+	unc_data_size_calc = rowspan * ii.h;
+	de_dbg(c, "uncmpr data size (calculated): %"I64_FMT, unc_data_size_calc);
+
+	if(unc_data_size_reported>DE_MAX_SANE_OBJECT_SIZE) goto done;
+
+	max_uncmpr_block_size = de_getu16le_p(&pos);
 	de_dbg(c, "max uncmpr block size: %d", (int)max_uncmpr_block_size);
+	if(max_uncmpr_block_size > unc_data_size_calc) {
+		max_uncmpr_block_size = unc_data_size_calc;
+	}
 
 	if(ii.num_pal_entries>0) {
 		read_palette(c, d, &ii, pos);
@@ -161,40 +170,51 @@ static void do_bitmap(deark *c, lctx *d, de_int64 pos1)
 		goto done;
 	}
 
-	unc_pixels = dbuf_create_membuf(c, unc_data_size, 1);
+	unc_pixels = dbuf_create_membuf(c, unc_data_size_calc, 1);
 
 	while(1) {
-		de_int64 blen;
+		i64 blen;
 
-		if(unc_pixels->len >= unc_data_size) break;
+		if(unc_pixels->len >= unc_data_size_reported) break;
 		if(pos >= c->infile->len) goto done;
 
 		de_dbg(c, "block at %d", (int)pos);
 		de_dbg_indent(c, 1);
-		blen = de_getui16le_p(&pos);
+		blen = de_getu16le_p(&pos);
 		de_dbg(c, "block len: %d", (int)blen);
 		pos++;
 		if(pos+blen > c->infile->len) goto done;
 		if(blen>max_uncmpr_block_size) goto done;
 
-		if(!de_uncompress_zlib(c->infile, pos, blen, unc_pixels)) goto done;
+		if(unc_pixels->len < unc_data_size_calc) {
+			i64 len_before = unc_pixels->len;
+
+			if(!de_decompress_deflate(c->infile, pos, blen, unc_pixels,
+				max_uncmpr_block_size, NULL,
+				DE_DEFLATEFLAG_ISZLIB|DE_DEFLATEFLAG_USEMAXUNCMPRSIZE))
+			{
+				goto done;
+			}
+
+			de_dbg(c, "decompressed to: %"I64_FMT" (total=%"I64_FMT")",
+				unc_pixels->len - len_before, unc_pixels->len);
+		}
 		de_dbg_indent(c, -1);
 
 		pos += blen;
 	}
 
 	img = de_bitmap_create(c, ii.w, ii.h, 3);
-	rowspan = de_pad_to_n(ii.w*ii.bpp, 32)/8;
 
 	for(j=0; j<ii.h; j++) {
 		for(i=0; i<ii.w; i++) {
 			if(ii.bpp==24) {
-				de_uint32 clr;
+				u32 clr;
 				clr = dbuf_getRGB(unc_pixels, j*rowspan+i*3, DE_GETRGBFLAG_BGR);
 				de_bitmap_setpixel_rgb(img, i, j, clr);
 			}
 			else {
-				de_byte b;
+				u8 b;
 				b = de_get_bits_symbol(unc_pixels, ii.bpp, j*rowspan, i);
 				de_bitmap_setpixel_rgb(img, i, j, pal_to_use[(unsigned int)b]);
 			}
@@ -211,7 +231,7 @@ done:
 
 static void do_bitmaps(deark *c, lctx *d)
 {
-	de_int64 k;
+	i64 k;
 
 	for(k=0; k<d->num_table_items; k++) {
 		if(d->table[k].tag_num==0x0001) {
@@ -220,14 +240,14 @@ static void do_bitmaps(deark *c, lctx *d)
 	}
 }
 
-static void do_comment(deark *c, lctx *d, de_int64 idx, de_int64 pos1)
+static void do_comment(deark *c, lctx *d, i64 idx, i64 pos1)
 {
 	de_ucstring *s = NULL;
-	de_int64 cmt_len;
-	de_int64 pos = pos1;
+	i64 cmt_len;
+	i64 pos = pos1;
 
 	pos += 2;
-	cmt_len = de_getui32le_p(&pos);
+	cmt_len = de_getu32le_p(&pos);
 	pos += 2;
 
 	s = ucstring_create(c);
@@ -239,7 +259,7 @@ static void do_comment(deark *c, lctx *d, de_int64 idx, de_int64 pos1)
 
 static void do_comments(deark *c, lctx *d)
 {
-	de_int64 k;
+	i64 k;
 
 	for(k=0; k<d->num_table_items; k++) {
 		if(d->table[k].tag_num==0x0003) {
@@ -251,14 +271,11 @@ static void do_comments(deark *c, lctx *d)
 static void de_run_bmi(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos = 0;
+	i64 pos = 0;
 
 	d = de_malloc(c, sizeof(lctx));
 
-	if(c->input_encoding==DE_ENCODING_UNKNOWN)
-		d->input_encoding = DE_ENCODING_WINDOWS1252;
-	else
-		d->input_encoding = c->input_encoding;
+	d->input_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_WINDOWS1252);
 
 	if(!do_header(c, d, pos)) goto done;
 	pos += d->fixed_header_size;

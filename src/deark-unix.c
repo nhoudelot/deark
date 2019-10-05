@@ -7,9 +7,7 @@
 #define DE_NOT_IN_MODULE
 #include "deark-config.h"
 
-#ifdef DE_WINDOWS
-#error "This file is not for Windows builds"
-#endif
+#ifdef DE_UNIX
 
 // This file is overloaded, in that it contains functions intended to only
 // be used internally, as well as functions intended only for the
@@ -20,15 +18,15 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <unistd.h>
-#include <time.h>
 #include <utime.h>
 #include <errno.h>
 
-int de_strcasecmp(const char *a, const char *b)
-{
-	return strcasecmp(a, b);
-}
+// Unix-specific contextual data, not currently used.
+struct de_platform_data {
+	int reserved;
+};
 
 void de_vsnprintf(char *buf, size_t buflen, const char *fmt, va_list ap)
 {
@@ -49,7 +47,7 @@ char *de_strdup(deark *c, const char *s)
 	return s2;
 }
 
-de_int64 de_strtoll(const char *string, char **endptr, int base)
+i64 de_strtoll(const char *string, char **endptr, int base)
 {
 	return strtoll(string, endptr, base);
 }
@@ -70,13 +68,13 @@ static FILE* de_fopen(deark *c, const char *fn, const char *mode,
 
 // Test if the file seems suitable for reading, and return its size.
 // returned flags: 0x1 = file is a FIFO (named pipe)
-static int de_examine_file_by_fd(deark *c, int fd, de_int64 *len,
+static int de_examine_file_by_fd(deark *c, int fd, i64 *len,
 	char *errmsg, size_t errmsg_len, unsigned int *returned_flags)
 {
 	struct stat stbuf;
 
 	*returned_flags = 0;
-	de_memset(&stbuf, 0, sizeof(struct stat));
+	de_zeromem(&stbuf, sizeof(struct stat));
 
 	if(0 != fstat(fd, &stbuf)) {
 		de_strlcpy(errmsg, strerror(errno), errmsg_len);
@@ -93,11 +91,11 @@ static int de_examine_file_by_fd(deark *c, int fd, de_int64 *len,
 		return 0;
 	}
 
-	*len = (de_int64)stbuf.st_size;
+	*len = (i64)stbuf.st_size;
 	return 1;
 }
 
-FILE* de_fopen_for_read(deark *c, const char *fn, de_int64 *len,
+FILE* de_fopen_for_read(deark *c, const char *fn, i64 *len,
 	char *errmsg, size_t errmsg_len, unsigned int *returned_flags)
 {
 	int ret;
@@ -120,11 +118,59 @@ FILE* de_fopen_for_read(deark *c, const char *fn, de_int64 *len,
 
 // flags: 0x1 = append instead of overwriting
 FILE* de_fopen_for_write(deark *c, const char *fn,
-	char *errmsg, size_t errmsg_len, unsigned int flags)
+	char *errmsg, size_t errmsg_len, int overwrite_mode,
+	unsigned int flags)
 {
 	const char *mode;
+
+	if(overwrite_mode!=DE_OVERWRITEMODE_STANDARD) {
+		// Check if the file already exists.
+		struct stat stbuf;
+		int s_ret;
+
+		de_zeromem(&stbuf, sizeof(struct stat));
+		s_ret = lstat(fn, &stbuf);
+
+		 // s_ret==0 = "success"
+		if(s_ret==0 && overwrite_mode==DE_OVERWRITEMODE_NEVER) {
+			de_strlcpy(errmsg, "Output file already exists", errmsg_len);
+			return NULL;
+		}
+
+		if(s_ret==0 && overwrite_mode==DE_OVERWRITEMODE_DEFAULT) {
+			if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+				de_strlcpy(errmsg, "Output file is a symlink", errmsg_len);
+				return NULL;
+			}
+		}
+	}
+
 	mode = (flags&0x1) ? "ab" : "wb";
 	return de_fopen(c, fn, mode, errmsg, errmsg_len);
+}
+
+int de_fseek(FILE *fp, i64 offs, int whence)
+{
+	int ret;
+
+#ifdef DE_USE_FSEEKO
+	ret = fseeko(fp, (off_t)offs, whence);
+#else
+	ret = fseek(fp, (long)offs, whence);
+#endif
+	return ret;
+}
+
+i64 de_ftell(FILE *fp)
+{
+	i64 ret;
+
+#ifdef DE_USE_FSEEKO
+	ret = (i64)ftello(fp);
+#else
+	ret = (i64)ftell(fp);
+#endif
+	return ret;
 }
 
 int de_fclose(FILE *fp)
@@ -140,10 +186,11 @@ void de_update_file_perms(dbuf *f)
 	mode_t oldmode, newmode;
 
 	if(f->btype!=DBUF_TYPE_OFILE) return;
+	if(!f->fi_copy) return;
 	if(!f->name) return;
-	if(!(f->mode_flags&DE_MODEFLAG_NONEXE) && !(f->mode_flags&DE_MODEFLAG_EXE)) return;
+	if(!(f->fi_copy->mode_flags&DE_MODEFLAG_NONEXE) &&!(f->fi_copy->mode_flags&DE_MODEFLAG_EXE)) return;
 
-	de_memset(&stbuf, 0, sizeof(struct stat));
+	de_zeromem(&stbuf, sizeof(struct stat));
 	if(0 != stat(f->name, &stbuf)) {
 		return;
 	}
@@ -154,7 +201,7 @@ void de_update_file_perms(dbuf *f)
 	// Start by turning off the executable bits in the tentative new mode.
 	newmode &= ~(S_IXUSR|S_IXGRP|S_IXOTH);
 
-	if(f->mode_flags&DE_MODEFLAG_EXE) {
+	if(f->fi_copy->mode_flags&DE_MODEFLAG_EXE) {
 		// Set an Executable bit if its corresponding Read bit is set.
 		if(oldmode & S_IRUSR) newmode |= S_IXUSR;
 		if(oldmode & S_IRGRP) newmode |= S_IXGRP;
@@ -170,67 +217,64 @@ void de_update_file_perms(dbuf *f)
 
 void de_update_file_time(dbuf *f)
 {
-	struct utimbuf times;
+	const struct de_timestamp *ts;
+	struct timeval times[2];
 
 	if(f->btype!=DBUF_TYPE_OFILE) return;
-	if(!f->mod_time.is_valid) return;
+	if(!f->fi_copy) return;
+	ts = &f->fi_copy->mod_time;
+	if(!ts->is_valid) return;
 	if(!f->name) return;
 
 	// I know that this code is not Y2038-compliant, if sizeof(time_t)==4.
 	// But it's not likely to be a serious problem, and I'd rather not replace
 	// it with code that's less portable.
 
-	times.modtime = de_timestamp_to_unix_time(&f->mod_time);
-	times.actime = times.modtime;
-	utime(f->name, &times);
-}
-
-// Note: Need to keep this function in sync with the implementation in deark-win.c.
-void de_timestamp_to_string(const struct de_timestamp *ts,
-	char *buf, size_t buf_len, unsigned int flags)
-{
-	de_int64 tmpt_int64;
-	time_t tmpt;
-	struct tm *tm1;
-	const char *tzlabel;
-
-	if(!ts->is_valid) {
-		de_strlcpy(buf, "[invalid timestamp]", buf_len);
-		return;
+	de_zeromem(&times, sizeof(times));
+	// times[0] = access time
+	times[0].tv_sec = (long)de_timestamp_to_unix_time(ts);
+	if(ts->precision>DE_TSPREC_1SEC) {
+		times[0].tv_usec = (long)(de_timestamp_get_subsec(ts)/10);
 	}
-
-	tmpt_int64 = de_timestamp_to_unix_time(ts);
-
-	if(sizeof(time_t)<=4) {
-		if(tmpt_int64<-0x80000000LL || tmpt_int64>0x7fffffffLL) {
-			// TODO: Support a wider range of timestamps.
-			// See comment in deark-win.c.
-			de_snprintf(buf, buf_len, "[timestamp out of range: %"INT64_FMT"]", tmpt_int64);
-			return;
-		}
-	}
-
-	tmpt = (time_t)tmpt_int64;
-	tm1 = gmtime(&tmpt);
-
-	tzlabel = (flags&0x1)?" UTC":"";
-	de_snprintf(buf, buf_len, "%04d-%02d-%02d %02d:%02d:%02d%s",
-		1900+tm1->tm_year, 1+tm1->tm_mon, tm1->tm_mday,
-		tm1->tm_hour, tm1->tm_min, tm1->tm_sec, tzlabel);
+	// times[1] = mod time
+	times[1] = times[0];
+	utimes(f->name, times);
 }
 
 // Note: Need to keep this function in sync with the implementation in deark-win.c.
 void de_current_time_to_timestamp(struct de_timestamp *ts)
 {
-	time_t t;
+	struct timeval tv;
+	int ret;
 
-	de_memset(ts, 0, sizeof(struct de_timestamp));
-	time(&t);
-	ts->unix_time = (de_int64)t;
-	ts->is_valid = 1;
+	de_zeromem(&tv, sizeof(struct timeval));
+	ret = gettimeofday(&tv, NULL);
+	if(ret!=0) {
+		de_zeromem(ts, sizeof(struct de_timestamp));
+		return;
+	}
+
+	de_unix_time_to_timestamp((i64)tv.tv_sec, ts, 0x1);
+	de_timestamp_set_subsec(ts, ((double)tv.tv_usec)/1000000.0);
 }
 
 void de_exitprocess(void)
 {
 	exit(1);
 }
+
+struct de_platform_data *de_platformdata_create(deark *c)
+{
+	struct de_platform_data *plctx;
+
+	plctx = de_malloc(c, sizeof(struct de_platform_data));
+	return plctx;
+}
+
+void de_platformdata_destroy(deark *c, struct de_platform_data *plctx)
+{
+	if(!plctx) return;
+	de_free(c, plctx);
+}
+
+#endif // DE_UNIX

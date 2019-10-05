@@ -13,22 +13,22 @@ typedef struct localctx_struct {
 } lctx;
 
 struct opcode_data {
-	de_int64 pos;
-	de_int64 ptsin_pos;
-	de_int64 intin_pos;
-	de_int64 opcode;
+	i64 pos;
+	i64 ptsin_pos;
+	i64 intin_pos;
+	i64 opcode;
 
 	// "Function sub-ID". This is also confusingly called "sub-opcode", but
 	// "sub-opcode" means something entirely different with respect to opcode 5.
-	de_int64 func_id;
+	i64 func_id;
 
-	de_int64 ptsin_count, intin_count;
+	i64 ptsin_count, intin_count;
 };
 
 typedef void (*record_decoder_fn)(deark *c, lctx *d, struct opcode_data *op);
 
 struct opcode_info {
-	de_uint16 opcode;
+	u16 opcode;
 	const char *name;
 	record_decoder_fn fn;
 };
@@ -67,12 +67,12 @@ static const struct opcode_info opcode_info_arr[] = {
 
 static void do_opcode_5(deark *c, lctx *d, struct opcode_data *op)
 {
-	de_int64 sub_opcode_id;
+	i64 sub_opcode_id;
 	const char *name;
 
 	if(op->func_id!=99) return;
 	if(op->intin_count<1) return;
-	sub_opcode_id = de_getui16le(op->intin_pos);
+	sub_opcode_id = de_getu16le(op->intin_pos);
 
 	switch(sub_opcode_id) {
 	case 10: name="Start Group"; break;
@@ -115,9 +115,9 @@ static void do_opcode_11(deark *c, lctx *d, struct opcode_data *op)
 	de_dbg(c, "function: %s", name);
 }
 
-static const struct opcode_info *find_opcode_info(de_int64 opcode)
+static const struct opcode_info *find_opcode_info(i64 opcode)
 {
-	de_int64 i;
+	i64 i;
 
 	for(i=0; opcode_info_arr[i].name!=NULL; i++) {
 		if(opcode_info_arr[i].opcode == opcode) {
@@ -128,26 +128,26 @@ static const struct opcode_info *find_opcode_info(de_int64 opcode)
 }
 
 // Returns 0 if we should stop reading the file.
-static int do_record(deark *c, lctx *d, de_int64 pos, de_int64 *bytesused)
+static int do_record(deark *c, lctx *d, i64 pos, i64 *bytesused)
 {
 	int retval = 0;
 	struct opcode_data op;
-	de_int64 ptsin_size_bytes;
-	de_int64 intin_size_bytes;
-	de_int64 data_size_bytes;
+	i64 ptsin_size_bytes;
+	i64 intin_size_bytes;
+	i64 data_size_bytes;
 	const struct opcode_info *opinfo;
 	const char *opcode_name;
 
 	*bytesused = 0;
-	de_memset(&op, 0, sizeof(struct opcode_data));
+	de_zeromem(&op, sizeof(struct opcode_data));
 
 	de_dbg(c, "record at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
-	op.opcode = de_getui16le(pos);
-	op.ptsin_count = de_getui16le(pos+2);
-	op.intin_count = de_getui16le(pos+4);
-	op.func_id = de_getui16le(pos+6);
+	op.opcode = de_getu16le(pos);
+	op.ptsin_count = de_getu16le(pos+2);
+	op.intin_count = de_getu16le(pos+4);
+	op.func_id = de_getu16le(pos+6);
 
 	ptsin_size_bytes = 4*op.ptsin_count;
 	intin_size_bytes = 2*op.intin_count;
@@ -186,22 +186,22 @@ done:
 static void de_run_gemmeta(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 hdrlen_words;
-	de_int64 version;
-	de_int64 imgflag;
-	de_int64 bytesused;
+	i64 pos;
+	i64 hdrlen_words;
+	i64 version;
+	i64 imgflag;
+	i64 bytesused;
 
 	d = de_malloc(c, sizeof(lctx));
-	de_msg(c, "Note: GEM VDI Metafiles can be parsed, but no files can be extracted from them.");
+	de_info(c, "Note: GEM VDI Metafiles can be parsed, but no files can be extracted from them.");
 
 	pos = 0;
-	hdrlen_words = de_getui16le(pos+2);
+	hdrlen_words = de_getu16le(pos+2);
 	de_dbg(c, "header length: %d words", (int)hdrlen_words);
-	version = de_getui16le(pos+4);
+	version = de_getu16le(pos+4);
 	de_dbg(c, "version number: %d", (int)version);
 	// TODO: Read more header fields.
-	imgflag = de_getui16le(pos+28);
+	imgflag = de_getu16le(pos+28);
 	de_dbg(c, "image flag: %d", (int)imgflag);
 
 	pos += hdrlen_words*2;

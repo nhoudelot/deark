@@ -9,44 +9,44 @@
 #include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_emf);
 
-#define CODE_EMFPLUS 0x454d462bU
-#define CODE_GDIC 0x47444943U
+#define CODE_EMFPLUS   0x2b464d45U
+#define CODE_GDIC      0x43494447U
 
 typedef struct localctx_struct {
 	int input_encoding;
 	int is_emfplus;
 	int emf_found_header;
-	de_int64 emf_version;
-	de_int64 emf_num_records;
+	i64 emf_version;
+	i64 emf_num_records;
 } lctx;
 
 struct decoder_params {
-	de_uint32 rectype;
-	de_int64 recpos;
-	de_int64 recsize_bytes;
-	de_int64 dpos;
-	de_int64 dlen;
+	u32 rectype;
+	i64 recpos;
+	i64 recsize_bytes;
+	i64 dpos;
+	i64 dlen;
 };
 
 // Handler functions return 0 on fatal error, otherwise 1.
 typedef int (*record_decoder_fn)(deark *c, lctx *d, struct decoder_params *dp);
 
 struct emf_func_info {
-	de_uint32 rectype;
+	u32 rectype;
 	const char *name;
 	record_decoder_fn fn;
 };
 
 struct emfplus_rec_info {
-	de_uint32 rectype;
+	u32 rectype;
 	const char *name;
 	void *reserved1;
 };
 
 // Note: This is duplicated in wmf.c
-static de_uint32 colorref_to_color(de_uint32 colorref)
+static u32 colorref_to_color(u32 colorref)
 {
-	de_uint32 r,g,b;
+	u32 r,g,b;
 	r = DE_COLOR_B(colorref);
 	g = DE_COLOR_G(colorref);
 	b = DE_COLOR_R(colorref);
@@ -54,9 +54,9 @@ static de_uint32 colorref_to_color(de_uint32 colorref)
 }
 
 // Note: This is duplicated in wmf.c
-static void do_dbg_colorref(deark *c, lctx *d, de_uint32 colorref)
+static void do_dbg_colorref(deark *c, lctx *d, u32 colorref)
 {
-	de_uint32 clr;
+	u32 clr;
 	char csamp[16];
 
 	clr = colorref_to_color(colorref);
@@ -74,12 +74,12 @@ static void ucstring_strip_trailing_NULs(de_ucstring *s)
 // Header record
 static int emf_handler_01(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos;
-	de_int64 file_size;
-	de_int64 handles;
-	de_int64 desc_len;
-	de_int64 desc_offs;
-	de_int64 num_pal_entries;
+	i64 pos;
+	i64 file_size;
+	i64 handles;
+	i64 desc_len;
+	i64 desc_offs;
+	i64 num_pal_entries;
 	int retval = 0;
 	de_ucstring *desc = NULL;
 
@@ -93,18 +93,18 @@ static int emf_handler_01(deark *c, lctx *d, struct decoder_params *dp)
 
 	// 2.2.9 Header Object
 	pos = dp->recpos + 8;
-	d->emf_version = de_getui32le(pos+36);
+	d->emf_version = de_getu32le(pos+36);
 	de_dbg(c, "version: 0x%08x", (unsigned int)d->emf_version);
-	file_size = de_getui32le(pos+40);
+	file_size = de_getu32le(pos+40);
 	de_dbg(c, "reported file size: %d", (int)file_size);
-	d->emf_num_records = de_getui32le(pos+44);
+	d->emf_num_records = de_getu32le(pos+44);
 	de_dbg(c, "number of records in file: %d", (int)d->emf_num_records);
-	handles = de_getui16le(pos+48);
+	handles = de_getu16le(pos+48);
 	de_dbg(c, "handles: %d", (int)handles);
-	desc_len = de_getui32le(pos+52);
-	desc_offs = de_getui32le(pos+56);
+	desc_len = de_getu32le(pos+52);
+	desc_offs = de_getu32le(pos+56);
 	de_dbg(c, "description offset=%d, len=%d", (int)desc_offs, (int)desc_len);
-	num_pal_entries = de_getui32le(pos+60);
+	num_pal_entries = de_getu32le(pos+60);
 	de_dbg(c, "num pal entries: %d", (int)num_pal_entries);
 
 	if((desc_len>0) && (desc_offs+desc_len*2 <= dp->recsize_bytes)) {
@@ -122,12 +122,12 @@ done:
 }
 
 static void do_identify_and_extract_compressed_bitmap(deark *c, lctx *d,
-	de_int64 pos, de_int64 len)
+	i64 pos, i64 len)
 {
 	const char *ext = NULL;
-	de_byte buf[4];
-	de_int64 nbytes_to_extract;
-	de_int64 foundpos;
+	u8 buf[4];
+	i64 nbytes_to_extract;
+	i64 foundpos;
 
 	if(len<=0) return;
 	if(pos+len > c->infile->len) return;
@@ -170,23 +170,23 @@ static void do_identify_and_extract_compressed_bitmap(deark *c, lctx *d,
 }
 
 // EmfPlusBitmap
-static void do_emfplus_object_image_bitmap(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void do_emfplus_object_image_bitmap(deark *c, lctx *d, i64 pos, i64 len)
 {
-	de_int64 w, h;
-	de_int64 ty;
-	de_int64 endpos;
+	i64 w, h;
+	i64 ty;
+	i64 endpos;
 	const char *name;
 
 	if(len<=0) return;
 	endpos = pos + len;
 
-	w = de_getui32le(pos);
-	h = de_getui32le(pos+4);
+	w = de_getu32le(pos);
+	h = de_getu32le(pos+4);
 	de_dbg_dimensions(c, w, h);
 
 	// 8 stride
 	// 12 pixelformat
-	ty = de_getui32le(pos+16); // BitmapDataType
+	ty = de_getu32le(pos+16); // BitmapDataType
 	switch(ty) {
 	case 0: name="Pixel"; break;
 	case 1: name="Compressed"; break;
@@ -200,16 +200,16 @@ static void do_emfplus_object_image_bitmap(deark *c, lctx *d, de_int64 pos, de_i
 }
 
 // EmfPlusMetafile
-static void do_emfplus_object_image_metafile(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void do_emfplus_object_image_metafile(deark *c, lctx *d, i64 pos, i64 len)
 {
-	de_int64 ty;
-	de_int64 dlen;
+	i64 ty;
+	i64 dlen;
 	const char *name;
 	const char *ext = NULL;
 
 	if(len<8) return;
 
-	ty = de_getui32le(pos);
+	ty = de_getu32le(pos);
 	switch(ty) {
 	case 1: name="Wmf"; break;
 	case 2: name="WmfPlaceable"; break;
@@ -220,7 +220,7 @@ static void do_emfplus_object_image_metafile(deark *c, lctx *d, de_int64 pos, de
 	}
 	de_dbg(c, "type: %d (%s)", (int)ty, name);
 
-	dlen = de_getui32le(pos+4);
+	dlen = de_getu32le(pos+4);
 	de_dbg(c, "metafile data size: %d", (int)dlen);
 
 	if(dlen<1 || dlen>len-8) return;
@@ -233,15 +233,15 @@ static void do_emfplus_object_image_metafile(deark *c, lctx *d, de_int64 pos, de
 }
 
 // EmfPlusImage
-static void do_emfplus_object_image(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void do_emfplus_object_image(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_int64 ver;
-	de_int64 datatype;
-	de_int64 pos = pos1;
+	i64 ver;
+	i64 datatype;
+	i64 pos = pos1;
 	const char *name;
 
-	ver = de_getui32le(pos);
-	datatype = de_getui32le(pos+4);
+	ver = de_getu32le(pos);
+	datatype = de_getu32le(pos+4);
 	name = "?";
 
 	switch(datatype) { // ImageDataType
@@ -265,11 +265,11 @@ static void do_emfplus_object_image(deark *c, lctx *d, de_int64 pos1, de_int64 l
 // 0x4008 EmfPlusObject
 // pos is the beginning of the 'ObjectData' field
 // len is the DataSize field.
-static void do_emfplus_object(deark *c, lctx *d, de_int64 pos, de_int64 len,
-	de_uint32 flags)
+static void do_emfplus_object(deark *c, lctx *d, i64 pos, i64 len,
+	u32 flags)
 {
-	de_uint32 object_id;
-	de_uint32 object_type;
+	u32 object_id;
+	u32 object_type;
 	const char *name;
 	static const char *names[10] = { "Invalid", "Brush", "Pen", "Path",
 		"Region", "Image", "Font", "StringFormat", "ImageAttributes",
@@ -294,7 +294,7 @@ static void do_emfplus_object(deark *c, lctx *d, de_int64 pos, de_int64 len,
 }
 
 // EMF+ Comment
-static int emfplus_handler_4003(deark *c, lctx *d, de_int64 rectype, de_int64 pos, de_int64 len)
+static int emfplus_handler_4003(deark *c, lctx *d, i64 rectype, i64 pos, i64 len)
 {
 	if(c->debug_level>=2) {
 		de_dbg_hexdump(c, c->infile, pos, len, 256, "comment", 0x1);
@@ -306,14 +306,14 @@ static int emfplus_handler_4003(deark *c, lctx *d, de_int64 rectype, de_int64 po
 }
 
 // EMF+ DrawString
-static int emfplus_handler_401c(deark *c, lctx *d, de_int64 rectype, de_int64 pos1, de_int64 len)
+static int emfplus_handler_401c(deark *c, lctx *d, i64 rectype, i64 pos1, i64 len)
 {
-	de_int64 pos = pos1;
-	de_int64 nchars;
+	i64 pos = pos1;
+	i64 nchars;
 	de_ucstring *s = NULL;
 
 	pos += 8; // brushid, formatid
-	nchars = de_getui32le(pos);
+	nchars = de_getu32le(pos);
 	pos += 4;
 	pos += 16; // layoutrect
 	if(pos+nchars*2 > pos1+len) goto done;
@@ -373,13 +373,13 @@ static const struct emfplus_rec_info emfplus_rec_info_arr[] = {
 	{ 0x4038, "SerializableObject", NULL }
 };
 
-static void do_one_emfplus_record(deark *c, lctx *d, de_int64 pos, de_int64 len,
-	de_int64 *bytes_consumed, int *continuation_flag)
+static void do_one_emfplus_record(deark *c, lctx *d, i64 pos, i64 len,
+	i64 *bytes_consumed, int *continuation_flag)
 {
-	de_uint32 rectype;
-	de_uint32 flags;
-	de_int64 size, datasize;
-	de_int64 payload_pos;
+	u32 rectype;
+	u32 flags;
+	i64 size, datasize;
+	i64 payload_pos;
 	const struct emfplus_rec_info *epinfo = NULL;
 	size_t k;
 	int is_continued = 0;
@@ -390,9 +390,9 @@ static void do_one_emfplus_record(deark *c, lctx *d, de_int64 pos, de_int64 len,
 		return;
 	}
 
-	rectype = (de_uint32)de_getui16le(pos);
-	flags = (de_uint32)de_getui16le(pos+2);
-	size = de_getui32le(pos+4);
+	rectype = (u32)de_getu16le(pos);
+	flags = (u32)de_getu16le(pos+2);
+	size = de_getu32le(pos+4);
 
 	is_continued = (rectype==0x4008) && (flags&0x8000);
 
@@ -409,7 +409,7 @@ static void do_one_emfplus_record(deark *c, lctx *d, de_int64 pos, de_int64 len,
 	// code to try to detect where an embedded PNG or whatever file ends.
 	// (The existence of 'continued' records makes this issue more complicated,
 	// but they are already a special case, so that's no excuse.)
-	datasize = de_getui32le(pos+8);
+	datasize = de_getu32le(pos+8);
 	payload_pos = pos+12;
 
 	// Find the name, etc. of this record type
@@ -452,10 +452,10 @@ done:
 }
 
 // Series of EMF+ records (from a single EMF comment)
-static void do_comment_emfplus(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void do_comment_emfplus(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_int64 pos = pos1;
-	de_int64 bytes_consumed;
+	i64 pos = pos1;
+	i64 bytes_consumed;
 	int continuation_flag = 0;
 
 	de_dbg(c, "EMF+ data at %d, len=%d", (int)pos1, (int)len);
@@ -471,11 +471,11 @@ static void do_comment_emfplus(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 }
 
 // Series of EMF+ records (from a single EMF comment)
-static void do_comment_public(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void do_comment_public(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_uint32 ty;
+	u32 ty;
 	const char *name;
-	ty = (de_uint32)de_getui32le(pos1);
+	ty = (u32)de_getu32le(pos1);
 	switch(ty) {
 	case 0x80000001U: name = "WINDOWS_METAFILE"; break;
 	case 0x00000002U: name = "BEGINGROUP"; break;
@@ -491,50 +491,95 @@ static void do_comment_public(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 // Comment record
 static int emf_handler_46(deark *c, lctx *d, struct decoder_params *dp)
 {
-	struct de_fourcc id4cc;
 	const char *name;
-	de_int64 datasize;
+	i64 datasize;
+	int handled = 0;
+	enum cmtid_enum { CMTID_UNK, CMTID_EMFSPOOL, CMTID_EMFPLUS, CMTID_PUBLIC,
+		CMTID_INKSCAPESCREEN, CMTID_INKSCAPEDRAWING };
+	enum cmtid_enum cmtid;
 
-	//de_dbg(c, "comment at %d len=%d", (int)recpos, (int)recsize_bytes);
 	if(dp->recsize_bytes<16) goto done;
 
 	// Datasize is measured from the beginning of the next field (CommentIdentifier).
-	datasize = de_getui32le(dp->recpos+8);
+	datasize = de_getu32le(dp->recpos+8);
+	de_dbg(c, "datasize: %"I64_FMT, datasize);
+	if(12+datasize > dp->recsize_bytes) goto done;
 
-	dbuf_read_fourcc(c->infile, dp->recpos+12, &id4cc, 4, 0x0);
+	cmtid = CMTID_UNK;
+	name="?";
 
-	switch(id4cc.id) {
-	case 0: name="EMR_COMMENT_EMFSPOOL"; break;
-	case CODE_EMFPLUS: name="EMR_COMMENT_EMFPLUS"; break;
-	case CODE_GDIC: name="EMR_COMMENT_PUBLIC"; break;
-	default: name="?";
+	if(datasize>=4) {
+		struct de_fourcc id4cc;
+
+		// The first 4 bytes of comment data might or might not be a signature.
+		// The spec expects these bytes to be read as a little-endian int, which is
+		// then interpreted as a FOURCC, most-significant byte first.
+		// The standard FOURCC codes are designed backwards, so that in the
+		// file they appear forward. E.g. the spec says a code is "+FME", but in
+		// the file the bytes "EMF+" appear in that order. Our messages respect the
+		// spec, though it looks strange.
+		dbuf_read_fourcc(c->infile, dp->recpos+12, &id4cc, 4, 0x1);
+
+		if(id4cc.id==0x00000000) {
+			cmtid = CMTID_EMFSPOOL;
+			name = "EMR_COMMENT_EMFSPOOL";
+		}
+		else if(id4cc.id==CODE_EMFPLUS) {
+			cmtid = CMTID_EMFPLUS;
+			name = "EMR_COMMENT_EMFPLUS";
+		}
+		else if(id4cc.id==CODE_GDIC) {
+			cmtid = CMTID_PUBLIC;
+			name = "EMR_COMMENT_PUBLIC";
+		}
+
+		de_dbg(c, "type: 0x%08x '%s' (%s)", (unsigned int)id4cc.id,
+			id4cc.id_dbgstr, name);
 	}
 
-	de_dbg(c, "type: 0x%08x '%s' (%s) datasize=%d", (unsigned int)id4cc.id, id4cc.id_dbgstr, name,
-		(int)datasize);
+	if(cmtid==CMTID_UNK) {
+		u8 buf[16];
 
-	if(datasize<=4 || 12+datasize > dp->recsize_bytes) goto done; // Bad datasize
+		// FOURCC not recognized; try other methods
+		de_read(buf, dp->recpos+12, 16);
+		if(datasize>=7 && !de_memcmp(buf, "Screen=", 7)) {
+			cmtid = CMTID_INKSCAPESCREEN;
+			name = "Inkscape canvas size";
+		}
+		else if(datasize>=8 && !de_memcmp(buf, "Drawing=", 8)) {
+			cmtid = CMTID_INKSCAPEDRAWING;
+			name = "Inkscape image size";
+		}
 
-	if(id4cc.id==CODE_EMFPLUS) {
+		de_dbg(c, "identified as: %s", name);
+	}
+
+	if(cmtid==CMTID_EMFPLUS) {
 		do_comment_emfplus(c, d, dp->recpos+16, datasize-4);
+		handled = 1;
 	}
-	else if(id4cc.id==CODE_GDIC) {
+	else if(cmtid==CMTID_PUBLIC) {
 		do_comment_public(c, d, dp->recpos+16, datasize-4);
+		handled = 1;
+	}
+
+	if(!handled) {
+		de_dbg_hexdump(c, c->infile, dp->recpos+12, datasize, 256, NULL, 0x1);
 	}
 
 done:
 	return 1;
 }
 
-static void extract_dib(deark *c, lctx *d, de_int64 bmi_pos, de_int64 bmi_len,
-	de_int64 bits_pos, de_int64 bits_len)
+static void extract_dib(deark *c, lctx *d, i64 bmi_pos, i64 bmi_len,
+	i64 bits_pos, i64 bits_len)
 {
 	struct de_bmpinfo bi;
 	dbuf *outf = NULL;
-	de_int64 real_height;
+	i64 real_height;
 
 	if(bmi_len<12 || bmi_len>2048) goto done;
-	if(bits_len<1 || bmi_len+bits_len>DE_MAX_FILE_SIZE) goto done;
+	if(bits_len<1 || bmi_len+bits_len>DE_MAX_SANE_OBJECT_SIZE) goto done;
 
 	if(!de_fmtutil_get_bmpinfo(c, c->infile, &bi, bmi_pos, bmi_len, 0)) {
 		de_warn(c, "Invalid bitmap");
@@ -546,7 +591,7 @@ static void extract_dib(deark *c, lctx *d, de_int64 bmi_pos, de_int64 bmi_len,
 	// Sometimes, only a portion of the image is present. In most cases, we
 	// can compensate for that.
 	if(bi.bitcount>0 && bi.rowspan>0) {
-		de_int64 nscanlines_present;
+		i64 nscanlines_present;
 
 		nscanlines_present = bits_len/bi.rowspan;
 		if(nscanlines_present>0 && nscanlines_present<bi.height && bi.infohdrsize>=16) {
@@ -563,17 +608,17 @@ static void extract_dib(deark *c, lctx *d, de_int64 bmi_pos, de_int64 bmi_len,
 		dbuf_copy(c->infile, bmi_pos, bmi_len, outf);
 	}
 	else {
-		de_byte *tmp_bmi;
+		u8 *tmp_bmi;
 
 		// Make a copy of the BITMAPINFO data, for us to modify.
 		tmp_bmi = de_malloc(c, bmi_len);
 		de_read(tmp_bmi, bmi_pos, bmi_len);
 
-		de_writeui32le_direct(&tmp_bmi[8], real_height); // Correct the biHeight field
+		de_writeu32le_direct(&tmp_bmi[8], real_height); // Correct the biHeight field
 
 		if(bmi_len>=24) {
 			// Correct (or set) the biSizeImage field
-			de_writeui32le_direct(&tmp_bmi[20], bits_len);
+			de_writeu32le_direct(&tmp_bmi[20], bits_len);
 		}
 		dbuf_write(outf, tmp_bmi, bmi_len);
 		de_free(c, tmp_bmi);
@@ -603,10 +648,10 @@ static const char *get_stock_obj_name(unsigned int n)
 	return name ? name : "?";
 }
 
-static void read_object_index_p(deark *c, lctx *d, de_int64 *ppos)
+static void read_object_index_p(deark *c, lctx *d, i64 *ppos)
 {
 	unsigned int n;
-	n = (unsigned int)de_getui32le_p(ppos);
+	n = (unsigned int)de_getu32le_p(ppos);
 	if(n & 0x80000000U) {
 		// A stock object
 		de_dbg(c, "object index: 0x%08x (%s)", n, get_stock_obj_name(n));
@@ -616,13 +661,13 @@ static void read_object_index_p(deark *c, lctx *d, de_int64 *ppos)
 	}
 }
 
-static void read_LogPen(deark *c, lctx *d, de_int64 pos)
+static void read_LogPen(deark *c, lctx *d, i64 pos)
 {
 	unsigned int style;
-	de_int64 n;
-	de_uint32 colorref;
+	i64 n;
+	u32 colorref;
 
-	style = (unsigned int)de_getui32le_p(&pos);
+	style = (unsigned int)de_getu32le_p(&pos);
 	de_dbg(c, "style: 0x%08x", style);
 
 	n = de_geti32le_p(&pos); // <PointL>.x = pen width
@@ -630,13 +675,13 @@ static void read_LogPen(deark *c, lctx *d, de_int64 pos)
 
 	pos += 4; // <PointL>.y = unused
 
-	colorref = (de_uint32)de_getui32le_p(&pos);
+	colorref = (u32)de_getu32le_p(&pos);
 	do_dbg_colorref(c, d, colorref);
 }
 
 static int handler_CREATEPEN(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->dpos;
+	i64 pos = dp->dpos;
 
 	if(dp->dlen<20) return 1;
 	read_object_index_p(c, d, &pos);
@@ -644,15 +689,15 @@ static int handler_CREATEPEN(deark *c, lctx *d, struct decoder_params *dp)
 	return 1;
 }
 
-static void read_LogBrushEx(deark *c, lctx *d, de_int64 pos)
+static void read_LogBrushEx(deark *c, lctx *d, i64 pos)
 {
 	unsigned int style;
-	de_uint32 colorref;
+	u32 colorref;
 
-	style = (unsigned int)de_getui32le_p(&pos);
+	style = (unsigned int)de_getu32le_p(&pos);
 	de_dbg(c, "style: 0x%08x", style);
 
-	colorref = (de_uint32)de_getui32le_p(&pos);
+	colorref = (u32)de_getu32le_p(&pos);
 	do_dbg_colorref(c, d, colorref);
 
 	// TODO: BrushHatch
@@ -660,7 +705,7 @@ static void read_LogBrushEx(deark *c, lctx *d, de_int64 pos)
 
 static int handler_CREATEBRUSHINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->dpos;
+	i64 pos = dp->dpos;
 
 	if(dp->dlen<16) return 1;
 	read_object_index_p(c, d, &pos);
@@ -670,8 +715,8 @@ static int handler_CREATEBRUSHINDIRECT(deark *c, lctx *d, struct decoder_params 
 
 static int handler_colorref(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_uint32 colorref;
-	colorref = (de_uint32)de_getui32le(dp->dpos);
+	u32 colorref;
+	colorref = (u32)de_getu32le(dp->dpos);
 	do_dbg_colorref(c, d, colorref);
 	return 1;
 }
@@ -679,7 +724,7 @@ static int handler_colorref(deark *c, lctx *d, struct decoder_params *dp)
 // Can handle any record that is, or begins with, and object index.
 static int handler_object_index(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->dpos;
+	i64 pos = dp->dpos;
 
 	if(dp->dlen<4) return 1;
 	read_object_index_p(c, d, &pos);
@@ -689,22 +734,22 @@ static int handler_object_index(deark *c, lctx *d, struct decoder_params *dp)
 // BITBLT
 static int emf_handler_4c(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 rop;
-	de_int64 bmi_offs;
-	de_int64 bmi_len;
-	de_int64 bits_offs;
-	de_int64 bits_len;
+	i64 rop;
+	i64 bmi_offs;
+	i64 bmi_len;
+	i64 bits_offs;
+	i64 bits_len;
 
 	if(dp->recsize_bytes<100) return 1;
 
-	rop = de_getui32le(dp->recpos+40);
+	rop = de_getu32le(dp->recpos+40);
 	de_dbg(c, "raster operation: 0x%08x", (unsigned int)rop);
 
-	bmi_offs = de_getui32le(dp->recpos+84);
-	bmi_len = de_getui32le(dp->recpos+88);
+	bmi_offs = de_getu32le(dp->recpos+84);
+	bmi_len = de_getu32le(dp->recpos+88);
 	de_dbg(c, "bmi offset=%d, len=%d", (int)bmi_offs, (int)bmi_len);
-	bits_offs = de_getui32le(dp->recpos+92);
-	bits_len = de_getui32le(dp->recpos+96);
+	bits_offs = de_getu32le(dp->recpos+92);
+	bits_len = de_getu32le(dp->recpos+96);
 	de_dbg(c, "bits offset=%d, len=%d", (int)bits_offs, (int)bits_len);
 
 	if(bmi_len<12) return 1;
@@ -721,13 +766,13 @@ static int emf_handler_4c(deark *c, lctx *d, struct decoder_params *dp)
 // 0x51 = StretchDIBits
 static int emf_handler_50_51(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 rop;
-	de_int64 bmi_offs;
-	de_int64 bmi_len;
-	de_int64 bits_offs;
-	de_int64 bits_len;
-	de_int64 fixed_header_len;
-	de_int64 num_scans;
+	i64 rop;
+	i64 bmi_offs;
+	i64 bmi_len;
+	i64 bits_offs;
+	i64 bits_len;
+	i64 fixed_header_len;
+	i64 num_scans;
 
 	if(dp->rectype==0x50)
 		fixed_header_len = 76;
@@ -736,20 +781,20 @@ static int emf_handler_50_51(deark *c, lctx *d, struct decoder_params *dp)
 
 	if(dp->recsize_bytes<fixed_header_len) return 1;
 
-	bmi_offs = de_getui32le(dp->recpos+48);
-	bmi_len = de_getui32le(dp->recpos+52);
+	bmi_offs = de_getu32le(dp->recpos+48);
+	bmi_len = de_getu32le(dp->recpos+52);
 	de_dbg(c, "bmi offset=%d, len=%d", (int)bmi_offs, (int)bmi_len);
-	bits_offs = de_getui32le(dp->recpos+56);
-	bits_len = de_getui32le(dp->recpos+60);
+	bits_offs = de_getu32le(dp->recpos+56);
+	bits_len = de_getu32le(dp->recpos+60);
 	de_dbg(c, "bits offset=%d, len=%d", (int)bits_offs, (int)bits_len);
 
 	if(dp->rectype==0x51) {
-		rop = de_getui32le(dp->recpos+68);
+		rop = de_getu32le(dp->recpos+68);
 		de_dbg(c, "raster operation: 0x%08x", (unsigned int)rop);
 	}
 
 	if(dp->rectype==0x50) {
-		num_scans = de_getui32le(dp->recpos+72);
+		num_scans = de_getu32le(dp->recpos+72);
 		de_dbg(c, "number of scanlines: %d", (int)num_scans);
 	}
 
@@ -764,18 +809,18 @@ static int emf_handler_50_51(deark *c, lctx *d, struct decoder_params *dp)
 	return 1;
 }
 
-static void do_emf_xEmrText(deark *c, lctx *d, de_int64 recpos, de_int64 pos1, de_int64 len,
-	de_int64 bytesperchar, int encoding)
+static void do_emf_xEmrText(deark *c, lctx *d, i64 recpos, i64 pos1, i64 len,
+	i64 bytesperchar, de_encoding encoding)
 {
-	de_int64 pos = pos1;
-	de_int64 nchars;
-	de_int64 offstring;
+	i64 pos = pos1;
+	i64 nchars;
+	i64 offstring;
 	de_ucstring *s = NULL;
 
 	pos += 8; // Reference
-	nchars = de_getui32le(pos);
+	nchars = de_getu32le(pos);
 	pos += 4;
-	offstring = de_getui32le(pos);
+	offstring = de_getu32le(pos);
 	if(recpos+offstring+nchars*bytesperchar > pos1+len) goto done;
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring_n(c->infile, recpos+offstring, nchars*bytesperchar,
@@ -787,12 +832,12 @@ done:
 	ucstring_destroy(s);
 }
 
-static void do_emf_aEmrText(deark *c, lctx *d, de_int64 recpos, de_int64 pos1, de_int64 len)
+static void do_emf_aEmrText(deark *c, lctx *d, i64 recpos, i64 pos1, i64 len)
 {
 	do_emf_xEmrText(c, d, recpos, pos1, len, 1, d->input_encoding);
 }
 
-static void do_emf_wEmrText(deark *c, lctx *d, de_int64 recpos, de_int64 pos1, de_int64 len)
+static void do_emf_wEmrText(deark *c, lctx *d, i64 recpos, i64 pos1, i64 len)
 {
 	do_emf_xEmrText(c, d, recpos, pos1, len, 2, DE_ENCODING_UTF16LE);
 }
@@ -800,7 +845,7 @@ static void do_emf_wEmrText(deark *c, lctx *d, de_int64 recpos, de_int64 pos1, d
 // 0x53 = EMR_EXTTEXTOUTA
 static int emf_handler_53(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->recpos;
+	i64 pos = dp->recpos;
 
 	pos += 8; // type, size
 	pos += 16; // bounds
@@ -812,7 +857,7 @@ static int emf_handler_53(deark *c, lctx *d, struct decoder_params *dp)
 // 0x54 = EMR_EXTTEXTOUTW
 static int emf_handler_54(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->recpos;
+	i64 pos = dp->recpos;
 
 	pos += 8; // type, size
 	pos += 16; // bounds
@@ -821,12 +866,12 @@ static int emf_handler_54(deark *c, lctx *d, struct decoder_params *dp)
 	return 1;
 }
 
-static void do_LogFont(deark *c, lctx *d, struct decoder_params *dp, de_int64 pos1, de_int64 len)
+static void do_LogFont(deark *c, lctx *d, struct decoder_params *dp, i64 pos1, i64 len)
 {
 	de_ucstring *facename = NULL;
-	de_int64 pos = pos1;
-	de_int64 n, n2;
-	de_byte b;
+	i64 pos = pos1;
+	i64 n, n2;
+	u8 b;
 
 	if(len<92) goto done;
 
@@ -848,14 +893,14 @@ done:
 	ucstring_destroy(facename);
 }
 
-static void do_LogFontEx(deark *c, lctx *d, struct decoder_params *dp, de_int64 pos1, de_int64 len)
+static void do_LogFontEx(deark *c, lctx *d, struct decoder_params *dp, i64 pos1, i64 len)
 {
 	do_LogFont(c, d, dp, pos1, len);
 	// TODO: FullName, Style, Script
 
 }
 
-static void do_LogFontExDv(deark *c, lctx *d, struct decoder_params *dp, de_int64 pos1, de_int64 len)
+static void do_LogFontExDv(deark *c, lctx *d, struct decoder_params *dp, i64 pos1, i64 len)
 {
 	do_LogFontEx(c, d, dp, pos1, len);
 	// TODO: DesignVector
@@ -863,8 +908,8 @@ static void do_LogFontExDv(deark *c, lctx *d, struct decoder_params *dp, de_int6
 
 static int handler_EXTCREATEFONTINDIRECTW(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->dpos;
-	de_int64 elw_size;
+	i64 pos = dp->dpos;
+	i64 elw_size;
 
 	read_object_index_p(c, d, &pos); // ihFonts
 
@@ -1005,7 +1050,7 @@ static const struct emf_func_info emf_func_info_arr[] = {
 	{ 0x7a, "CREATECOLORSPACEW", handler_object_index } // TODO: A better handler
 };
 
-static const struct emf_func_info *find_emf_func_info(de_uint32 rectype)
+static const struct emf_func_info *find_emf_func_info(u32 rectype)
 {
 	size_t i;
 
@@ -1017,25 +1062,25 @@ static const struct emf_func_info *find_emf_func_info(de_uint32 rectype)
 	return NULL;
 }
 
-static int do_emf_record(deark *c, lctx *d, de_int64 recnum, de_int64 recpos,
-	de_int64 recsize_bytes)
+static int do_emf_record(deark *c, lctx *d, i64 recnum, i64 recpos,
+	i64 recsize_bytes)
 {
 	int ret;
 	const struct emf_func_info *fnci;
 	struct decoder_params dp;
 
-	de_memset(&dp, 0, sizeof(struct decoder_params));
+	de_zeromem(&dp, sizeof(struct decoder_params));
 	dp.recpos = recpos;
 	dp.recsize_bytes = recsize_bytes;
 	dp.dpos = recpos+8;
 	dp.dlen = recsize_bytes-8;
 	if(dp.dlen<0) dp.dlen=0;
 
-	dp.rectype = (de_uint32)de_getui32le(recpos);
+	dp.rectype = (u32)de_getu32le(recpos);
 
 	fnci = find_emf_func_info(dp.rectype);
 
-	de_dbg(c, "record #%d at %d, type=0x%02x (%s), dpos=%"INT64_FMT", dlen=%"INT64_FMT,
+	de_dbg(c, "record #%d at %d, type=0x%02x (%s), dpos=%"I64_FMT", dlen=%"I64_FMT,
 		(int)recnum, (int)recpos, (unsigned int)dp.rectype,
 		fnci ? fnci->name : "?", dp.dpos, dp.dlen);
 
@@ -1051,10 +1096,10 @@ static int do_emf_record(deark *c, lctx *d, de_int64 recnum, de_int64 recpos,
 
 static void do_emf_record_list(deark *c, lctx *d)
 {
-	de_int64 pos = 0;
-	de_int64 recpos;
-	de_int64 recsize_bytes;
-	de_int64 count = 0;
+	i64 pos = 0;
+	i64 recpos;
+	i64 recsize_bytes;
+	i64 count = 0;
 
 	// The entire EMF file is a sequence of records. The header record
 	// (type 0x01) is expected to appear first.
@@ -1067,7 +1112,7 @@ static void do_emf_record_list(deark *c, lctx *d)
 			goto done;
 		}
 
-		recsize_bytes = de_getui32le(recpos+4);
+		recsize_bytes = de_getu32le(recpos+4);
 		if(recpos+recsize_bytes > c->infile->len) {
 			de_err(c, "Unexpected end of file in record %d", (int)count);
 			goto done;
@@ -1093,10 +1138,10 @@ done:
 // Sets d->is_emfplus.
 static void detect_emfplus(deark *c, lctx *d)
 {
-	de_int64 nextpos;
-	nextpos = de_getui32le(4);
-	if(de_getui32le(nextpos)==0x46 &&
-		de_getui32be(nextpos+12)==CODE_EMFPLUS)
+	i64 nextpos;
+	nextpos = de_getu32le(4);
+	if(de_getu32le(nextpos)==0x46 &&
+		de_getu32le(nextpos+12)==CODE_EMFPLUS)
 	{
 		d->is_emfplus = 1;
 	}
@@ -1108,10 +1153,7 @@ static void de_run_emf(deark *c, de_module_params *mparams)
 
 	d = de_malloc(c, sizeof(lctx));
 
-	if(c->input_encoding==DE_ENCODING_UNKNOWN)
-		d->input_encoding = DE_ENCODING_WINDOWS1252;
-	else
-		d->input_encoding = c->input_encoding;
+	d->input_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_WINDOWS1252);
 
 	detect_emfplus(c, d);
 

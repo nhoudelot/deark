@@ -17,29 +17,30 @@ DE_DECLARE_MODULE(de_module_cpio);
 struct member_data {
 	int subfmt;
 	int is_le;
-	de_int64 startpos;
-	de_int64 fixed_header_size; // Not including the filename
-	de_int64 namesize;
-	de_int64 namesize_padded;
-	de_int64 filesize;
-	de_int64 filesize_padded;
-	de_int64 mode;
-	de_int64 checksum_reported;
+	i64 startpos;
+	i64 fixed_header_size; // Not including the filename
+	i64 namesize;
+	i64 namesize_padded;
+	i64 filesize;
+	i64 filesize_padded;
+	i64 mode;
+	u32 checksum_reported;
 	struct de_stringreaderdata *filename_srd;
 	de_finfo *fi;
-	de_uint32 checksum_calculated;
+	u32 checksum_calculated;
 };
 
 typedef struct localctx_struct {
 	int first_subfmt;
 	int trailer_found;
+	int input_encoding;
 } lctx;
 
 // Returns a value suitable for format identification.
 // If format is unidentified, subfmt=0
-static int identify_cpio_internal(deark *c, de_int64 pos, int *subfmt)
+static int identify_cpio_internal(deark *c, i64 pos, int *subfmt)
 {
-	de_byte b[6];
+	u8 b[6];
 
 	*subfmt = 0;
 	de_read(b, pos, sizeof(b));
@@ -78,10 +79,10 @@ static int identify_cpio_internal(deark *c, de_int64 pos, int *subfmt)
 
 static int read_header_ascii_portable(deark *c, lctx *d, struct member_data *md)
 {
-	de_int64 pos;
+	i64 pos;
 	int ret;
-	de_int64 n;
-	de_int64 modtime_unix;
+	i64 n;
+	i64 modtime_unix;
 	int retval = 0;
 	char timestamp_buf[64];
 
@@ -107,8 +108,8 @@ static int read_header_ascii_portable(deark *c, lctx *d, struct member_data *md)
 
 	ret = dbuf_read_ascii_number(c->infile, pos, 11, 8, &modtime_unix);
 	if(!ret) goto done;
-	de_unix_time_to_timestamp(modtime_unix, &md->fi->mod_time);
-	de_timestamp_to_string(&md->fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 1);
+	de_unix_time_to_timestamp(modtime_unix, &md->fi->mod_time, 0x1);
+	de_timestamp_to_string(&md->fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 0);
 	de_dbg(c, "c_mtime: %d (%s)", (int)modtime_unix, timestamp_buf);
 	pos += 11;
 
@@ -134,11 +135,11 @@ done:
 
 static int read_header_ascii_new(deark *c, lctx *d, struct member_data *md)
 {
-	de_int64 pos;
+	i64 pos;
 	int ret;
-	de_int64 n;
-	de_int64 modtime_unix;
-	de_int64 header_and_namesize_padded;
+	i64 n;
+	i64 modtime_unix;
+	i64 header_and_namesize_padded;
 	int retval = 0;
 	char timestamp_buf[64];
 
@@ -162,8 +163,8 @@ static int read_header_ascii_new(deark *c, lctx *d, struct member_data *md)
 
 	ret = dbuf_read_ascii_number(c->infile, pos, 8, 16, &modtime_unix);
 	if(!ret) goto done;
-	de_unix_time_to_timestamp(modtime_unix, &md->fi->mod_time);
-	de_timestamp_to_string(&md->fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 1);
+	de_unix_time_to_timestamp(modtime_unix, &md->fi->mod_time, 0x1);
+	de_timestamp_to_string(&md->fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 0);
 	de_dbg(c, "c_mtime: %d (%s)", (int)modtime_unix, timestamp_buf);
 	pos += 8;
 
@@ -183,8 +184,9 @@ static int read_header_ascii_new(deark *c, lctx *d, struct member_data *md)
 	pos += 8;
 
 	if(md->subfmt==SUBFMT_ASCII_NEWCRC) {
-		ret = dbuf_read_ascii_number(c->infile, pos, 8, 16, &md->checksum_reported);
+		ret = dbuf_read_ascii_number(c->infile, pos, 8, 16, &n);
 		if(!ret) goto done;
+		md->checksum_reported = (u32)n;
 		de_dbg(c, "c_check: %u", (unsigned int)md->checksum_reported);
 	}
 	pos += 8; // c_check
@@ -204,11 +206,11 @@ done:
 
 static int read_header_binary(deark *c, lctx *d, struct member_data *md)
 {
-	de_int64 pos;
-	de_int64 n;
-	de_int64 modtime_msw, modtime_lsw;
-	de_int64 modtime_unix;
-	de_int64 filesize_msw, filesize_lsw;
+	i64 pos;
+	i64 n;
+	i64 modtime_msw, modtime_lsw;
+	i64 modtime_unix;
+	i64 filesize_msw, filesize_lsw;
 	int retval = 0;
 	char timestamp_buf[64];
 
@@ -217,11 +219,11 @@ static int read_header_binary(deark *c, lctx *d, struct member_data *md)
 	pos += 2; // c_magic
 	pos += 2; // c_dev
 
-	n = dbuf_getui16x(c->infile, pos, md->is_le);
+	n = dbuf_getu16x(c->infile, pos, md->is_le);
 	de_dbg(c, "c_ino: %d", (int)n);
 	pos += 2;
 
-	md->mode = dbuf_getui16x(c->infile, pos, md->is_le);
+	md->mode = dbuf_getu16x(c->infile, pos, md->is_le);
 	de_dbg(c, "c_mode: octal(%06o)", (unsigned int)md->mode);
 	pos += 2;
 
@@ -230,20 +232,20 @@ static int read_header_binary(deark *c, lctx *d, struct member_data *md)
 	pos += 2; // c_nlink
 	pos += 2; // c_rdev
 
-	modtime_msw = dbuf_getui16x(c->infile, pos, md->is_le);
-	modtime_lsw = dbuf_getui16x(c->infile, pos+2, md->is_le);
+	modtime_msw = dbuf_getu16x(c->infile, pos, md->is_le);
+	modtime_lsw = dbuf_getu16x(c->infile, pos+2, md->is_le);
 	modtime_unix = (modtime_msw<<16) | modtime_lsw;
-	de_unix_time_to_timestamp(modtime_unix, &md->fi->mod_time);
-	de_timestamp_to_string(&md->fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 1);
+	de_unix_time_to_timestamp(modtime_unix, &md->fi->mod_time, 0x1);
+	de_timestamp_to_string(&md->fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 0);
 	de_dbg(c, "c_mtime: %d (%s)", (int)modtime_unix, timestamp_buf);
 	pos += 4;
 
-	md->namesize = dbuf_getui16x(c->infile, pos, md->is_le);
+	md->namesize = dbuf_getu16x(c->infile, pos, md->is_le);
 	de_dbg(c, "c_namesize: %d", (int)md->namesize);
 	pos += 2;
 
-	filesize_msw = dbuf_getui16x(c->infile, pos, md->is_le);
-	filesize_lsw = dbuf_getui16x(c->infile, pos+2, md->is_le);
+	filesize_msw = dbuf_getu16x(c->infile, pos, md->is_le);
+	filesize_lsw = dbuf_getu16x(c->infile, pos+2, md->is_le);
 	md->filesize = (filesize_msw<<16) | filesize_lsw;
 	de_dbg(c, "c_filesize: %d", (int)md->filesize);
 	pos += 4;
@@ -256,50 +258,44 @@ static int read_header_binary(deark *c, lctx *d, struct member_data *md)
 	return retval;
 }
 
-// Allocates md->namesize.
+// Always allocates md->filename_srd.
 static void read_member_name(deark *c, lctx *d, struct member_data *md)
 {
-	de_int64 namesize_adjusted;
+	i64 namesize_adjusted;
 
 	// Filenames end with a NUL byte, which is included in the namesize field.
-	if(md->namesize<1) goto done;
-
 	namesize_adjusted = md->namesize - 1;
+	if(namesize_adjusted<0) namesize_adjusted=0;
 	if(namesize_adjusted>DE_DBG_MAX_STRLEN) namesize_adjusted=DE_DBG_MAX_STRLEN;
 
-	// The encoding is presumably whatever encoding the filenames used on the
-	// system on which the archive was created, and there's no way to tell
-	// what that was.
-	// This should maybe be a command line option.
 	md->filename_srd = dbuf_read_string(c->infile, md->startpos + md->fixed_header_size,
-		namesize_adjusted, namesize_adjusted, 0, DE_ENCODING_UTF8);
+		namesize_adjusted, namesize_adjusted, 0, d->input_encoding);
 
 	de_dbg(c, "name: \"%s\"", ucstring_getpsz(md->filename_srd->str));
-
-	de_finfo_set_name_from_ucstring(c, md->fi, md->filename_srd->str);
-	md->fi->original_filename_flag = 1;
-
-done:
-	;
 }
 
-static void our_writecallback(dbuf *f, const de_byte *buf, de_int64 buf_len)
+static void our_writecallback(dbuf *f, const u8 *buf, i64 buf_len)
 {
-	de_int64 k;
+	i64 k;
 	struct member_data *md = (struct member_data *)f->userdata;
 
 	for(k=0; k<buf_len; k++) {
 		// The 32-bit unsigned integer overflow is by design.
-		md->checksum_calculated += (de_uint32)buf[k];
+		md->checksum_calculated += (u32)buf[k];
 	}
 }
 
-static int read_member(deark *c, lctx *d, de_int64 pos1,
-	de_int64 *bytes_consumed_member)
+static int read_member(deark *c, lctx *d, i64 pos1,
+	i64 *bytes_consumed_member)
 {
 	int retval = 0;
 	struct member_data *md = NULL;
-	de_int64 pos = pos1;
+	i64 pos = pos1;
+	unsigned int unix_filetype;
+	enum { CPIOFT_SPECIAL=0, CPIOFT_REGULAR,
+		CPIOFT_DIR, CPIOFT_TRAILER } cpio_filetype;
+	dbuf *outf = NULL;
+	unsigned int snflags;
 	int saved_indent_level;
 
 	de_dbg_indent_save(c, &saved_indent_level);
@@ -313,6 +309,7 @@ static int read_member(deark *c, lctx *d, de_int64 pos1,
 	md = de_malloc(c, sizeof(struct member_data));
 	md->startpos = pos1;
 	md->fi = de_finfo_create(c);
+	md->fi->detect_root_dot_dir = 1;
 
 	pos = md->startpos;
 	identify_cpio_internal(c, md->startpos, &md->subfmt);
@@ -340,9 +337,10 @@ static int read_member(deark *c, lctx *d, de_int64 pos1,
 	}
 
 	de_dbg_indent(c, -1);
-	de_dbg(c, "member name at %d", (int)pos);
+	de_dbg(c, "member name at %d", (int)(md->startpos + md->fixed_header_size));
 	de_dbg_indent(c, 1);
 	read_member_name(c, d, md);
+
 	pos = md->startpos + md->fixed_header_size + md->namesize_padded;
 	de_dbg_indent(c, -1);
 
@@ -353,57 +351,73 @@ static int read_member(deark *c, lctx *d, de_int64 pos1,
 		goto done;
 	}
 
-	if((md->mode & 0111) != 0) {
+	retval = 1;
+
+	unix_filetype = (unsigned int)md->mode & 0170000;
+
+	if(unix_filetype==040000) {
+		cpio_filetype = CPIOFT_DIR;
+	}
+	else if(unix_filetype==0100000) {
+		cpio_filetype = CPIOFT_REGULAR;
+	}
+	else {
+		cpio_filetype = CPIOFT_SPECIAL;
+		if(md->mode==0 && md->namesize==11) {
+			if(!de_strcmp(md->filename_srd->sz, "TRAILER!!!")) {
+				cpio_filetype = CPIOFT_TRAILER;
+				de_dbg(c, "[Trailer. Not extracting.]");
+				d->trailer_found = 1;
+			}
+		}
+
+		if(cpio_filetype==CPIOFT_SPECIAL) {
+			de_dbg(c, "[Not a regular file. Skipping.]");
+		}
+	}
+
+	if(cpio_filetype!=CPIOFT_REGULAR && cpio_filetype!=CPIOFT_DIR) {
+		goto done; // Not extracting this member
+	}
+
+	snflags = DE_SNFLAG_FULLPATH;
+	if(cpio_filetype==CPIOFT_DIR) {
+		md->fi->is_directory = 1;
+		// Directory members might or might not end in a slash.
+		snflags |= DE_SNFLAG_STRIPTRAILINGSLASH;
+	}
+	else if((md->mode & 0111) != 0) {
 		md->fi->mode_flags |= DE_MODEFLAG_EXE;
 	}
 	else {
 		md->fi->mode_flags |= DE_MODEFLAG_NONEXE;
 	}
 
-	if((md->mode & 0170000) != 0100000) {
-		int msgflag = 0;
+	de_finfo_set_name_from_ucstring(c, md->fi, md->filename_srd->str, snflags);
+	md->fi->original_filename_flag = 1;
 
-		if(md->mode==0 && md->namesize==11) {
-			if(!de_strcmp((const char*)md->filename_srd->sz, "TRAILER!!!")) {
-				de_dbg(c, "[Trailer. Not extracting.]");
-				msgflag = 1;
-				d->trailer_found = 1;
-			}
-		}
+	outf = dbuf_create_output_file(c, NULL, md->fi, 0);
 
-		if(!msgflag) {
-			de_dbg(c, "[Not a regular file. Skipping.]");
-		}
+	if(md->subfmt==SUBFMT_ASCII_NEWCRC) {
+		// Use a callback function to calculate the checksum.
+		outf->writecallback_fn = our_writecallback;
+		outf->userdata = (void*)md;
+		md->checksum_calculated = 0;
 	}
-	else {
-		dbuf *outf;
 
-		outf = dbuf_create_output_file(c, NULL, md->fi, 0);
+	dbuf_copy(c->infile, pos, md->filesize, outf);
 
-		if(md->subfmt==SUBFMT_ASCII_NEWCRC) {
-			// Use a callback function to calculate the checksum.
-			outf->writecallback_fn = our_writecallback;
-			outf->userdata = (void*)md;
-			md->checksum_calculated = 0;
-		}
-
-		dbuf_copy(c->infile, pos, md->filesize, outf);
-		dbuf_close(outf);
-
-		if(md->subfmt==SUBFMT_ASCII_NEWCRC) {
-			if((de_int64)md->checksum_calculated != md->checksum_reported) {
-				de_warn(c, "Checksum failed: Expected %u, got %u",
+	if(md->subfmt==SUBFMT_ASCII_NEWCRC) {
+		de_dbg(c, "checksum (calculated): %u", (unsigned int)md->checksum_calculated);
+		if(md->checksum_calculated != md->checksum_reported) {
+			de_warn(c, "Checksum failed for file %s: Expected %u, got %u",
+				ucstring_getpsz_d(md->filename_srd->str),
 				(unsigned int)md->checksum_reported, (unsigned int)md->checksum_calculated);
-			}
 		}
 	}
-
-	de_dbg_indent(c, -1);
-
-	retval = 1;
 
 done:
-	de_dbg_indent(c, -1);
+	dbuf_close(outf);
 	if(retval && md) {
 		*bytes_consumed_member = md->fixed_header_size + md->namesize_padded + md->filesize_padded;
 	}
@@ -419,11 +433,14 @@ done:
 static void de_run_cpio(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 bytes_consumed;
-	de_int64 pos;
+	i64 bytes_consumed;
+	i64 pos;
 	int ret;
 
 	d = de_malloc(c, sizeof(lctx));
+
+	d->input_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_UTF8);
+
 	pos = 0;
 
 	if(identify_cpio_internal(c, pos, &d->first_subfmt)==0) {

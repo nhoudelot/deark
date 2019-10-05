@@ -10,23 +10,23 @@ DE_DECLARE_MODULE(de_module_autocad_slb);
 
 static void de_run_autocad_slb(deark *c, de_module_params *mparams)
 {
-	de_int64 pos;
-	de_int64 nslides = 0;
-	de_int64 k;
+	i64 pos;
+	i64 nslides = 0;
+	i64 k;
 	struct slideinfo {
-		de_int64 pos;
-		de_int64 len;
+		i64 pos;
+		i64 len;
 	};
-	de_int64 si_numalloc;
+	i64 si_numalloc;
 	struct slideinfo *si = NULL;
 	de_ucstring *slidename = NULL;
 
 	de_dbg(c, "[pass 1: recording addresses]");
 	si_numalloc = 64;
-	si = de_malloc(c, si_numalloc*sizeof(struct slideinfo));
+	si = de_mallocarray(c, si_numalloc, sizeof(struct slideinfo));
 	pos = 32;
 	while(1) {
-		de_int64 k;
+		i64 k;
 
 		if(pos > (c->infile->len-36)) {
 			de_err(c, "Unterminated directory");
@@ -40,7 +40,7 @@ static void de_run_autocad_slb(deark *c, de_module_params *mparams)
 		nslides++;
 
 		if(nslides > si_numalloc) {
-			de_int64 old_numalloc, new_numalloc;
+			i64 old_numalloc, new_numalloc;
 
 			if(!de_good_image_count(c, nslides)) {
 				de_err(c, "Too many slides");
@@ -48,12 +48,12 @@ static void de_run_autocad_slb(deark *c, de_module_params *mparams)
 			}
 			old_numalloc = si_numalloc;
 			new_numalloc = old_numalloc*2;
-			si = de_realloc(c, si, old_numalloc*sizeof(struct slideinfo),
-				new_numalloc*sizeof(struct slideinfo));
+			si = de_reallocarray(c, si, old_numalloc, sizeof(struct slideinfo),
+				new_numalloc);
 			si_numalloc *= new_numalloc;
 		}
 
-		si[k].pos = de_getui32le(pos+32);
+		si[k].pos = de_getu32le(pos+32);
 
 		if(si[k].pos > c->infile->len) {
 				de_err(c, "Invalid directory");
@@ -94,7 +94,7 @@ static void de_run_autocad_slb(deark *c, de_module_params *mparams)
 		de_dbg(c, "calculated len: %u", (unsigned int)si[k].len);
 
 		fi = de_finfo_create(c);
-		de_finfo_set_name_from_ucstring(c, fi, slidename);
+		de_finfo_set_name_from_ucstring(c, fi, slidename, 0);
 		dbuf_create_file_from_slice(c->infile, si[k].pos, si[k].len, "sld", fi, 0);
 		de_finfo_destroy(c, fi);
 

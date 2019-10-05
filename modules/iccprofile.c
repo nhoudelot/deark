@@ -9,8 +9,8 @@
 DE_DECLARE_MODULE(de_module_iccprofile);
 
 struct tag_seen_type {
-	de_int64 offset;
-	de_int64 len;
+	i64 offset;
+	i64 len;
 };
 
 typedef struct localctx_struct {
@@ -18,19 +18,19 @@ typedef struct localctx_struct {
 	unsigned int profile_ver_minor;
 	unsigned int profile_ver_bugfix;
 
-	de_int64 num_tags;
+	i64 num_tags;
 	struct tag_seen_type *tags_seen;
 } lctx;
 
-typedef void (*datatype_decoder_fn_type)(deark *c, lctx *d, de_int64 pos, de_int64 len);
+typedef void (*datatype_decoder_fn_type)(deark *c, lctx *d, i64 pos, i64 len);
 
-static void typedec_XYZ(deark *c, lctx *d, de_int64 pos, de_int64 len);
-static void typedec_text(deark *c, lctx *d, de_int64 pos, de_int64 len);
-static void typedec_desc(deark *c, lctx *d, de_int64 pos, de_int64 len);
-static void typedec_mluc(deark *c, lctx *d, de_int64 pos, de_int64 len);
+static void typedec_XYZ(deark *c, lctx *d, i64 pos, i64 len);
+static void typedec_text(deark *c, lctx *d, i64 pos, i64 len);
+static void typedec_desc(deark *c, lctx *d, i64 pos, i64 len);
+static void typedec_mluc(deark *c, lctx *d, i64 pos, i64 len);
 
 struct datatypeinfo {
-	de_uint32 id;
+	u32 id;
 	const char *name;
 	datatype_decoder_fn_type dtdfn;
 };
@@ -73,7 +73,7 @@ static const struct datatypeinfo datatypeinfo_arr[] = {
 };
 
 struct taginfo {
-	de_uint32 id;
+	u32 id;
 	const char *name;
 	void *reserved;
 };
@@ -149,7 +149,7 @@ static const struct taginfo taginfo_arr[] = {
 static const char *format_4cc_dbgstr(const struct de_fourcc *tmp4cc,
 	char *buf, size_t buflen, unsigned int flags)
 {
-	char str[16];
+	char str[40];
 
 	if((tmp4cc->id==0) && (flags&0x2))
 		de_strlcpy(str, "(none)", sizeof(str));
@@ -164,19 +164,19 @@ static const char *format_4cc_dbgstr(const struct de_fourcc *tmp4cc,
 	return buf;
 }
 
-static double read_s15Fixed16Number(dbuf *f, de_int64 pos)
+static double read_s15Fixed16Number(dbuf *f, i64 pos)
 {
-	de_int64 n, frac;
+	i64 n, frac;
 
 	n = dbuf_geti16be(f, pos);
-	frac = dbuf_getui16be(f, pos+2);
+	frac = dbuf_getu16be(f, pos+2);
 	return (double)n + ((double)frac)/65536.0;
 }
 
-static void typedec_XYZ(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void typedec_XYZ(deark *c, lctx *d, i64 pos, i64 len)
 {
-	de_int64 xyz_count;
-	de_int64 k;
+	i64 xyz_count;
+	i64 k;
 	double v[3];
 
 	if(len<8) return;
@@ -190,10 +190,10 @@ static void typedec_XYZ(deark *c, lctx *d, de_int64 pos, de_int64 len)
 	}
 }
 
-static void typedec_text(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void typedec_text(deark *c, lctx *d, i64 pos, i64 len)
 {
 	de_ucstring *s = NULL;
-	de_int64 textlen = len-8;
+	i64 textlen = len-8;
 
 	if(textlen<0) goto done;
 
@@ -208,22 +208,22 @@ done:
 	return;
 }
 
-static void typedec_desc(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void typedec_desc(deark *c, lctx *d, i64 pos1, i64 len)
 {
 	de_ucstring *s = NULL;
-	de_int64 invdesclen, uloclen;
-	de_int64 langcode;
-	de_int64 lstrstartpos;
-	de_int64 bytes_to_read;
-	int encoding;
-	de_int64 pos = pos1;
+	i64 invdesclen, uloclen;
+	i64 langcode;
+	i64 lstrstartpos;
+	i64 bytes_to_read;
+	de_encoding encoding;
+	i64 pos = pos1;
 
 	if(len<12) goto done;
 
 	pos += 8;
 
 	// ASCII invariant description
-	invdesclen = de_getui32be(pos); // invariant desc. len, including NUL byte
+	invdesclen = de_getu32be(pos); // invariant desc. len, including NUL byte
 	pos += 4;
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring_n(c->infile, pos, invdesclen, DE_DBG_MAX_STRLEN,
@@ -236,10 +236,10 @@ static void typedec_desc(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 	// Unicode localizable description
 	ucstring_empty(s);
 
-	langcode = de_getui32be(pos);
+	langcode = de_getu32be(pos);
 	pos += 4;
 
-	uloclen = de_getui32be(pos);
+	uloclen = de_getu32be(pos);
 	pos += 4;
 
 	if(uloclen>0) {
@@ -252,12 +252,12 @@ static void typedec_desc(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 
 	encoding = DE_ENCODING_UTF16BE;
 	if(uloclen>=1) {
-		de_int32 firstchar;
+		i32 firstchar;
 		// Check for a BOM. The spec doesn't say much about the format of
 		// Unicode text in 'desc' tags. It does say that "All profile data must
 		// be encoded as big-endian", so maybe that means UTF-16LE is not
 		// allowed. In practice, some strings begin with a BOM.
-		firstchar = (de_int32)de_getui16be(lstrstartpos);
+		firstchar = (i32)de_getu16be(lstrstartpos);
 		if(firstchar==0xfeff) { // UTF-16BE BOM
 			lstrstartpos += 2;
 			bytes_to_read -= 2;
@@ -285,12 +285,12 @@ done:
 	ucstring_destroy(s);
 }
 
-static void do_mluc_record(deark *c, lctx *d, de_int64 tagstartpos,
-	de_int64 pos, de_int64 recsize)
+static void do_mluc_record(deark *c, lctx *d, i64 tagstartpos,
+	i64 pos, i64 recsize)
 {
 	de_ucstring *s = NULL;
-	de_int64 string_len;
-	de_int64 string_offset;
+	i64 string_len;
+	i64 string_offset;
 
 	s = ucstring_create(c);
 
@@ -302,8 +302,8 @@ static void do_mluc_record(deark *c, lctx *d, de_int64 tagstartpos,
 	de_dbg(c, "country code: '%s'", ucstring_getpsz(s));
 	ucstring_empty(s);
 
-	string_len = de_getui32be(pos+4);
-	string_offset = de_getui32be(pos+8);
+	string_len = de_getu32be(pos+4);
+	string_offset = de_getu32be(pos+8);
 	de_dbg(c, "string offset=%d+%d, len=%d bytes", (int)tagstartpos,
 		(int)string_offset, (int)string_len);
 
@@ -315,22 +315,22 @@ static void do_mluc_record(deark *c, lctx *d, de_int64 tagstartpos,
 	ucstring_destroy(s);
 }
 
-static void typedec_mluc(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void typedec_mluc(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_int64 pos = pos1;
-	de_int64 num_recs;
-	de_int64 recsize;
-	de_int64 rec_array_startpos;
-	de_int64 rec;
+	i64 pos = pos1;
+	i64 num_recs;
+	i64 recsize;
+	i64 rec_array_startpos;
+	i64 rec;
 
 	if(len<12) goto done;
 	pos += 8;
 
-	num_recs = de_getui32be(pos);
+	num_recs = de_getu32be(pos);
 	de_dbg(c, "number of records: %d", (int)num_recs);
 	pos += 4;
 
-	recsize = de_getui32be(pos);
+	recsize = de_getu32be(pos);
 	de_dbg(c, "record size: %d", (int)recsize);
 	if(recsize<12) goto done;
 	pos += 4;
@@ -351,10 +351,10 @@ done:
 	;
 }
 
-static void do_read_header(deark *c, lctx *d, de_int64 pos)
+static void do_read_header(deark *c, lctx *d, i64 pos)
 {
-	de_uint32 profile_ver_raw;
-	de_int64 x;
+	u32 profile_ver_raw;
+	i64 x;
 	struct de_fourcc tmp4cc;
 	char tmpbuf[80];
 	const char *name;
@@ -362,14 +362,14 @@ static void do_read_header(deark *c, lctx *d, de_int64 pos)
 	de_dbg(c, "header at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
-	x = de_getui32be(pos+0);
+	x = de_getu32be(pos+0);
 	de_dbg(c, "profile size: %d", (int)x);
 
 	dbuf_read_fourcc(c->infile, pos+4, &tmp4cc, 4, 0x0);
 	de_dbg(c, "preferred CMM type: %s",
 		format_4cc_dbgstr(&tmp4cc, tmpbuf, sizeof(tmpbuf), 0x1));
 
-	profile_ver_raw = (de_uint32)de_getui32be(pos+8);
+	profile_ver_raw = (u32)de_getu32be(pos+8);
 	d->profile_ver_major = 10*((profile_ver_raw&0xf0000000U)>>28) +
 		((profile_ver_raw&0x0f000000U)>>24);
 	d->profile_ver_minor = (profile_ver_raw&0x00f00000U)>>20;
@@ -411,7 +411,7 @@ static void do_read_header(deark *c, lctx *d, de_int64 pos)
 
 	// TODO: pos=56-63 Device attributes
 
-	x = de_getui32be(pos+64);
+	x = de_getu32be(pos+64);
 	switch(x) {
 	case 0: name="perceptual"; break;
 	case 1: name="relative colorimetric"; break;
@@ -432,7 +432,7 @@ static void do_read_header(deark *c, lctx *d, de_int64 pos)
 	de_dbg_indent(c, -1);
 }
 
-static const struct datatypeinfo *lookup_datatypeinfo(de_uint32 id)
+static const struct datatypeinfo *lookup_datatypeinfo(u32 id)
 {
 	size_t k;
 	for(k=0; k<DE_ITEMS_IN_ARRAY(datatypeinfo_arr); k++) {
@@ -443,7 +443,7 @@ static const struct datatypeinfo *lookup_datatypeinfo(de_uint32 id)
 	return NULL;
 }
 
-static const struct taginfo *lookup_taginfo(de_uint32 id)
+static const struct taginfo *lookup_taginfo(u32 id)
 {
 	size_t k;
 	for(k=0; k<DE_ITEMS_IN_ARRAY(taginfo_arr); k++) {
@@ -454,11 +454,11 @@ static const struct taginfo *lookup_taginfo(de_uint32 id)
 	return NULL;
 }
 
-static int is_duplicate_data(deark *c, lctx *d, de_int64 tagindex,
-	de_int64 tagdataoffset, de_int64 tagdatalen,
-	de_int64 *idx_of_dup)
+static int is_duplicate_data(deark *c, lctx *d, i64 tagindex,
+	i64 tagdataoffset, i64 tagdatalen,
+	i64 *idx_of_dup)
 {
-	de_int64 k;
+	i64 k;
 
 	for(k=0; k<tagindex; k++) {
 		if(d->tags_seen[k].offset==tagdataoffset &&
@@ -473,14 +473,14 @@ static int is_duplicate_data(deark *c, lctx *d, de_int64 tagindex,
 	return 0;
 }
 
-static void do_tag_data(deark *c, lctx *d, de_int64 tagindex,
+static void do_tag_data(deark *c, lctx *d, i64 tagindex,
 	const struct de_fourcc *tag4cc, const struct taginfo *ti,
-	de_int64 tagdataoffset, de_int64 tagdatalen)
+	i64 tagdataoffset, i64 tagdatalen)
 {
 	struct de_fourcc tagtype4cc;
 	const struct datatypeinfo *dti;
 	const char *dtname;
-	de_int64 idx_of_dup;
+	i64 idx_of_dup;
 	char tmpbuf[80];
 
 	if(tagdatalen<1) return;
@@ -509,18 +509,18 @@ static void do_tag_data(deark *c, lctx *d, de_int64 tagindex,
 	}
 }
 
-static void do_tag(deark *c, lctx *d, de_int64 tagindex, de_int64 pos_in_tagtable)
+static void do_tag(deark *c, lctx *d, i64 tagindex, i64 pos_in_tagtable)
 {
 	struct de_fourcc tag4cc;
 	const struct taginfo *ti;
 	const char *tname;
-	de_int64 tagdataoffset;
-	de_int64 tagdatalen;
+	i64 tagdataoffset;
+	i64 tagdatalen;
 	char tmpbuf[80];
 
 	dbuf_read_fourcc(c->infile, pos_in_tagtable, &tag4cc, 4, 0x0);
-	tagdataoffset = de_getui32be(pos_in_tagtable+4);
-	tagdatalen = de_getui32be(pos_in_tagtable+8);
+	tagdataoffset = de_getu32be(pos_in_tagtable+4);
+	tagdatalen = de_getu32be(pos_in_tagtable+8);
 	ti = lookup_taginfo(tag4cc.id);
 	if(ti && ti->name)
 		tname = ti->name;
@@ -538,14 +538,14 @@ static void do_tag(deark *c, lctx *d, de_int64 tagindex, de_int64 pos_in_tagtabl
 	d->tags_seen[tagindex].len = tagdatalen;
 }
 
-static void do_read_tags(deark *c, lctx *d, de_int64 pos1)
+static void do_read_tags(deark *c, lctx *d, i64 pos1)
 {
-	de_int64 tagindex;
+	i64 tagindex;
 
 	de_dbg(c, "tag table at %d", (int)pos1);
 	de_dbg_indent(c, 1);
 
-	d->num_tags = de_getui32be(pos1);
+	d->num_tags = de_getu32be(pos1);
 	de_dbg(c, "number of tags: %d", (int)d->num_tags);
 	if(d->num_tags>500) {
 		de_err(c, "Invalid or excessive number of tags: %d", (int)d->num_tags);
@@ -554,7 +554,7 @@ static void do_read_tags(deark *c, lctx *d, de_int64 pos1)
 	de_dbg(c, "expected start of data segment: %d", (int)(pos1+4+12*d->num_tags));
 
 	// Make a place to record some information about each tag we encounter in the table.
-	d->tags_seen = de_malloc(c, d->num_tags * sizeof(struct tag_seen_type));
+	d->tags_seen = de_mallocarray(c, d->num_tags, sizeof(struct tag_seen_type));
 
 	for(tagindex=0; tagindex<d->num_tags; tagindex++) {
 		do_tag(c, d, tagindex, pos1+4+12*tagindex);
@@ -568,10 +568,10 @@ done:
 static void de_run_iccprofile(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
+	i64 pos;
 
 	d = de_malloc(c, sizeof(lctx));
-	de_msg(c, "Note: ICC profiles can be parsed, but no files can be extracted from them.");
+	de_info(c, "Note: ICC profiles can be parsed, but no files can be extracted from them.");
 
 	pos = 0;
 	do_read_header(c, d, pos);

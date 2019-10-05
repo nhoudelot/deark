@@ -26,13 +26,13 @@ DE_DECLARE_MODULE(de_module_os2bmp);
 // final image.
 struct srcbitmap {
 	struct de_bmpinfo bi;
-	de_int64 bitssize;
-	de_uint32 pal[256];
+	i64 bitssize;
+	u32 pal[256];
 };
 
 // Populates srcbmp with information about a bitmap.
 // Does not read the palette.
-static int get_bitmap_info(deark *c, struct srcbitmap *srcbmp, const char *fmt, de_int64 pos)
+static int get_bitmap_info(deark *c, struct srcbitmap *srcbmp, const char *fmt, i64 pos)
 {
 	int retval = 0;
 	unsigned int flags;
@@ -42,15 +42,22 @@ static int get_bitmap_info(deark *c, struct srcbitmap *srcbmp, const char *fmt, 
 		flags |= DE_BMPINFO_HAS_HOTSPOT;
 	}
 	if(!de_fmtutil_get_bmpinfo(c, c->infile, &srcbmp->bi, pos, c->infile->len - pos, flags)) {
-		de_err(c, "Unsupported image type (header size %d)", (int)srcbmp->bi.infohdrsize);
-	}
-
-	if(srcbmp->bi.compression_field!=0) {
-		de_err(c, "Unsupported compression type (%d)", (int)srcbmp->bi.compression_field);
+		de_err(c, "Invalid or unsupported bitmap");
 		goto done;
 	}
 
-	srcbmp->bitssize = srcbmp->bi.rowspan * srcbmp->bi.height;
+	if(srcbmp->bi.is_compressed) {
+		if(srcbmp->bi.sizeImage_field) {
+			srcbmp->bitssize = srcbmp->bi.sizeImage_field;
+		}
+		else {
+			de_err(c, "Cannot determine bits size");
+			goto done;
+		}
+	}
+	else {
+		srcbmp->bitssize = srcbmp->bi.rowspan * srcbmp->bi.height;
+	}
 
 	retval = 1;
 done:
@@ -59,11 +66,11 @@ done:
 
 // Read the header and palette
 // Returns NULL on error.
-static struct srcbitmap *do_decode_raw_bitmap_segment(deark *c, const char *fmt, de_int64 pos)
+static struct srcbitmap *do_decode_raw_bitmap_segment(deark *c, const char *fmt, i64 pos)
 {
 	int okay = 0;
 	struct srcbitmap *srcbmp = NULL;
-	de_int64 pal_start;
+	i64 pal_start;
 	int saved_indent_level;
 
 	de_dbg_indent_save(c, &saved_indent_level);
@@ -71,7 +78,6 @@ static struct srcbitmap *do_decode_raw_bitmap_segment(deark *c, const char *fmt,
 	de_dbg_indent(c, 1);
 
 	srcbmp = de_malloc(c, sizeof(struct srcbitmap));
-
 
 	if(!get_bitmap_info(c, srcbmp, fmt, pos))
 		goto done;
@@ -105,12 +111,12 @@ done:
 static void do_generate_final_image(deark *c, struct srcbitmap *srcbmp_main, struct srcbitmap *srcbmp_mask)
 {
 	de_bitmap *img;
-	de_int64 w, h;
-	de_int64 i, j;
-	de_int64 byte_offset;
-	de_byte x;
-	de_byte cr, cg, cb, ca;
-	de_byte xorbit, andbit;
+	i64 w, h;
+	i64 i, j;
+	i64 byte_offset;
+	u8 x;
+	u8 cr, cg, cb, ca;
+	u8 xorbit, andbit;
 	int inverse_warned = 0;
 
 	if(srcbmp_main) {
@@ -190,9 +196,9 @@ static void do_generate_final_image(deark *c, struct srcbitmap *srcbmp_main, str
 	de_bitmap_destroy(img);
 }
 
-static void do_decode_CI_or_CP_pair(deark *c, const char *fmt, de_int64 pos)
+static void do_decode_CI_or_CP_pair(deark *c, const char *fmt, i64 pos)
 {
-	de_int64 i;
+	i64 i;
 	struct srcbitmap *srcbmp = NULL;
 	struct srcbitmap *srcbmp_mask = NULL;
 	struct srcbitmap *srcbmp_main = NULL;
@@ -220,10 +226,12 @@ static void do_decode_CI_or_CP_pair(deark *c, const char *fmt, de_int64 pos)
 		if(srcbmp->bi.bitcount==1 && (srcbmp_mask==NULL || srcbmp_main!=NULL)) {
 			de_dbg(c, "bitmap interpreted as: mask");
 			srcbmp_mask = srcbmp;
+			srcbmp = NULL;
 		}
 		else {
 			de_dbg(c, "bitmap interpreted as: foreground");
 			srcbmp_main = srcbmp;
+			srcbmp = NULL;
 		}
 
 		de_dbg_indent(c, -1);
@@ -240,9 +248,10 @@ done:
 	de_dbg_indent_restore(c, saved_indent_level);
 	de_free(c, srcbmp_mask);
 	de_free(c, srcbmp_main);
+	de_free(c, srcbmp);
 }
 
-static void do_decode_IC_or_PT(deark *c, const char *fmt, de_int64 pos)
+static void do_decode_IC_or_PT(deark *c, const char *fmt, i64 pos)
 {
 	struct srcbitmap *srcbmp_mask = NULL;
 
@@ -261,16 +270,16 @@ done:
 	de_free(c, srcbmp_mask);
 }
 
-static void do_extract_CI_or_CP_pair(deark *c, const char *fmt, de_int64 pos)
+static void do_extract_CI_or_CP_pair(deark *c, const char *fmt, i64 pos)
 {
 	struct de_bmpinfo *bi = NULL;
-	de_int64 i;
+	i64 i;
 	dbuf *f = NULL;
-	de_int64 hdrpos[2];
-	de_int64 hdrsize[2];
-	de_int64 oldbitsoffs[2];
-	de_int64 newbitsoffs[2];
-	de_int64 bitssize[2];
+	i64 hdrpos[2];
+	i64 hdrsize[2];
+	i64 oldbitsoffs[2];
+	i64 newbitsoffs[2];
+	i64 bitssize[2];
 	int saved_indent_level;
 
 	de_dbg_indent_save(c, &saved_indent_level);
@@ -321,7 +330,7 @@ static void do_extract_CI_or_CP_pair(deark *c, const char *fmt, de_int64 pos)
 		// Copy the first 10 bytes of the fileheader.
 		dbuf_copy(c->infile, hdrpos[i], 10, f);
 		// Update the bits offset.
-		dbuf_writeui32le(f, newbitsoffs[i]);
+		dbuf_writeu32le(f, newbitsoffs[i]);
 		// Copy the rest of the headers (+palette).
 		dbuf_copy(c->infile, hdrpos[i]+14, hdrsize[i]-14, f);
 	}
@@ -340,7 +349,7 @@ done:
 // Don't convert the image to another format; just extract it as-is in
 // BMP/ICO/PTR format. Unfortunately, this requires collecting the various pieces
 // of it, and adjusting pointers.
-static void do_extract_one_image(deark *c, de_int64 pos, const char *fmt, const char *ext)
+static void do_extract_one_image(deark *c, i64 pos, const char *fmt, const char *ext)
 {
 	struct srcbitmap *srcbmp = NULL;
 	dbuf *f = NULL;
@@ -359,12 +368,13 @@ static void do_extract_one_image(deark *c, de_int64 pos, const char *fmt, const 
 	dbuf_copy(c->infile, pos, 10, f);
 
 	// The "bits offset" is probably the only thing we need to adjust.
-	dbuf_writeui32le(f, srcbmp->bi.size_of_headers_and_pal);
+	dbuf_writeu32le(f, srcbmp->bi.size_of_headers_and_pal);
 
 	// Copy the infoheader & palette
 	dbuf_copy(c->infile, pos+14, srcbmp->bi.size_of_headers_and_pal-14, f);
 
 	// Copy the bitmap
+	if(srcbmp->bi.bitsoffset+srcbmp->bitssize > c->infile->len) goto done;
 	dbuf_copy(c->infile, srcbmp->bi.bitsoffset, srcbmp->bitssize, f);
 
 done:
@@ -373,9 +383,9 @@ done:
 	de_free(c, srcbmp);
 }
 
-static void do_BA_segment(deark *c, de_int64 pos, de_int64 *pnextoffset)
+static void do_BA_segment(deark *c, i64 pos, i64 *pnextoffset)
 {
-	de_byte b0, b1;
+	u8 b0, b1;
 	int saved_indent_level;
 
 	de_dbg_indent_save(c, &saved_indent_level);
@@ -391,7 +401,7 @@ static void do_BA_segment(deark *c, de_int64 pos, de_int64 *pnextoffset)
 		goto done;
 	}
 
-	*pnextoffset = de_getui32le(pos+6);
+	*pnextoffset = de_getu32le(pos+6);
 	de_dbg(c, "offset of next segment: %d", (int)*pnextoffset);
 
 	// Peek at the next two bytes
@@ -423,8 +433,8 @@ done:
 
 static void do_BA_file(deark *c)
 {
-	de_int64 pos;
-	de_int64 nextoffset = 0;
+	i64 pos;
+	i64 nextoffset = 0;
 
 	// The file contains a linked list of BA segments. There's nothing special
 	// about the first segment, but it can be used to identify the file type.
@@ -443,7 +453,7 @@ static void do_BA_file(deark *c)
 
 static int de_identify_os2bmp_internal(deark *c)
 {
-	de_byte b[16];
+	u8 b[16];
 	de_read(b, 0, 16);
 
 	if(b[0]=='B' && b[1]=='A') {

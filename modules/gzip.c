@@ -14,21 +14,22 @@ struct member_data {
 #define GZIPFLAG_FEXTRA   0x04
 #define GZIPFLAG_FNAME    0x08
 #define GZIPFLAG_FCOMMENT 0x10
-	de_byte flags;
-	de_byte cmpr_code;
-	de_uint32 crc16_reported;
-	de_uint32 crc32_reported;
-	de_int64 isize;
+	u8 flags;
+	u8 cmpr_code;
+	u32 crc16_reported;
+	u32 crc32_reported;
+	i64 isize;
 	struct de_timestamp mod_time_ts;
 
-	de_uint32 crc_calculated;
+	struct de_crcobj *crco; // A copy of lctx->crco
 };
 
 typedef struct lctx_struct {
 	dbuf *output_file;
+	struct de_crcobj *crco;
 } lctx;
 
-static const char *get_os_name(de_byte n)
+static const char *get_os_name(u8 n)
 {
 	const char *names[14] = { "FAT", "Amiga", "VMS", "Unix",
 		"VM/CMS", "Atari", "HPFS", "Mac", "Z-System", "CP/M",
@@ -41,21 +42,22 @@ static const char *get_os_name(de_byte n)
 	return name;
 }
 
-static void our_writecallback(dbuf *f, const de_byte *buf, de_int64 buf_len)
+static void our_writecallback(dbuf *f, const u8 *buf, i64 buf_len)
 {
 	struct member_data *md = (struct member_data *)f->userdata;
-	md->crc_calculated = de_crc32_continue(md->crc_calculated, buf, buf_len);
+	de_crcobj_addbuf(md->crco, buf, buf_len);
 }
 
-static int do_gzip_read_member(deark *c, lctx *d, de_int64 pos1, de_int64 *member_size)
+static int do_gzip_read_member(deark *c, lctx *d, i64 pos1, i64 *member_size)
 {
-	de_byte b0, b1;
-	de_int64 pos;
-	de_int64 n;
-	de_int64 foundpos;
-	de_int64 string_len;
-	de_int64 cmpr_data_len;
-	de_int64 mod_time_unix;
+	u8 b0, b1;
+	i64 pos;
+	i64 n;
+	i64 foundpos;
+	i64 string_len;
+	i64 cmpr_data_len;
+	i64 mod_time_unix;
+	u32 crc_calculated;
 	de_ucstring *member_name = NULL;
 	int saved_indent_level;
 	int ret;
@@ -88,12 +90,12 @@ static int do_gzip_read_member(deark *c, lctx *d, de_int64 pos1, de_int64 *membe
 	de_dbg(c, "flags: 0x%02x", (unsigned int)md->flags);
 	pos += 4;
 
-	mod_time_unix = de_getui32le(pos);
-	de_unix_time_to_timestamp(mod_time_unix, &md->mod_time_ts);
+	mod_time_unix = de_getu32le(pos);
+	de_unix_time_to_timestamp(mod_time_unix, &md->mod_time_ts, 0x1);
 	if(md->mod_time_ts.is_valid) {
 		char timestamp_buf[64];
-		de_timestamp_to_string(&md->mod_time_ts, timestamp_buf, sizeof(timestamp_buf), 1);
-		de_dbg(c, "mod time: %" INT64_FMT " (%s)", mod_time_unix, timestamp_buf);
+		de_timestamp_to_string(&md->mod_time_ts, timestamp_buf, sizeof(timestamp_buf), 0);
+		de_dbg(c, "mod time: %" I64_FMT " (%s)", mod_time_unix, timestamp_buf);
 	}
 	pos += 4;
 
@@ -104,7 +106,7 @@ static int do_gzip_read_member(deark *c, lctx *d, de_int64 pos1, de_int64 *membe
 	de_dbg(c, "OS or filesystem: %d (%s)", (int)b0, get_os_name(b0));
 
 	if(md->flags & GZIPFLAG_FEXTRA) {
-		n = de_getui16le(pos); // XLEN
+		n = de_getu16le(pos); // XLEN
 		// TODO: It might be interesting to dissect these extra fields, but it's
 		// hard to find even a single file that uses them.
 		de_dbg(c, "[extra fields at %d, dpos=%d, dlen=%d]",
@@ -143,7 +145,7 @@ static int do_gzip_read_member(deark *c, lctx *d, de_int64 pos1, de_int64 *membe
 	}
 
 	if(md->flags & GZIPFLAG_FHCRC) {
-		md->crc16_reported = (de_uint32)de_getui16le(pos);
+		md->crc16_reported = (u32)de_getu16le(pos);
 		de_dbg(c, "crc16 (reported): 0x%04x", (unsigned int)md->crc16_reported);
 		pos += 2;
 	}
@@ -158,7 +160,7 @@ static int do_gzip_read_member(deark *c, lctx *d, de_int64 pos1, de_int64 *membe
 		fi = de_finfo_create(c);
 
 		if(member_name && c->filenames_from_file) {
-			de_finfo_set_name_from_ucstring(c, fi, member_name);
+			de_finfo_set_name_from_ucstring(c, fi, member_name, 0);
 			fi->original_filename_flag = 1;
 		}
 
@@ -173,28 +175,31 @@ static int do_gzip_read_member(deark *c, lctx *d, de_int64 pos1, de_int64 *membe
 
 	d->output_file->writecallback_fn = our_writecallback;
 	d->output_file->userdata = (void*)md;
-	md->crc_calculated = de_crc32(NULL, 0);
+	md->crco = d->crco;
+	de_crcobj_reset(md->crco);
 
-	ret = de_uncompress_deflate(c->infile, pos, c->infile->len - pos, d->output_file, &cmpr_data_len);
+	ret = de_decompress_deflate(c->infile, pos, c->infile->len - pos, d->output_file,
+		0, &cmpr_data_len, 0);
 
+	crc_calculated = de_crcobj_getval(md->crco);
 	d->output_file->writecallback_fn = NULL;
 	d->output_file->userdata = NULL;
 
 	if(!ret) goto done;
 	pos += cmpr_data_len;
 
-	de_dbg(c, "crc32 (calculated): 0x%08x", (unsigned int)md->crc_calculated);
+	de_dbg(c, "crc32 (calculated): 0x%08x", (unsigned int)crc_calculated);
 
-	md->crc32_reported = (de_uint32)de_getui32le(pos);
+	md->crc32_reported = (u32)de_getu32le(pos);
 	de_dbg(c, "crc32 (reported)  : 0x%08x", (unsigned int)md->crc32_reported);
 	pos += 4;
 
-	if(md->crc_calculated != md->crc32_reported) {
+	if(crc_calculated != md->crc32_reported) {
 		de_warn(c, "CRC check failed: Expected 0x%08x, got 0x%08x",
-			(unsigned int)md->crc32_reported, (unsigned int)md->crc_calculated);
+			(unsigned int)md->crc32_reported, (unsigned int)crc_calculated);
 	}
 
-	md->isize = de_getui32le(pos);
+	md->isize = de_getu32le(pos);
 	de_dbg(c, "uncompressed size (mod 2^32): %u", (unsigned int)md->isize);
 	pos += 4;
 
@@ -214,10 +219,11 @@ done:
 static void de_run_gzip(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 member_size;
+	i64 pos;
+	i64 member_size;
 
 	d = de_malloc(c, sizeof(lctx));
+	d->crco = de_crcobj_create(c, DE_CRCOBJ_CRC32_IEEE);
 
 	pos = 0;
 	while(1) {
@@ -231,12 +237,15 @@ static void de_run_gzip(deark *c, de_module_params *mparams)
 	}
 	dbuf_close(d->output_file);
 
-	de_free(c, d);
+	if(d) {
+		de_crcobj_destroy(d->crco);
+		de_free(c, d);
+	}
 }
 
 static int de_identify_gzip(deark *c)
 {
-	de_byte buf[3];
+	u8 buf[3];
 
 	de_read(buf, 0, 3);
 	if(buf[0]==0x1f && buf[1]==0x8b) {

@@ -14,10 +14,10 @@ DE_DECLARE_MODULE(de_module_pf_pgf);
 DE_DECLARE_MODULE(de_module_pgc);
 
 typedef struct localctx_struct {
-	de_byte version;
+	u8 version;
 } lctx;
 
-static void do_pgc_in_pgx(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void do_pgc_in_pgx(deark *c, lctx *d, i64 pos, i64 len)
 {
 	dbuf *f = NULL;
 
@@ -32,11 +32,11 @@ static void do_pgc_in_pgx(deark *c, lctx *d, de_int64 pos, de_int64 len)
 	dbuf_close(f);
 }
 
-static int do_process_frame(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_consumed)
+static int do_process_frame(deark *c, lctx *d, i64 pos1, i64 *bytes_consumed)
 {
-	de_int64 pos;
-	de_byte frame_type;
-	de_int64 frame_payload_size;
+	i64 pos;
+	u8 frame_type;
+	i64 frame_payload_size;
 	int retval = 1;
 
 	*bytes_consumed = 0;
@@ -49,7 +49,7 @@ static int do_process_frame(deark *c, lctx *d, de_int64 pos1, de_int64 *bytes_co
 	frame_type = de_getbyte(pos);
 	de_dbg(c, "type: %d", (int)frame_type);
 
-	frame_payload_size = de_getui16le(pos+1);
+	frame_payload_size = de_getu16le(pos+1);
 	de_dbg(c, "reported payload size: %d", (int)frame_payload_size);
 
 	*bytes_consumed += 8;
@@ -100,8 +100,8 @@ done:
 static void de_run_pgx(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 frame_size;
+	i64 pos;
+	i64 frame_size;
 	int ret;
 	int executable = 0;
 
@@ -187,9 +187,9 @@ void de_module_pf_pgf(deark *c, struct deark_module_info *mi)
 static void de_run_pgc(deark *c, de_module_params *mparams)
 {
 	dbuf *unc_pixels = NULL;
-	de_int64 pos;
-	de_int64 count;
-	de_byte b, b2;
+	i64 pos;
+	i64 count;
+	u8 b, b2;
 
 	de_declare_fmt(c, "PGC (Portfolio graphics compressed)");
 	unc_pixels = dbuf_create_membuf(c, 1920, 1);
@@ -198,7 +198,7 @@ static void de_run_pgc(deark *c, de_module_params *mparams)
 	while(pos<c->infile->len) {
 		b = de_getbyte(pos);
 		pos++;
-		count = (de_int64)(b & 0x7f);
+		count = (i64)(b & 0x7f);
 		if(b & 0x80) {
 			// compressed run
 			b2 = de_getbyte(pos);

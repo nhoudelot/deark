@@ -15,33 +15,33 @@ DE_DECLARE_MODULE(de_module_artworx_adf);
 DE_DECLARE_MODULE(de_module_icedraw);
 
 typedef struct localctx_struct {
-	de_int64 width_in_chars, height_in_chars;
-	de_int64 font_height;
-	de_byte has_palette, has_font, compression, nonblink, has_512chars;
+	i64 width_in_chars, height_in_chars;
+	i64 font_height;
+	u8 has_palette, has_font, compression, nonblink, has_512chars;
 
-	de_int64 font_data_len;
-	de_byte *font_data;
+	i64 font_data_len;
+	u8 *font_data;
 	int is_standard_font;
 	struct de_bitmap_font *font;
 } lctx;
 
 static void do_bin_main(deark *c, lctx *d, dbuf *unc_data, struct de_char_context *charctx)
 {
-	de_int64 i, j;
-	de_byte ccode, acode;
-	de_byte fgcol, bgcol;
+	i64 i, j;
+	u8 ccode, acode;
+	u8 fgcol, bgcol;
 	struct de_char_screen *screen;
 
 	charctx->nscreens = 1;
-	charctx->screens = de_malloc(c, charctx->nscreens*sizeof(struct de_char_screen*));
+	charctx->screens = de_mallocarray(c, charctx->nscreens, sizeof(struct de_char_screen*));
 	charctx->screens[0] = de_malloc(c, sizeof(struct de_char_screen));
 	screen = charctx->screens[0];
 	screen->width = d->width_in_chars;
 	screen->height = d->height_in_chars;
-	screen->cell_rows = de_malloc(c, d->height_in_chars * sizeof(struct de_char_cell*));
+	screen->cell_rows = de_mallocarray(c, d->height_in_chars, sizeof(struct de_char_cell*));
 
 	for(j=0; j<d->height_in_chars; j++) {
-		screen->cell_rows[j] = de_malloc(c, d->width_in_chars * sizeof(struct de_char_cell));
+		screen->cell_rows[j] = de_mallocarray(c, d->width_in_chars, sizeof(struct de_char_cell));
 
 		for(i=0; i<d->width_in_chars; i++) {
 			ccode = dbuf_getbyte(unc_data, j*d->width_in_chars*2 + i*2);
@@ -55,25 +55,25 @@ static void do_bin_main(deark *c, lctx *d, dbuf *unc_data, struct de_char_contex
 			fgcol = (acode & 0x0f);
 			bgcol = (acode & 0xf0) >> 4;
 
-			screen->cell_rows[j][i].fgcol = (de_uint32)fgcol;
-			screen->cell_rows[j][i].bgcol = (de_uint32)bgcol;
-			screen->cell_rows[j][i].codepoint = (de_int32)ccode;
-			screen->cell_rows[j][i].codepoint_unicode = de_char_to_unicode(c, (de_int32)ccode, DE_ENCODING_CP437_G);
+			screen->cell_rows[j][i].fgcol = (u32)fgcol;
+			screen->cell_rows[j][i].bgcol = (u32)bgcol;
+			screen->cell_rows[j][i].codepoint = (i32)ccode;
+			screen->cell_rows[j][i].codepoint_unicode = de_char_to_unicode(c, (i32)ccode, DE_ENCODING_CP437_G);
 		}
 	}
 
 	de_char_output_to_file(c, charctx);
 }
 
-static void do_uncompress_data(deark *c, lctx *d, de_int64 pos1, dbuf *unc_data)
+static void do_uncompress_data(deark *c, lctx *d, i64 pos1, dbuf *unc_data)
 {
-	de_int64 pos;
-	de_byte cmprtype;
-	de_int64 count;
-	de_int64 xpos, ypos;
-	de_byte b;
-	de_byte b1, b2;
-	de_int64 k;
+	i64 pos;
+	u8 cmprtype;
+	i64 count;
+	i64 xpos, ypos;
+	u8 b;
+	u8 b1, b2;
+	i64 k;
 
 	pos = pos1;
 
@@ -91,7 +91,7 @@ static void do_uncompress_data(deark *c, lctx *d, de_int64 pos1, dbuf *unc_data)
 		b = de_getbyte(pos);
 		pos++;
 		cmprtype = b>>6;
-		count = (de_int64)(b&0x3f) +1;
+		count = (i64)(b&0x3f) +1;
 
 		switch(cmprtype) {
 		case 0: // Uncompressed
@@ -129,21 +129,24 @@ static void do_uncompress_data(deark *c, lctx *d, de_int64 pos1, dbuf *unc_data)
 }
 
 static void do_read_palette(deark *c, lctx *d,struct de_char_context *charctx,
-	de_int64 pos, int adf_style)
+	i64 pos, int adf_style)
 {
-	de_int64 k;
-	de_byte cr1, cg1, cb1;
-	de_byte cr2, cg2, cb2;
-	de_int64 cpos;
+	i64 k;
+	u8 cr1, cg1, cb1;
+	u8 cr2, cg2, cb2;
+	i64 cpos;
 	char tmps[64];
 
 	de_dbg(c, "palette at %d", (int)pos);
 
 	for(k=0; k<16; k++) {
-		if(adf_style && k>=8)
-			cpos = pos+(48+k)*3;
-		else
-			cpos = pos+k*3;
+		i64 idx = k;
+
+		if(adf_style) {
+			if(k>=8) idx = 48+k;
+			else if(k==6) idx = 20;
+		}
+		cpos = pos + idx*3;
 		cr1 = de_getbyte(cpos);
 		cg1 = de_getbyte(cpos+1);
 		cb1 = de_getbyte(cpos+2);
@@ -172,23 +175,28 @@ static void do_extract_font(deark *c, lctx *d)
 
 	if(!d->has_font || !d->font) return;
 	fi = de_finfo_create(c);
-	de_finfo_set_name_from_sz(c, fi, "font", DE_ENCODING_ASCII);
+	de_finfo_set_name_from_sz(c, fi, "font", 0, DE_ENCODING_ASCII);
 
 	de_font_bitmap_font_to_image(c, d->font, fi, DE_CREATEFLAG_IS_AUX);
 
 	de_finfo_destroy(c, fi);
 }
 
-static void do_read_font_data(deark *c, lctx *d, de_int64 pos)
+static void do_read_font_data(deark *c, lctx *d, i64 pos)
 {
-	de_uint32 crc;
+	u32 crc;
+	struct de_crcobj *crco;
 
 	de_dbg(c, "font at %d, %d bytes", (int)pos, (int)d->font_data_len);
 	de_dbg_indent(c, 1);
 	d->font_data = de_malloc(c, d->font_data_len);
 	de_read(d->font_data, pos, d->font_data_len);
 
-	crc = de_crc32(d->font_data, d->font_data_len);
+	crco = de_crcobj_create(c, DE_CRCOBJ_CRC32_IEEE);
+	de_crcobj_addbuf(crco, d->font_data, d->font_data_len);
+	crc = de_crcobj_getval(crco);
+	de_crcobj_destroy(crco);
+
 	d->is_standard_font = de_font_is_standard_vga_font(c, crc);
 	de_dbg(c, "font crc: 0x%08x (%s)", (unsigned int)crc,
 		d->is_standard_font?"known CP437 font":"unrecognized");
@@ -205,7 +213,7 @@ static void do_read_font_data(deark *c, lctx *d, de_int64 pos)
 // Finish populating the d->font struct.
 static int do_generate_font(deark *c, lctx *d)
 {
-	de_int64 i;
+	i64 i;
 
 	if(!d->font) return 0;
 	if(d->font->num_chars!=256) {
@@ -218,12 +226,12 @@ static int do_generate_font(deark *c, lctx *d)
 	}
 	d->font->nominal_width = 8;
 	d->font->nominal_height = (int)d->font_height;
-	d->font->char_array = de_malloc(c, d->font->num_chars * sizeof(struct de_bitmap_font_char));
+	d->font->char_array = de_mallocarray(c, d->font->num_chars, sizeof(struct de_bitmap_font_char));
 
 	for(i=0; i<d->font->num_chars; i++) {
-		d->font->char_array[i].codepoint_nonunicode = (de_int32)i;
+		d->font->char_array[i].codepoint_nonunicode = (i32)i;
 		d->font->char_array[i].codepoint_unicode =
-			de_char_to_unicode(c, (de_int32)i, DE_ENCODING_CP437_G);
+			de_char_to_unicode(c, (i32)i, DE_ENCODING_CP437_G);
 		d->font->char_array[i].width = d->font->nominal_width;
 		d->font->char_array[i].height = d->font->nominal_height;
 		d->font->char_array[i].rowspan = 1;
@@ -249,8 +257,8 @@ static void de_run_xbin(deark *c, de_module_params *mparams)
 	struct de_char_context *charctx = NULL;
 	struct de_SAUCE_detection_data sdd;
 	struct de_SAUCE_info *si = NULL;
-	de_int64 pos = 0;
-	de_byte flags;
+	i64 pos = 0;
+	u8 flags;
 	dbuf *unc_data = NULL;
 
 	d = de_malloc(c, sizeof(lctx));
@@ -258,12 +266,14 @@ static void de_run_xbin(deark *c, de_module_params *mparams)
 	charctx = de_malloc(c, sizeof(struct de_char_context));
 	charctx->prefer_image_output = 1;
 
-	de_memset(&sdd, 0, sizeof(struct de_SAUCE_detection_data));
-	de_detect_SAUCE(c, c->infile, &sdd);
-
+	de_fmtutil_detect_SAUCE(c, c->infile, &sdd, 0x1);
 	if(sdd.has_SAUCE) {
-		si = de_malloc(c, sizeof(struct de_SAUCE_info));
-		de_read_SAUCE(c, c->infile, si);
+		si = de_fmtutil_create_SAUCE(c);
+
+		de_dbg_indent(c, 1);
+		de_fmtutil_handle_SAUCE(c, c->infile, si);
+		de_dbg_indent(c, -1);
+
 		charctx->title = si->title;
 		charctx->artist = si->artist;
 		charctx->organization = si->organization;
@@ -272,9 +282,9 @@ static void de_run_xbin(deark *c, de_module_params *mparams)
 		charctx->comments = si->comments;
 	}
 
-	d->width_in_chars = de_getui16le(5);
-	d->height_in_chars = de_getui16le(7);
-	d->font_height = (de_int64)de_getbyte(9);
+	d->width_in_chars = de_getu16le(5);
+	d->height_in_chars = de_getu16le(7);
+	d->font_height = (i64)de_getbyte(9);
 	if(d->font_height<1 || d->font_height>32) {
 		de_err(c, "Invalid font height: %d", (int)d->font_height);
 		goto done;
@@ -358,7 +368,7 @@ static void de_run_xbin(deark *c, de_module_params *mparams)
 done:
 	dbuf_close(unc_data);
 	de_free_charctx(c, charctx);
-	de_free_SAUCE(c, si);
+	de_fmtutil_free_SAUCE(c, si);
 	free_lctx(c, d);
 }
 
@@ -393,10 +403,10 @@ static void de_run_bintext(deark *c, de_module_params *mparams)
 	struct de_SAUCE_detection_data sdd;
 	struct de_SAUCE_info *si = NULL;
 	dbuf *unc_data = NULL;
-	de_int64 effective_file_size = 0;
+	i64 effective_file_size = 0;
 	int valid_sauce = 0;
 	const char *s;
-	de_int64 width_req = 0;
+	i64 width_req = 0;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -408,12 +418,14 @@ static void de_run_bintext(deark *c, de_module_params *mparams)
 		width_req = de_atoi(s);
 	}
 
-	de_memset(&sdd, 0, sizeof(struct de_SAUCE_detection_data));
-	de_detect_SAUCE(c, c->infile, &sdd);
-
+	de_fmtutil_detect_SAUCE(c, c->infile, &sdd, 0x1);
 	if(sdd.has_SAUCE) {
-		si = de_malloc(c, sizeof(struct de_SAUCE_info));
-		de_read_SAUCE(c, c->infile, si);
+		si = de_fmtutil_create_SAUCE(c);
+
+		de_dbg_indent(c, 1);
+		de_fmtutil_handle_SAUCE(c, c->infile, si);
+		de_dbg_indent(c, -1);
+
 		charctx->title = si->title;
 		charctx->artist = si->artist;
 		charctx->organization = si->organization;
@@ -426,8 +438,14 @@ static void de_run_bintext(deark *c, de_module_params *mparams)
 		if(si->data_type==5) {
 			valid_sauce = 1;
 
-			// For BinText, the FileType field is inexplicably used for the width.
-			d->width_in_chars = 2*(de_int64)sdd.file_type;
+			if(si->file_type==1 && si->tinfo1>0) {
+				// Some files created by ACiDDraw do this.
+				d->width_in_chars = 2*(i64)si->tinfo1;
+			}
+			else {
+				// For BinText, the FileType field is inexplicably used for the width (usually).
+				d->width_in_chars = 2*(i64)si->file_type;
+			}
 
 			if(si->tflags & 0x01) {
 				d->nonblink = 1;
@@ -470,15 +488,16 @@ static void de_run_bintext(deark *c, de_module_params *mparams)
 
 	dbuf_close(unc_data);
 	de_free_charctx(c, charctx);
-	de_free_SAUCE(c, si);
+	de_fmtutil_free_SAUCE(c, si);
 	free_lctx(c, d);
 }
 
 static int de_identify_bintext(deark *c)
 {
-	if(!c->detection_data.sauce.detection_attempted) {
-		de_err(c, "bintext internal");
-		de_fatalerror(c);
+	if(!c->detection_data.SAUCE_detection_attempted) {
+		// FIXME?: This is known to happen if "-disablemods sauce" was used.
+		de_err(c, "bintext detection requires sauce module");
+		return 0;
 	}
 	if(c->detection_data.sauce.has_SAUCE) {
 		if(c->detection_data.sauce.data_type==5)
@@ -512,8 +531,8 @@ static void de_run_artworx_adf(deark *c, de_module_params *mparams)
 	lctx *d = NULL;
 	struct de_char_context *charctx = NULL;
 	dbuf *unc_data = NULL;
-	de_int64 data_start;
-	de_int64 data_len;
+	i64 data_start;
+	i64 data_len;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -579,7 +598,7 @@ done:
 
 static int de_identify_artworx_adf(deark *c)
 {
-	de_byte ver;
+	u8 ver;
 
 	// TODO: This detection algorithm will fail if there is a SAUCE record.
 
@@ -627,14 +646,17 @@ static void de_run_icedraw(deark *c, de_module_params *mparams)
 {
 	struct de_SAUCE_detection_data sdd;
 
-	de_memset(&sdd, 0, sizeof(struct de_SAUCE_detection_data));
-	de_detect_SAUCE(c, c->infile, &sdd);
+	de_fmtutil_detect_SAUCE(c, c->infile, &sdd, 0x1);
 	if(sdd.has_SAUCE) {
 		// Read the SAUCE record if present, just for the debugging info.
 		struct de_SAUCE_info *si = NULL;
-		si = de_malloc(c, sizeof(struct de_SAUCE_info));
-		de_read_SAUCE(c, c->infile, si);
-		de_free_SAUCE(c, si);
+		si = de_fmtutil_create_SAUCE(c);
+
+		de_dbg_indent(c, 1);
+		de_fmtutil_handle_SAUCE(c, c->infile, si);
+		de_dbg_indent(c, -1);
+
+		de_fmtutil_free_SAUCE(c, si);
 	}
 
 	de_err(c, "iCEDraw format is not supported");

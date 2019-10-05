@@ -8,7 +8,7 @@
 #include <deark-private.h>
 DE_DECLARE_MODULE(de_module_icns);
 
-static const de_uint32 pal16[16] = {
+static const u32 pal16[16] = {
 	0xffffff,0xfcf305,0xff6402,0xdd0806,0xf20884,0x4600a5,0x0000d4,0x02abea,
 	0x1fb714,0x006411,0x562c05,0x90713a,0xc0c0c0,0x808080,0x404040,0x000000
 };
@@ -19,7 +19,7 @@ static const de_uint32 pal16[16] = {
 #define IMGTYPE_IMAGE_AND_MASK  4
 
 struct image_type_info {
-	de_uint32 code;
+	u32 code;
 	int width;
 	int height;
 	int bpp; // bits per pixel. 0 = unspecified
@@ -69,31 +69,31 @@ static const struct image_type_info image_type_info_arr[] = {
 
 struct page_ctx {
 	int image_num;
-	de_int64 image_pos;
-	de_int64 image_len;
-	de_int64 mask_pos; //  (0 = not found)
-	de_int64 mask_rowspan;
-	de_int64 rowspan;
+	i64 image_pos;
+	i64 image_len;
+	i64 mask_pos; //  (0 = not found)
+	i64 mask_rowspan;
+	i64 rowspan;
 	const struct image_type_info *type_info;
 	struct de_fourcc code4cc;
 	char filename_token[32];
 };
 
 typedef struct localctx_struct {
-	de_int64 file_size;
+	i64 file_size;
 
 	// File offsets of mask images (0 = not present)
-	de_int64 mkpos_16_12_1;
-	de_int64 mkpos_16_16_1;
-	de_int64 mkpos_32_32_1;
-	de_int64 mkpos_48_48_1;
-	de_int64 mkpos_16_16_8;
-	de_int64 mkpos_32_32_8;
-	de_int64 mkpos_48_48_8;
-	de_int64 mkpos_128_128_8;
+	i64 mkpos_16_12_1;
+	i64 mkpos_16_16_1;
+	i64 mkpos_32_32_1;
+	i64 mkpos_48_48_1;
+	i64 mkpos_16_16_8;
+	i64 mkpos_32_32_8;
+	i64 mkpos_48_48_8;
+	i64 mkpos_128_128_8;
 } lctx;
 
-static const de_uint32 supplpal256[41] = {
+static const u32 supplpal256[41] = {
 	0xee0000,0xdd0000,0xbb0000,0xaa0000,0x880000,
 	0x770000,0x550000,0x440000,0x220000,0x110000,
 	0x00ee00,0x00dd00,0x00bb00,0x00aa00,0x008800,
@@ -104,14 +104,14 @@ static const de_uint32 supplpal256[41] = {
 	0x777777,0x555555,0x444444,0x222222,0x111111,0x000000
 };
 
-static de_uint32 getpal256(int k)
+static u32 getpal256(int k)
 {
-	de_byte r, g, b;
+	u8 r, g, b;
 
 	if(k<0 || k>255) return 0;
 	if(k<=214) {
 		// The first 215 palette entries follow a simple pattern.
-		r = (de_byte)((5-k/36)*0x33);
+		r = (u8)((5-k/36)*0x33);
 		g = (5-(k%36)/6)*0x33;
 		b = (5-k%6)*0x33;
 		return DE_MAKE_RGB(r,g,b);
@@ -123,18 +123,19 @@ static de_uint32 getpal256(int k)
 static void do_decode_1_4_8bit(deark *c, lctx *d, struct page_ctx *pg)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_byte a, b;
-	de_byte x;
-	de_int32 fgcol;
+	i64 i, j;
+	u8 a, b;
+	u8 x;
+	u32 fgcol;
+	int bypp;
 
-	img = de_bitmap_create(c, pg->type_info->width, pg->type_info->height, 4);
+	bypp = (pg->type_info->bpp==1)?2:4;
+	img = de_bitmap_create(c, pg->type_info->width, pg->type_info->height, bypp);
 
 	for(j=0; j<pg->type_info->height; j++) {
 		for(i=0; i<pg->type_info->width; i++) {
 			// Foreground
 			b = de_get_bits_symbol(c->infile, pg->type_info->bpp, pg->image_pos + pg->rowspan*j, i);
-
 			if(pg->type_info->bpp==8) {
 				fgcol = getpal256((int)b);
 			}
@@ -142,7 +143,7 @@ static void do_decode_1_4_8bit(deark *c, lctx *d, struct page_ctx *pg)
 				fgcol = pal16[(unsigned int)b];
 			}
 			else {
-				fgcol = b ? 0x0000000 : 0xffffff;
+				fgcol = b ? DE_STOCKCOLOR_BLACK : DE_STOCKCOLOR_WHITE;
 			}
 
 			// Opacity
@@ -153,6 +154,7 @@ static void do_decode_1_4_8bit(deark *c, lctx *d, struct page_ctx *pg)
 			else {
 				a = 0xff;
 			}
+
 			de_bitmap_setpixel_rgba(img, i, j, DE_SET_ALPHA(fgcol, a));
 		}
 	}
@@ -162,12 +164,12 @@ static void do_decode_1_4_8bit(deark *c, lctx *d, struct page_ctx *pg)
 }
 
 static void do_uncompress_24(deark *c, lctx *d, struct page_ctx *pg, dbuf *unc_pixels,
-	de_int64 skip)
+	i64 skip)
 {
-	de_int64 pos;
-	de_byte b;
-	de_int64 count;
-	de_byte n;
+	i64 pos;
+	u8 b;
+	i64 count;
+	u8 n;
 
 	pos = pg->image_pos;
 	if(skip) pos+=4;
@@ -179,14 +181,14 @@ static void do_uncompress_24(deark *c, lctx *d, struct page_ctx *pg, dbuf *unc_p
 		pos++;
 		if(b>=128) {
 			// Compressed run
-			count = (de_int64)b - 125;
+			count = (i64)b - 125;
 			n = de_getbyte(pos);
 			pos++;
 			dbuf_write_run(unc_pixels, n, count);
 		}
 		else {
 			// An uncompressed run
-			count = 1 + (de_int64)b;
+			count = 1 + (i64)b;
 			dbuf_copy(c->infile, pos, count, unc_pixels);
 			pos += count;
 		}
@@ -197,10 +199,10 @@ static void do_decode_24bit(deark *c, lctx *d, struct page_ctx *pg)
 {
 	dbuf *unc_pixels = NULL;
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_byte cr, cg, cb, ca;
-	de_int64 w, h;
-	de_int64 skip;
+	i64 i, j;
+	u8 cr, cg, cb, ca;
+	i64 w, h;
+	i64 skip;
 
 	w = pg->type_info->width;
 	h = pg->type_info->height;
@@ -243,7 +245,7 @@ static void do_decode_24bit(deark *c, lctx *d, struct page_ctx *pg)
 
 static void do_extract_png_or_jp2(deark *c, lctx *d, struct page_ctx *pg)
 {
-	de_byte buf[8];
+	u8 buf[8];
 	de_finfo *fi = NULL;
 
 	de_dbg(c, "Trying to extract file at %d", (int)pg->image_pos);
@@ -252,7 +254,7 @@ static void do_extract_png_or_jp2(deark *c, lctx *d, struct page_ctx *pg)
 	de_read(buf, pg->image_pos, sizeof(buf));
 
 	fi = de_finfo_create(c);
-	de_finfo_set_name_from_sz(c, fi, pg->filename_token, DE_ENCODING_ASCII);
+	de_finfo_set_name_from_sz(c, fi, pg->filename_token, 0, DE_ENCODING_ASCII);
 
 	if(buf[4]=='j' && buf[5]=='P') {
 		dbuf_create_file_from_slice(c->infile, pg->image_pos, pg->image_len, "jp2", fi, 0);
@@ -319,7 +321,7 @@ static void find_mask(deark *c, lctx *d, struct page_ctx *pg)
 
 static void do_icon(deark *c, lctx *d, struct page_ctx *pg)
 {
-	de_int64 expected_image_size;
+	i64 expected_image_size;
 	int is_compressed;
 
 	if(!pg->type_info) return; // Shouldn't happen.
@@ -391,8 +393,8 @@ static void do_icon(deark *c, lctx *d, struct page_ctx *pg)
 
 static void de_run_icns_pass(deark *c, lctx *d, int pass)
 {
-	de_int64 i;
-	de_int64 segment_pos;
+	i64 i;
+	i64 segment_pos;
 	struct page_ctx *pg = NULL;
 	int image_count;
 
@@ -400,7 +402,7 @@ static void de_run_icns_pass(deark *c, lctx *d, int pass)
 	image_count = 0;
 
 	while(1) {
-		de_int64 segment_len;
+		i64 segment_len;
 
 		if(pg) { de_free(c, pg); pg=NULL; }
 
@@ -411,7 +413,7 @@ static void de_run_icns_pass(deark *c, lctx *d, int pass)
 
 		dbuf_read_fourcc(c->infile, segment_pos, &pg->code4cc, 4, 0x0);
 
-		segment_len = de_getui32be(segment_pos+4);
+		segment_len = de_getu32be(segment_pos+4);
 
 		pg->image_pos = segment_pos + 8;
 		pg->image_len = segment_len - 8;
@@ -489,7 +491,7 @@ static void de_run_icns(deark *c, de_module_params *mparams)
 
 	d = de_malloc(c, sizeof(lctx));
 
-	d->file_size = de_getui32be(4);
+	d->file_size = de_getu32be(4);
 	de_dbg(c, "reported file size: %d", (int)d->file_size);
 	if(d->file_size > c->infile->len) d->file_size = c->infile->len;
 
@@ -503,11 +505,11 @@ static void de_run_icns(deark *c, de_module_params *mparams)
 
 static int de_identify_icns(deark *c)
 {
-	de_int64 fsize;
+	i64 fsize;
 
 	if(dbuf_memcmp(c->infile, 0, "icns", 4)) return 0;
 
-	fsize = de_getui32be(4);
+	fsize = de_getu32be(4);
 	if(fsize == c->infile->len) return 100;
 	return 20;
 }

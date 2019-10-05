@@ -9,7 +9,7 @@
 #include <deark-private.h>
 #include <deark-fmtutil.h>
 
-void de_fmtutil_get_bmp_compression_name(de_uint32 code, char *s, size_t s_len,
+void de_fmtutil_get_bmp_compression_name(u32 code, char *s, size_t s_len,
 	int is_os2v2)
 {
 	const char *name1 = "?";
@@ -39,16 +39,16 @@ void de_fmtutil_get_bmp_compression_name(de_uint32 code, char *s, size_t s_len,
 // Otherwise, it points to the BITMAPINFOHEADER.
 // Caller allocates bi.
 // Returns 0 if BMP is invalid.
-int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 pos,
-	de_int64 len, unsigned int flags)
+int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, i64 pos,
+	i64 len, unsigned int flags)
 {
-	de_int64 fhs; // file header size
-	de_int64 bmih_pos;
+	i64 fhs; // file header size
+	i64 bmih_pos;
 	struct de_fourcc cmpr4cc;
 	char cmprname_dbgstr[80];
 
-	de_memset(bi, 0, sizeof(struct de_bmpinfo));
-	de_memset(&cmpr4cc, 0, sizeof(struct de_fourcc));
+	de_zeromem(bi, sizeof(struct de_bmpinfo));
+	de_zeromem(&cmpr4cc, sizeof(struct de_fourcc));
 
 	fhs = (flags & DE_BMPINFO_HAS_FILEHEADER) ? 14 : 0;
 
@@ -56,18 +56,18 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 
 	if(fhs) {
 		if(flags & DE_BMPINFO_HAS_HOTSPOT) {
-			bi->hotspot_x = dbuf_getui16le(f, pos+6);
-			bi->hotspot_y = dbuf_getui16le(f, pos+8);
+			bi->hotspot_x = dbuf_getu16le(f, pos+6);
+			bi->hotspot_y = dbuf_getu16le(f, pos+8);
 			de_dbg(c, "hotspot: (%d,%d)", (int)bi->hotspot_x, (int)bi->hotspot_y);
 		}
 
-		bi->bitsoffset = dbuf_getui32le(f, pos+10);
+		bi->bitsoffset = dbuf_getu32le(f, pos+10);
 		de_dbg(c, "bits offset: %d", (int)bi->bitsoffset);
 	}
 
 	bmih_pos = pos + fhs;
 
-	bi->infohdrsize = dbuf_getui32le(f, bmih_pos);
+	bi->infohdrsize = dbuf_getu32le(f, bmih_pos);
 
 	if(bi->infohdrsize==0x474e5089 && (flags & DE_BMPINFO_ICO_FORMAT)) {
 		// We don't examine PNG-formatted icons, but we can identify them.
@@ -80,27 +80,30 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 
 	if(bi->infohdrsize==12) {
 		bi->bytes_per_pal_entry = 3;
-		bi->width = dbuf_getui16le(f, bmih_pos+4);
-		bi->height = dbuf_getui16le(f, bmih_pos+6);
-		bi->bitcount = dbuf_getui16le(f, bmih_pos+10);
+		bi->width = dbuf_getu16le(f, bmih_pos+4);
+		bi->height = dbuf_getu16le(f, bmih_pos+6);
+		bi->bitcount = dbuf_getu16le(f, bmih_pos+10);
 	}
 	else if(bi->infohdrsize>=16 && bi->infohdrsize<=124) {
 		bi->bytes_per_pal_entry = 4;
-		bi->width = dbuf_getui32le(f, bmih_pos+4);
+		bi->width = dbuf_getu32le(f, bmih_pos+4);
 		bi->height = dbuf_geti32le(f, bmih_pos+8);
 		if(bi->height<0) {
 			bi->is_topdown = 1;
 			bi->height = -bi->height;
 		}
-		bi->bitcount = dbuf_getui16le(f, bmih_pos+14);
+		bi->bitcount = dbuf_getu16le(f, bmih_pos+14);
 		if(bi->infohdrsize>=20) {
-			bi->compression_field = (de_uint32)dbuf_getui32le(f, bmih_pos+16);
+			bi->compression_field = (u32)dbuf_getu32le(f, bmih_pos+16);
 			if(flags & DE_BMPINFO_CMPR_IS_4CC) {
 				dbuf_read_fourcc(f, bmih_pos+16, &cmpr4cc, 4, 0x0);
 			}
 		}
+		if(bi->infohdrsize>=24) {
+			bi->sizeImage_field = dbuf_getu32le(f, bmih_pos+20);
+		}
 		if(bi->infohdrsize>=36) {
-			bi->pal_entries = dbuf_getui32le(f, bmih_pos+32);
+			bi->pal_entries = dbuf_getu32le(f, bmih_pos+32);
 		}
 	}
 	else {
@@ -111,11 +114,11 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 
 	if(bi->bitcount>=1 && bi->bitcount<=8) {
 		if(bi->pal_entries==0) {
-			bi->pal_entries = (de_int64)(1<<(unsigned int)bi->bitcount);
+			bi->pal_entries = de_pow2(bi->bitcount);
 		}
 		// I think the NumColors field (in icons) is supposed to be the maximum number of
 		// colors implied by the bit depth, not the number of colors in the palette.
-		bi->num_colors = (de_int64)(1<<(unsigned int)bi->bitcount);
+		bi->num_colors = de_pow2(bi->bitcount);
 	}
 	else {
 		// An arbitrary value. All that matters is that it's >=256.
@@ -134,6 +137,10 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 	}
 	de_dbg(c, "compression: %u (%s)", (unsigned int)bi->compression_field, cmprname_dbgstr);
 
+	if(bi->sizeImage_field!=0) {
+		de_dbg(c, "sizeImage: %u", (unsigned int)bi->sizeImage_field);
+	}
+
 	de_dbg(c, "palette entries: %u", (unsigned int)bi->pal_entries);
 	if(bi->pal_entries>256 && bi->bitcount>8) {
 		de_warn(c, "Ignoring bad palette size (%u entries)", (unsigned int)bi->pal_entries);
@@ -142,14 +149,21 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 
 	bi->pal_bytes = bi->bytes_per_pal_entry*bi->pal_entries;
 	bi->size_of_headers_and_pal = fhs + bi->infohdrsize + bi->pal_bytes;
+
+	// FIXME: cmpr type 3 doesn't always mean BITFIELDS
 	if(bi->compression_field==3) {
 		bi->size_of_headers_and_pal += 12; // BITFIELDS
 	}
+
+	bi->is_compressed = !((bi->compression_field==0) ||
+		(bi->compression_field==3 && bi->bitcount>1));
 
 	if(!de_good_image_dimensions(c, bi->width, bi->height)) {
 		return 0;
 	}
 
+	// TODO: This needs work, to decide how to handle compressed images.
+	// TODO: What about BI_BITFIELDS images?
 	if(bi->compression_field==0) {
 		// Try to figure out the true size of the resource, minus any padding.
 
@@ -179,32 +193,36 @@ int de_fmtutil_get_bmpinfo(deark *c, dbuf *f, struct de_bmpinfo *bi, de_int64 po
 // TODO: Document and review whether the bi->total_size and
 // bi->size_of_headers_and_pal fields include the 14-byte fileheader.
 void de_fmtutil_generate_bmpfileheader(deark *c, dbuf *outf, const struct de_bmpinfo *bi,
-	de_int64 file_size_override)
+	i64 file_size_override)
 {
-	de_int64 file_size_to_write;
+	i64 file_size_to_write;
 
-	dbuf_write(outf, (const de_byte*)"BM", 2);
+	dbuf_write(outf, (const u8*)"BM", 2);
 
 	if(file_size_override)
 		file_size_to_write = file_size_override;
 	else
 		file_size_to_write = 14 + bi->total_size;
-	dbuf_writeui32le(outf, file_size_to_write);
+	dbuf_writeu32le(outf, file_size_to_write);
 
 	dbuf_write_zeroes(outf, 4);
-	dbuf_writeui32le(outf, 14 + bi->size_of_headers_and_pal);
+	dbuf_writeu32le(outf, 14 + bi->size_of_headers_and_pal);
 }
 
-void de_fmtutil_handle_exif2(deark *c, de_int64 pos, de_int64 len,
-	de_uint32 *returned_flags, de_uint32 *orientation, de_uint32 *exifversion)
+// Extracts Exif if extract_level>=2, or "extractexif" option is set.
+// Otherwise decodes.
+void de_fmtutil_handle_exif2(deark *c, i64 pos, i64 len,
+	u32 *returned_flags, u32 *orientation, u32 *exifversion)
 {
+	int user_opt;
 	de_module_params *mparams = NULL;
 
 	if(returned_flags) {
 		*returned_flags = 0;
 	}
 
-	if(c->extract_level>=2) {
+	user_opt = de_get_ext_option_bool(c, "extractexif", -1);
+	if(user_opt==1 || (c->extract_level>=2 && user_opt!=0)) {
 		// Writing raw Exif data isn't very useful, but do so if requested.
 		dbuf_create_file_from_slice(c->infile, pos, len, "exif.tif", NULL, DE_CREATEFLAG_IS_AUX);
 
@@ -234,58 +252,147 @@ void de_fmtutil_handle_exif2(deark *c, de_int64 pos, de_int64 len,
 	de_free(c, mparams);
 }
 
-void de_fmtutil_handle_exif(deark *c, de_int64 pos, de_int64 len)
+void de_fmtutil_handle_exif(deark *c, i64 pos, i64 len)
 {
 	de_fmtutil_handle_exif2(c, pos, len, NULL, NULL, NULL);
 }
 
-// Either extract the IPTC data to a file, or drill down into it,
-// depending on the value of c->extract_level.
-void de_fmtutil_handle_iptc(deark *c, dbuf *f, de_int64 pos, de_int64 len)
+static void wrap_in_tiff(deark *c, dbuf *f, i64 dpos, i64 dlen,
+	const char *swstring, unsigned int tag, const char *ext, unsigned int createflags);
+
+// Either extract the IPTC data to a file, or drill down into it.
+// flags:
+//  0 = default behavior (currently: depends on c->extract_level and options)
+//  2 = this came from our TIFF-encapsulated format
+void de_fmtutil_handle_iptc(deark *c, dbuf *f, i64 pos, i64 len,
+	unsigned int flags)
 {
+	int should_decode;
+	int should_extract;
+	int user_opt;
+	int extract_fmt = 1; // 0=raw, 1=TIFF-wrapped
+
 	if(len<1) return;
 
-	if(c->extract_level>=2) {
+	user_opt = de_get_ext_option_bool(c, "extractiptc", -1);
+
+	if(user_opt==1 || (c->extract_level>=2 && user_opt!=0)) {
+		should_decode = 0;
+		should_extract = 1;
+		if(flags&0x2) {
+			// Avoid "extracting" in a way that would just recreate the exact same file.
+			extract_fmt = 0;
+		}
+	}
+	else {
+		should_decode = 1;
+		should_extract = 0;
+	}
+
+	if(should_decode) {
+		de_run_module_by_id_on_slice(c, "iptc", NULL, f, pos, len);
+	}
+
+	if(should_extract && extract_fmt==0) {
 		dbuf_create_file_from_slice(f, pos, len, "iptc", NULL, DE_CREATEFLAG_IS_AUX);
+	}
+	else if(should_extract && extract_fmt==1) {
+		wrap_in_tiff(c, f, pos, len, "Deark extracted IPTC", 33723, "iptctiff",
+			DE_CREATEFLAG_IS_AUX);
+	}
+}
+
+// If oparams is not NULL, if must be initialized by the caller. If the data is
+// decoded, oparams will be used by the submodule, and values may be returned in
+// it.
+// flags:
+//  0 = default behavior (currently: always decode)
+//  1 = always write to file
+//  2 = this came from our TIFF-encapsulated format
+void de_fmtutil_handle_photoshop_rsrc2(deark *c, dbuf *f, i64 pos, i64 len,
+	unsigned int flags, struct de_module_out_params *oparams)
+{
+	int should_decode;
+	int should_extract;
+	int extract_fmt = 1; // 0=raw, 1=TIFF-wrapped
+
+	if(flags&0x1) {
+		should_decode = 0;
+		should_extract = 1;
+	}
+	else if(de_get_ext_option_bool(c, "extract8bim", 0)) {
+		should_extract = 1;
+		should_decode = 0;
+		if(flags&0x2) {
+			// Avoid "extracting" in a way that would just recreate the exact same file.
+			extract_fmt = 0;
+		}
+	}
+	else {
+		should_decode = 1;
+		should_extract = 0;
+	}
+
+	if(should_decode) {
+		de_module_params *mparams = NULL;
+
+		mparams = de_malloc(c, sizeof(de_module_params));
+		mparams->in_params.codes = "R";
+		if(oparams) {
+			// Since mparams->out_params is an embedded struct, not a pointer,
+			// we have to copy oparam's fields to and from it.
+			mparams->out_params = *oparams; // struct copy
+		}
+		de_run_module_by_id_on_slice(c, "psd", mparams, f, pos, len);
+		if(oparams) {
+			*oparams = mparams->out_params; // struct copy
+		}
+		de_free(c, mparams);
+	}
+
+	if(should_extract && extract_fmt==0) {
+		dbuf_create_file_from_slice(f, pos, len, "8bim", NULL, DE_CREATEFLAG_IS_AUX);
+	}
+	else if(should_extract && extract_fmt==1) {
+		wrap_in_tiff(c, f, pos, len, "Deark extracted 8BIM", 34377, "8bimtiff",
+			DE_CREATEFLAG_IS_AUX);
+	}
+}
+
+void de_fmtutil_handle_photoshop_rsrc(deark *c, dbuf *f, i64 pos, i64 len,
+	unsigned int flags)
+{
+	de_fmtutil_handle_photoshop_rsrc2(c, f, pos, len, flags, NULL);
+}
+
+// flags:
+//  0 = default behavior (currently: decode unless -opt extractplist was used)
+void de_fmtutil_handle_plist(deark *c, dbuf *f, i64 pos, i64 len,
+	de_finfo *fi, unsigned int flags)
+{
+	if(de_get_ext_option_bool(c, "extractplist", 0)) {
+		dbuf_create_file_from_slice(f, pos, len,
+			fi?NULL:"plist", fi, DE_CREATEFLAG_IS_AUX);
 		return;
 	}
 
-	de_run_module_by_id_on_slice(c, "iptc", NULL, f, pos, len);
-}
-
-void de_fmtutil_handle_photoshop_rsrc2(deark *c, dbuf *f, de_int64 pos, de_int64 len,
-	de_uint32 *returned_flags)
-{
-	de_module_params *mparams = NULL;
-
-	mparams = de_malloc(c, sizeof(de_module_params));
-	mparams->in_params.codes = "R";
-	de_run_module_by_id_on_slice(c, "psd", mparams, f, pos, len);
-	if(returned_flags) {
-		*returned_flags = mparams->out_params.flags;
-	}
-	de_free(c, mparams);
-}
-
-void de_fmtutil_handle_photoshop_rsrc(deark *c, dbuf *f, de_int64 pos, de_int64 len)
-{
-	de_fmtutil_handle_photoshop_rsrc2(c, f, pos, len, NULL);
+	de_run_module_by_id_on_slice(c, "plist", NULL, f, pos, len);
 }
 
 // Returns 0 on failure (currently impossible).
-int de_fmtutil_uncompress_packbits(dbuf *f, de_int64 pos1, de_int64 len,
-	dbuf *unc_pixels, de_int64 *cmpr_bytes_consumed)
+int de_fmtutil_uncompress_packbits(dbuf *f, i64 pos1, i64 len,
+	dbuf *unc_pixels, i64 *cmpr_bytes_consumed)
 {
-	de_int64 pos;
-	de_byte b, b2;
-	de_int64 count;
-	de_int64 endpos;
+	i64 pos;
+	u8 b, b2;
+	i64 count;
+	i64 endpos;
 
 	pos = pos1;
 	endpos = pos1+len;
 
 	while(1) {
-		if(unc_pixels->max_len>0 && unc_pixels->len>=unc_pixels->max_len) {
+		if(unc_pixels->has_len_limit && unc_pixels->len>=unc_pixels->len_limit) {
 			break; // Decompressed the requested amount of dst data.
 		}
 
@@ -295,12 +402,12 @@ int de_fmtutil_uncompress_packbits(dbuf *f, de_int64 pos1, de_int64 len,
 		b = dbuf_getbyte(f, pos++);
 
 		if(b>128) { // A compressed run
-			count = 257 - (de_int64)b;
+			count = 257 - (i64)b;
 			b2 = dbuf_getbyte(f, pos++);
 			dbuf_write_run(unc_pixels, b2, count);
 		}
 		else if(b<128) { // An uncompressed run
-			count = 1 + (de_int64)b;
+			count = 1 + (i64)b;
 			dbuf_copy(f, pos, count, unc_pixels);
 			pos += count;
 		}
@@ -315,20 +422,20 @@ int de_fmtutil_uncompress_packbits(dbuf *f, de_int64 pos1, de_int64 len,
 }
 
 // A 16-bit variant of de_fmtutil_uncompress_packbits().
-int de_fmtutil_uncompress_packbits16(dbuf *f, de_int64 pos1, de_int64 len,
-	dbuf *unc_pixels, de_int64 *cmpr_bytes_consumed)
+int de_fmtutil_uncompress_packbits16(dbuf *f, i64 pos1, i64 len,
+	dbuf *unc_pixels, i64 *cmpr_bytes_consumed)
 {
-	de_int64 pos;
-	de_byte b, b1, b2;
-	de_int64 k;
-	de_int64 count;
-	de_int64 endpos;
+	i64 pos;
+	u8 b, b1, b2;
+	i64 k;
+	i64 count;
+	i64 endpos;
 
 	pos = pos1;
 	endpos = pos1+len;
 
 	while(1) {
-		if(unc_pixels->max_len>0 && unc_pixels->len>=unc_pixels->max_len) {
+		if(unc_pixels->has_len_limit && unc_pixels->len>=unc_pixels->len_limit) {
 			break; // Decompressed the requested amount of dst data.
 		}
 
@@ -338,7 +445,7 @@ int de_fmtutil_uncompress_packbits16(dbuf *f, de_int64 pos1, de_int64 len,
 		b = dbuf_getbyte(f, pos++);
 
 		if(b>128) { // A compressed run
-			count = 257 - (de_int64)b;
+			count = 257 - (i64)b;
 			b1 = dbuf_getbyte(f, pos++);
 			b2 = dbuf_getbyte(f, pos++);
 			for(k=0; k<count; k++) {
@@ -347,7 +454,7 @@ int de_fmtutil_uncompress_packbits16(dbuf *f, de_int64 pos1, de_int64 len,
 			}
 		}
 		else if(b<128) { // An uncompressed run
-			count = 1 + (de_int64)b;
+			count = 1 + (i64)b;
 			dbuf_copy(f, pos, count*2, unc_pixels);
 			pos += count*2;
 		}
@@ -358,313 +465,105 @@ int de_fmtutil_uncompress_packbits16(dbuf *f, de_int64 pos1, de_int64 len,
 	return 1;
 }
 
-static de_int64 sauce_space_padded_length(const de_byte *buf, de_int64 len)
+// RLE algorithm occasionally called "RLE90". Variants of this are used by
+// BinHex, ARC, StuffIt, and others.
+int de_fmtutil_decompress_rle90(dbuf *inf, i64 pos1, i64 len,
+	dbuf *outf, unsigned int has_maxlen, i64 max_out_len, unsigned int flags)
 {
-	de_int64 i;
-	de_int64 last_nonspace = -1;
+	i64 pos = pos1;
+	u8 b;
+	u8 lastbyte = 0x00;
+	u8 countcode;
+	i64 count;
+	i64 nbytes_written = 0;
 
-	for(i=len-1; i>=0; i--) {
-		// Spec says to use spaces for padding, and for nonexistent data.
-		// But some files use NUL bytes.
-		if(buf[i]!=0x20 && buf[i]!=0x00) {
-			last_nonspace = i;
-			break;
+	while(pos < pos1+len) {
+		if(has_maxlen && nbytes_written>=max_out_len) break;
+
+		b = dbuf_getbyte(inf, pos);
+		pos++;
+		if(b!=0x90) {
+			dbuf_writebyte(outf, b);
+			nbytes_written++;
+			lastbyte = b;
+			continue;
 		}
+
+		// b = 0x90, which is a special code.
+		countcode = dbuf_getbyte(inf, pos);
+		pos++;
+
+		if(countcode==0x00) {
+			// Not RLE, just an escaped 0x90 byte.
+			dbuf_writebyte(outf, 0x90);
+			nbytes_written++;
+
+			// Here there is an inconsistency between different RLE90
+			// implementations.
+			// Some of them can compress a run of 0x90 bytes, because the byte
+			// to repeat is defined to be the "last byte emitted".
+			// Others do not allow this. If the "0x90 0x00 0x90 0xNN" sequence
+			// (with 0xNN>0) is encountered, they may (by accident?) repeat the
+			// last non-0x90 byte emitted, or do something else.
+			// Hopefully, valid files in such formats never contain this byte
+			// sequence, so it shouldn't matter what we do here. But maybe not.
+			// We might need to add an option to do something else.
+			lastbyte = 0x90;
+			continue;
+		}
+
+		// RLE. We already emitted one byte (because the byte to repeat
+		// comes before the repeat count), so write countcode-1 bytes.
+		count = (i64)(countcode-1);
+		if(has_maxlen && (nbytes_written+count > max_out_len)) {
+			count = max_out_len - nbytes_written;
+		}
+		dbuf_write_run(outf, lastbyte, count);
+		nbytes_written += count;
 	}
-	return last_nonspace+1;
-}
 
-// TODO: I don't think there's any reason we couldn't read SAUCE strings
-// directly to ucstrings, without doing it via a temporary buffer.
-
-// flags: 0x01: Interpret string as a date
-// flags: 0x02: Interpret 0x0a as newline, regardless of encoding
-static void sauce_bytes_to_ucstring(deark *c, const de_byte *buf, de_int64 len,
-	de_ucstring *s, int encoding, unsigned int flags)
-{
-	de_int32 u;
-	de_int64 i;
-
-	for(i=0; i<len; i++) {
-		if((flags&0x01) && (i==4 || i==6)) {
-			ucstring_append_char(s, '-');
-		}
-		if((flags&0x02) && buf[i]==0x0a) {
-			u = 0x000a;
-		}
-		else {
-			u = de_char_to_unicode(c, (de_int32)buf[i], encoding);
-		}
-		if((flags&0x01) && u==32) u=48; // Change space to 0 in dates.
-		ucstring_append_char(s, u);
-	}
-}
-
-static int sauce_is_valid_date_string(const de_byte *buf, de_int64 len)
-{
-	de_int64 i;
-
-	for(i=0; i<len; i++) {
-		if(buf[i]>='0' && buf[i]<='9') continue;
-		// Spaces aren't allowed, but some files use them.
-		if(buf[i]==' ' && (i==4 || i==6)) continue;
-		return 0;
-	}
 	return 1;
 }
 
-int de_detect_SAUCE(deark *c, dbuf *f, struct de_SAUCE_detection_data *sdd)
+// Caller allocates sdd. It does not need to be initialized.
+// flags: 0x1 = Print a debug message if signature is found.
+int de_fmtutil_detect_SAUCE(deark *c, dbuf *f, struct de_SAUCE_detection_data *sdd,
+	unsigned int flags)
 {
-	if(!sdd->detection_attempted) {
-		sdd->detection_attempted = 1;
-		if(f->len<128) return 0;
-		if(dbuf_memcmp(f, f->len-128, "SAUCE00", 7)) return 0;
-		sdd->has_SAUCE = 1;
-		sdd->data_type = dbuf_getbyte(f, f->len-128+94);
-		sdd->file_type = dbuf_getbyte(f, f->len-128+95);
+	de_zeromem(sdd, sizeof(struct de_SAUCE_detection_data));
+	if(f->len<128) return 0;
+	if(dbuf_memcmp(f, f->len-128, "SAUCE00", 7)) return 0;
+	if(flags & 0x1) {
+		de_dbg(c, "SAUCE metadata, signature at %"I64_FMT, f->len-128);
 	}
+	sdd->has_SAUCE = 1;
+	sdd->data_type = dbuf_getbyte(f, f->len-128+94);
+	sdd->file_type = dbuf_getbyte(f, f->len-128+95);
 	return (int)sdd->has_SAUCE;
 }
 
-static const char *get_sauce_datatype_name(de_byte dt)
+void de_fmtutil_handle_SAUCE(deark *c, dbuf *f, struct de_SAUCE_info *si)
 {
-	const char *n = "?";
+	de_module_params mparams;
 
-	switch(dt) {
-	case 0: n="undefined"; break;
-	case 1: n="character"; break;
-	case 2: n="bitmap graphics"; break;
-	case 3: n="vector graphics"; break;
-	case 4: n="audio"; break;
-	case 5: n="BinaryText"; break;
-	case 6: n="XBIN"; break;
-	case 7: n="archive"; break;
-	case 8: n="executable"; break;
-	}
-	return n;
+	de_zeromem(&mparams, sizeof(de_module_params));
+	mparams.out_params.obj1 = (void*)si;
+	de_run_module_by_id_on_slice(c, "sauce", &mparams, f, 0, f->len);
 }
 
-static const char *get_sauce_filetype_name(de_byte dt, unsigned int t)
+struct de_SAUCE_info *de_fmtutil_create_SAUCE(deark *c)
 {
-	const char *n = "?";
-
-	if(dt==5) return "=width/2";
-	switch(t) {
-	case 0x0100: n="ASCII"; break;
-	case 0x0101: n="ANSI"; break;
-	case 0x0102: n="ANSiMation"; break;
-	case 0x0103: n="RIP script"; break;
-	case 0x0104: n="PCBoard"; break;
-	case 0x0105: n="Avatar"; break;
-	case 0x0106: n="HTML"; break;
-	case 0x0108: n="TundraDraw"; break;
-	case 0x0200: n="GIF"; break;
-	case 0x0206: n="BMP"; break;
-	case 0x020a: n="PNG"; break;
-	case 0x020b: n="JPEG"; break;
-	case 0x0600: n="XBIN"; break;
-	case 0x0800: n="executable"; break;
-	}
-	// There are many more SAUCE file types defined, but it's not clear how
-	// many have actually been used.
-
-	return n;
+	return de_malloc(c, sizeof(struct de_SAUCE_info));
 }
 
-// Write a buffer to a file, converting the encoding to UTF-8.
-static void write_buffer_as_utf8(deark *c, const de_byte *buf, de_int64 len,
-	dbuf *outf, int from_encoding)
-{
-	de_int32 u;
-	de_int64 i;
-
-	for(i=0; i<len; i++) {
-		u = de_char_to_unicode(c, (de_int32)buf[i], from_encoding);
-		dbuf_write_uchar_as_utf8(outf, u);
-	}
-}
-
-// This may modify si->num_comments.
-static void sauce_read_comments(deark *c, dbuf *inf, struct de_SAUCE_info *si)
-{
-	de_int64 cmnt_blk_start;
-	de_int64 k;
-	de_int64 cmnt_pos;
-	de_int64 cmnt_len;
-	de_byte buf[64];
-
-	if(si->num_comments<1) goto done;
-	cmnt_blk_start = inf->len - 128 - (5 + si->num_comments*64);
-
-	if(dbuf_memcmp(inf, cmnt_blk_start, "COMNT", 5)) {
-		de_dbg(c, "invalid SAUCE comment, not found at %d", (int)cmnt_blk_start);
-		si->num_comments = 0;
-		goto done;
-	}
-
-	de_dbg(c, "SAUCE comment block at %d", (int)cmnt_blk_start);
-
-	si->comments = de_malloc(c, si->num_comments * sizeof(struct de_char_comment));
-
-	de_dbg_indent(c, 1);
-	for(k=0; k<si->num_comments; k++) {
-		cmnt_pos = cmnt_blk_start+5+k*64;
-		dbuf_read(inf, buf, cmnt_pos, 64);
-		cmnt_len = sauce_space_padded_length(buf, 64);
-
-		si->comments[k].s = ucstring_create(c);
-		sauce_bytes_to_ucstring(c, buf, cmnt_len, si->comments[k].s, DE_ENCODING_CP437_G, 0x02);
-
-		de_dbg(c, "comment at %d, len=%d", (int)cmnt_pos, (int)cmnt_len);
-
-		if(c->extract_level>=2) {
-			dbuf *outf = NULL;
-			outf = dbuf_create_output_file(c, "comment.txt", NULL, DE_CREATEFLAG_IS_AUX);
-			if(c->write_bom && !de_is_ascii(buf, cmnt_len)) {
-				dbuf_write_uchar_as_utf8(outf, 0xfeff);
-			}
-			write_buffer_as_utf8(c, buf, cmnt_len, outf, DE_ENCODING_CP437_G);
-			dbuf_close(outf);
-		}
-		else {
-			de_dbg_indent(c, 1);
-			de_dbg(c, "comment: \"%s\"", ucstring_getpsz(si->comments[k].s));
-			de_dbg_indent(c, -1);
-		}
-	}
-	de_dbg_indent(c, -1);
-
-done:
-	;
-}
-
-// SAUCE = Standard Architecture for Universal Comment Extensions
-// Caller allocates si.
-// This function may allocate si->title, artist, organization, creation_date.
-int de_read_SAUCE(deark *c, dbuf *f, struct de_SAUCE_info *si)
-{
-	unsigned int t;
-	de_byte tmpbuf[40];
-	de_int64 tmpbuf_len;
-	de_int64 pos;
-	const char *name;
-	de_ucstring *tflags_descr = NULL;
-
-	if(!si) return 0;
-	de_memset(si, 0, sizeof(struct de_SAUCE_info));
-
-	pos = f->len - 128;
-	if(dbuf_memcmp(f, pos+0, "SAUCE00", 7)) {
-		return 0;
-	}
-
-	de_dbg(c, "SAUCE metadata at %d", (int)pos);
-	de_dbg_indent(c, 1);
-
-	// Title
-	dbuf_read(f, tmpbuf, pos+7, 35);
-	tmpbuf_len = sauce_space_padded_length(tmpbuf, 35);
-	if(tmpbuf_len>0) {
-		si->title = ucstring_create(c);
-		sauce_bytes_to_ucstring(c, tmpbuf, tmpbuf_len, si->title, DE_ENCODING_CP437_G, 0);
-	}
-
-	// Artist / Creator
-	dbuf_read(f, tmpbuf, pos+42, 20);
-	tmpbuf_len = sauce_space_padded_length(tmpbuf, 20);
-	if(tmpbuf_len>0) {
-		si->artist = ucstring_create(c);
-		sauce_bytes_to_ucstring(c, tmpbuf, tmpbuf_len, si->artist, DE_ENCODING_CP437_G, 0);
-	}
-
-	// Organization
-	dbuf_read(f, tmpbuf, pos+62, 20);
-	tmpbuf_len = sauce_space_padded_length(tmpbuf, 20);
-	if(tmpbuf_len>0) {
-		si->organization = ucstring_create(c);
-		sauce_bytes_to_ucstring(c, tmpbuf, tmpbuf_len, si->organization, DE_ENCODING_CP437_G, 0);
-	}
-
-	// Creation date
-	dbuf_read(f, tmpbuf, pos+82, 8);
-	if(sauce_is_valid_date_string(tmpbuf, 8)) {
-		tmpbuf_len = 8;
-		si->creation_date = ucstring_create(c);
-		sauce_bytes_to_ucstring(c, tmpbuf, tmpbuf_len, si->creation_date, DE_ENCODING_CP437_G, 0x01);
-	}
-
-	si->original_file_size = dbuf_getui32le(f, pos+90);
-	de_dbg(c, "original file size: %d", (int)si->original_file_size);
-
-	si->data_type = dbuf_getbyte(f, pos+94);
-	name = get_sauce_datatype_name(si->data_type);
-	de_dbg(c, "data type: %d (%s)", (int)si->data_type, name);
-
-	si->file_type = dbuf_getbyte(f, pos+95);
-	t = 256*(unsigned int)si->data_type + si->file_type;
-	name = get_sauce_filetype_name(si->data_type, t);
-	de_dbg(c, "file type: %d (%s)", (int)si->file_type, name);
-
-	if(t==0x0100 || t==0x0101 || t==0x0102 || t==0x0104 || t==0x0105 || t==0x0108 || t==0x0600) {
-		si->width_in_chars = dbuf_getui16le(f, pos+96);
-		de_dbg(c, "width in chars: %d", (int)si->width_in_chars);
-	}
-	if(t==0x0100 || t==0x0101 || t==0x0104 || t==0x0105 || t==0x0108 || t==0x0600) {
-		si->number_of_lines = dbuf_getui16le(f, pos+98);
-		de_dbg(c, "number of lines: %d", (int)si->number_of_lines);
-	}
-
-	si->num_comments = (de_int64)dbuf_getbyte(f, pos+104);
-	de_dbg(c, "num comments: %d", (int)si->num_comments);
-	if(si->num_comments>0) {
-		sauce_read_comments(c, f, si);
-	}
-
-	si->tflags = dbuf_getbyte(f, pos+105);
-	if(si->tflags!=0) {
-		tflags_descr = ucstring_create(c);
-		if(t==0x0100 || t==0x0101 || t==0x0102 || si->data_type==5) {
-			// ANSiFlags
-			if(si->tflags&0x01) {
-				ucstring_append_flags_item(tflags_descr, "non-blink mode");
-			}
-			if((si->tflags & 0x06)>>1 == 1) {
-				ucstring_append_flags_item(tflags_descr, "8-pixel font");
-			}
-			else if((si->tflags & 0x06)>>1 == 2) {
-				ucstring_append_flags_item(tflags_descr, "9-pixel font");
-			}
-			if((si->tflags & 0x18)>>3 == 1) {
-				ucstring_append_flags_item(tflags_descr, "non-square pixels");
-			}
-			else if((si->tflags & 0x18)>>3 == 2) {
-				ucstring_append_flags_item(tflags_descr, "square pixels");
-			}
-
-		}
-		de_dbg(c, "tflags: 0x%02x (%s)", (unsigned int)si->tflags,
-			ucstring_getpsz(tflags_descr));
-	}
-
-	if(si->original_file_size==0 || si->original_file_size>f->len-128) {
-		// If this field seems bad, try to correct it.
-		si->original_file_size = f->len-128-(5+si->num_comments*64);
-	}
-
-	de_dbg_indent(c, -1);
-	ucstring_destroy(tflags_descr);
-	return 1;
-}
-
-void de_free_SAUCE(deark *c, struct de_SAUCE_info *si)
+void de_fmtutil_free_SAUCE(deark *c, struct de_SAUCE_info *si)
 {
 	if(!si) return;
 	ucstring_destroy(si->title);
 	ucstring_destroy(si->artist);
 	ucstring_destroy(si->organization);
-	ucstring_destroy(si->creation_date);
 	if(si->comments) {
-		de_int64 k;
+		i64 k;
 		for(k=0; k<si->num_comments; k++) {
 			ucstring_destroy(si->comments[k].s);
 		}
@@ -675,19 +574,19 @@ void de_free_SAUCE(deark *c, struct de_SAUCE_info *si)
 
 // Helper functions for the "boxes" (or "atoms") format used by MP4, JPEG 2000, etc.
 
-double dbuf_fmtutil_read_fixed_16_16(dbuf *f, de_int64 pos)
+double dbuf_fmtutil_read_fixed_16_16(dbuf *f, i64 pos)
 {
-	de_int64 n;
+	i64 n;
 	n = dbuf_geti32be(f, pos);
 	return ((double)n)/65536.0;
 }
 
 static void do_box_sequence(deark *c, struct de_boxesctx *bctx,
-	de_int64 pos1, de_int64 len, de_int64 max_nboxes, int level);
+	i64 pos1, i64 len, i64 max_nboxes, int level);
 
 // Make a printable version of a UUID (or a big-endian GUID).
 // Caller supplies s.
-void de_fmtutil_render_uuid(deark *c, const de_byte *uuid, char *s, size_t s_len)
+void de_fmtutil_render_uuid(deark *c, const u8 *uuid, char *s, size_t s_len)
 {
 	de_snprintf(s, s_len, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
 		uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7],
@@ -695,9 +594,9 @@ void de_fmtutil_render_uuid(deark *c, const de_byte *uuid, char *s, size_t s_len
 }
 
 // Swap some bytes to convert a (little-endian) GUID to a UUID, in-place
-void de_fmtutil_guid_to_uuid(de_byte *id)
+void de_fmtutil_guid_to_uuid(u8 *id)
 {
-	de_byte tmp[16];
+	u8 tmp[16];
 	de_memcpy(tmp, id, 16);
 	id[0] = tmp[3]; id[1] = tmp[2]; id[2] = tmp[1]; id[3] = tmp[0];
 	id[4] = tmp[5]; id[5] = tmp[4];
@@ -706,13 +605,13 @@ void de_fmtutil_guid_to_uuid(de_byte *id)
 
 #define DE_BOX_uuid 0x75756964U
 
-static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len,
-	int level, de_int64 *pbytes_consumed)
+static int do_box(deark *c, struct de_boxesctx *bctx, i64 pos, i64 len,
+	int level, i64 *pbytes_consumed)
 {
-	de_int64 size32, size64;
-	de_int64 header_len; // Not including UUIDs
-	de_int64 payload_len; // Including UUIDs
-	de_int64 total_len;
+	i64 size32, size64;
+	i64 header_len; // Not including UUIDs
+	i64 payload_len; // Including UUIDs
+	i64 total_len;
 	struct de_fourcc box4cc;
 	char uuid_string[50];
 	int ret;
@@ -726,11 +625,11 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 	curbox->parent = parentbox;
 
 	if(len<8) {
-		de_dbg(c, "(ignoring %d extra bytes at %"INT64_FMT")", (int)len, pos);
+		de_dbg(c, "(ignoring %d extra bytes at %"I64_FMT")", (int)len, pos);
 		goto done;
 	}
 
-	size32 = dbuf_getui32be(bctx->f, pos);
+	size32 = dbuf_getu32be(bctx->f, pos);
 	dbuf_read_fourcc(bctx->f, pos+4, &box4cc, 4, 0x0);
 	curbox->boxtype = box4cc.id;
 
@@ -744,7 +643,7 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 	}
 	else if(size32==1) {
 		if(len<16) {
-			de_dbg(c, "(ignoring %d extra bytes at %"INT64_FMT")", (int)len, pos);
+			de_dbg(c, "(ignoring %d extra bytes at %"I64_FMT")", (int)len, pos);
 			goto done;
 		}
 		header_len = 16;
@@ -790,12 +689,12 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 
 		if(curbox->is_uuid) {
 			de_fmtutil_render_uuid(c, curbox->uuid, uuid_string, sizeof(uuid_string));
-			de_dbg(c, "box '%s'{%s}%s at %"INT64_FMT", len=%"INT64_FMT,
+			de_dbg(c, "box '%s'{%s}%s at %"I64_FMT", len=%"I64_FMT,
 				box4cc.id_dbgstr, uuid_string, name_str,
 				pos, total_len);
 		}
 		else {
-			de_dbg(c, "box '%s'%s at %"INT64_FMT", len=%"INT64_FMT", dlen=%"INT64_FMT,
+			de_dbg(c, "box '%s'%s at %"I64_FMT", len=%"I64_FMT", dlen=%"I64_FMT,
 				box4cc.id_dbgstr, name_str, pos,
 				total_len, payload_len);
 		}
@@ -803,8 +702,8 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 
 	if(total_len > len) {
 		de_err(c, "Invalid oversized box, or unexpected end of file "
-			"(box at %"INT64_FMT" ends at %"INT64_FMT", "
-			"parent ends at %"INT64_FMT")",
+			"(box at %"I64_FMT" ends at %"I64_FMT", "
+			"parent ends at %"I64_FMT")",
 			pos, pos+total_len, pos+len);
 		goto done;
 	}
@@ -815,8 +714,8 @@ static int do_box(deark *c, struct de_boxesctx *bctx, de_int64 pos, de_int64 len
 	if(!ret) goto done;
 
 	if(curbox->is_superbox) {
-		de_int64 children_pos, children_len;
-		de_int64 max_nchildren;
+		i64 children_pos, children_len;
+		i64 max_nchildren;
 
 		de_dbg_indent(c, 1);
 		children_pos = pos+header_len + curbox->extra_bytes_before_children;
@@ -837,13 +736,13 @@ done:
 
 // max_nboxes: -1 = no maximum
 static void do_box_sequence(deark *c, struct de_boxesctx *bctx,
-	de_int64 pos1, de_int64 len, de_int64 max_nboxes, int level)
+	i64 pos1, i64 len, i64 max_nboxes, int level)
 {
-	de_int64 pos;
-	de_int64 box_len;
-	de_int64 endpos;
+	i64 pos;
+	i64 box_len;
+	i64 endpos;
 	int ret;
-	de_int64 box_count = 0;
+	i64 box_count = 0;
 
 	if(level >= 32) { // An arbitrary recursion limit.
 		return;
@@ -879,7 +778,7 @@ int de_fmtutil_default_box_handler(deark *c, struct de_boxesctx *bctx)
 		}
 		else if(!de_memcmp(curbox->uuid, "\x2c\x4c\x01\x00\x85\x04\x40\xb9\xa0\x3e\x56\x21\x48\xd6\xdf\xeb", 16)) {
 			de_dbg(c, "Photoshop resources at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
-			de_fmtutil_handle_photoshop_rsrc(c, bctx->f, curbox->payload_pos, curbox->payload_len);
+			de_fmtutil_handle_photoshop_rsrc(c, bctx->f, curbox->payload_pos, curbox->payload_len, 0x0);
 		}
 		else if(!de_memcmp(curbox->uuid, "\x05\x37\xcd\xab\x9d\x0c\x44\x31\xa7\x2a\xfa\x56\x1f\x2a\x11\x3e", 16)) {
 			de_dbg(c, "Exif data at %d, len=%d", (int)curbox->payload_pos, (int)curbox->payload_len);
@@ -896,24 +795,24 @@ void de_fmtutil_read_boxes_format(deark *c, struct de_boxesctx *bctx)
 	do_box_sequence(c, bctx, 0, bctx->f->len, -1, 0);
 }
 
-static de_byte scale_7_to_255(de_byte x)
+static u8 scale_7_to_255(u8 x)
 {
-	return (de_byte)(0.5+(((double)x)*(255.0/7.0)));
+	return (u8)(0.5+(((double)x)*(255.0/7.0)));
 }
 
-static de_byte scale_15_to_255(de_byte x)
+static u8 scale_15_to_255(u8 x)
 {
 	return x*17;
 }
 
-void de_fmtutil_read_atari_palette(deark *c, dbuf *f, de_int64 pos,
-	de_uint32 *dstpal, de_int64 ncolors_to_read, de_int64 ncolors_used, unsigned int flags)
+void de_fmtutil_read_atari_palette(deark *c, dbuf *f, i64 pos,
+	u32 *dstpal, i64 ncolors_to_read, i64 ncolors_used, unsigned int flags)
 {
-	de_int64 i;
+	i64 i;
 	unsigned int n;
 	int pal_bits = 0; // 9, 12, or 15. 0 = not yet determined
-	de_byte cr, cg, cb;
-	de_byte cr1, cg1, cb1;
+	u8 cr, cg, cb;
+	u8 cr1, cg1, cb1;
 	char cbuf[32];
 	char tmps[64];
 	const char *s;
@@ -938,7 +837,7 @@ void de_fmtutil_read_atari_palette(deark *c, dbuf *f, de_int64 pos,
 		int nibble_3_used = 0;
 
 		for(i=0; i<ncolors_to_read; i++) {
-			n = (unsigned int)dbuf_getui16be(f, pos + i*2);
+			n = (unsigned int)dbuf_getu16be(f, pos + i*2);
 			if(n&0xf000) {
 				nibble_3_used = 1;
 			}
@@ -964,16 +863,16 @@ void de_fmtutil_read_atari_palette(deark *c, dbuf *f, de_int64 pos,
 	}
 
 	for(i=0; i<ncolors_to_read; i++) {
-		n = (unsigned int)dbuf_getui16be(f, pos + 2*i);
+		n = (unsigned int)dbuf_getu16be(f, pos + 2*i);
 
 		if(pal_bits==15) {
-			cr1 = (de_byte)((n>>6)&0x1c);
+			cr1 = (u8)((n>>6)&0x1c);
 			if(n&0x0800) cr1+=2;
 			if(n&0x8000) cr1++;
-			cg1 = (de_byte)((n>>2)&0x1c);
+			cg1 = (u8)((n>>2)&0x1c);
 			if(n&0x0080) cg1+=2;
 			if(n&0x4000) cg1++;
-			cb1 = (de_byte)((n<<2)&0x1c);
+			cb1 = (u8)((n<<2)&0x1c);
 			if(n&0x0008) cb1+=2;
 			if(n&0x2000) cb1++;
 			cr = de_scale_n_to_255(31, cr1);
@@ -983,11 +882,11 @@ void de_fmtutil_read_atari_palette(deark *c, dbuf *f, de_int64 pos,
 				(int)cr1, (int)cg1, (int)cb1);
 		}
 		else if(pal_bits==12) {
-			cr1 = (de_byte)((n>>7)&0x0e);
+			cr1 = (u8)((n>>7)&0x0e);
 			if(n&0x800) cr1++;
-			cg1 = (de_byte)((n>>3)&0x0e);
+			cg1 = (u8)((n>>3)&0x0e);
 			if(n&0x080) cg1++;
-			cb1 = (de_byte)((n<<1)&0x0e);
+			cb1 = (u8)((n<<1)&0x0e);
 			if(n&0x008) cb1++;
 			cr = scale_15_to_255(cr1);
 			cg = scale_15_to_255(cg1);
@@ -996,9 +895,9 @@ void de_fmtutil_read_atari_palette(deark *c, dbuf *f, de_int64 pos,
 				(int)cr1, (int)cg1, (int)cb1);
 		}
 		else {
-			cr1 = (de_byte)((n>>8)&0x07);
-			cg1 = (de_byte)((n>>4)&0x07);
-			cb1 = (de_byte)(n&0x07);
+			cr1 = (u8)((n>>8)&0x07);
+			cg1 = (u8)((n>>4)&0x07);
+			cb1 = (u8)(n&0x07);
 			cr = scale_7_to_255(cr1);
 			cg = scale_7_to_255(cg1);
 			cb = scale_7_to_255(cb1);
@@ -1020,11 +919,11 @@ void de_fmtutil_read_atari_palette(deark *c, dbuf *f, de_int64 pos,
  *  by Steve Belczyk; placed in the public domain December, 1990.
  *  [Adapted for Deark.]
  */
-static unsigned int spectrum512_FindIndex(de_int64 x, unsigned int c)
+static unsigned int spectrum512_FindIndex(i64 x, unsigned int c)
 {
-	int x1;
+	i64 x1;
 
-	x1 = 10 * c;
+	x1 = 10 * (i64)c;
 
 	if (c & 1)  /* If c is odd */
 		x1 = x1 - 5;
@@ -1041,20 +940,20 @@ static unsigned int spectrum512_FindIndex(de_int64 x, unsigned int c)
 
 static int decode_atari_image_paletted(deark *c, struct atari_img_decode_data *adata)
 {
-	de_int64 i, j;
-	de_int64 plane;
-	de_int64 rowspan;
-	de_byte b;
-	de_uint32 v;
-	de_int64 planespan;
-	de_int64 ncolors;
+	i64 i, j;
+	i64 plane;
+	i64 rowspan;
+	u8 b;
+	u32 v;
+	i64 planespan;
+	i64 ncolors;
 
 	planespan = 2*((adata->w+15)/16);
 	rowspan = planespan*adata->bpp;
 	if(adata->ncolors>0)
 		ncolors = adata->ncolors;
 	else
-		ncolors = ((de_int64)1)<<adata->bpp;
+		ncolors = ((i64)1)<<adata->bpp;
 
 	for(j=0; j<adata->h; j++) {
 		for(i=0; i<adata->w; i++) {
@@ -1104,15 +1003,15 @@ static int decode_atari_image_paletted(deark *c, struct atari_img_decode_data *a
 
 static int decode_atari_image_16(deark *c, struct atari_img_decode_data *adata)
 {
-	de_int64 i, j;
-	de_int64 rowspan;
-	de_uint32 v;
+	i64 i, j;
+	i64 rowspan;
+	u32 v;
 
 	rowspan = adata->w * 2;
 
 	for(j=0; j<adata->h; j++) {
 		for(i=0; i<adata->w; i++) {
-			v = (de_uint32)dbuf_getui16be(adata->unc_pixels, j*rowspan + 2*i);
+			v = (u32)dbuf_getu16be(adata->unc_pixels, j*rowspan + 2*i);
 			v = de_rgb565_to_888(v);
 			de_bitmap_setpixel_rgb(adata->img, i, j,v);
 		}
@@ -1133,25 +1032,32 @@ int de_fmtutil_atari_decode_image(deark *c, struct atari_img_decode_data *adata)
 	return 0;
 }
 
-void de_fmtutil_atari_set_standard_density(deark *c, struct atari_img_decode_data *adata)
+void de_fmtutil_atari_set_standard_density(deark *c, struct atari_img_decode_data *adata,
+	de_finfo *fi)
 {
 	switch(adata->bpp) {
 	case 4:
-		adata->img->density_code = DE_DENSITY_UNK_UNITS;
-		adata->img->xdens = 240.0;
-		adata->img->ydens = 200.0;
+		fi->density.code = DE_DENSITY_UNK_UNITS;
+		fi->density.xdens = 240.0;
+		fi->density.ydens = 200.0;
 		break;
 	case 2:
-		adata->img->density_code = DE_DENSITY_UNK_UNITS;
-		adata->img->xdens = 480.0;
-		adata->img->ydens = 200.0;
+		fi->density.code = DE_DENSITY_UNK_UNITS;
+		fi->density.xdens = 480.0;
+		fi->density.ydens = 200.0;
 		break;
 	case 1:
-		adata->img->density_code = DE_DENSITY_UNK_UNITS;
-		adata->img->xdens = 480.0;
-		adata->img->ydens = 400.0;
+		fi->density.code = DE_DENSITY_UNK_UNITS;
+		fi->density.xdens = 480.0;
+		fi->density.ydens = 400.0;
 		break;
 	}
+}
+
+void de_fmtutil_atari_help_palbits(deark *c)
+{
+	de_msg(c, "-opt atari:palbits=<9|12|15> : Numer of significant bits "
+		"per palette color");
 }
 
 #define CODE__c_   0x28632920U // "(c) "
@@ -1161,7 +1067,7 @@ void de_fmtutil_atari_set_standard_density(deark *c, struct atari_img_decode_dat
 #define CODE_TEXT  0x54455854U
 #define CODE_RIFF  0x52494646U
 
-static void do_iff_text_chunk(deark *c, dbuf *f, de_int64 dpos, de_int64 dlen,
+static void do_iff_text_chunk(deark *c, dbuf *f, i64 dpos, i64 dlen,
 	const char *name)
 {
 	de_ucstring *s = NULL;
@@ -1175,9 +1081,9 @@ static void do_iff_text_chunk(deark *c, dbuf *f, de_int64 dpos, de_int64 dlen,
 	ucstring_destroy(s);
 }
 
-static void do_iff_anno(deark *c, dbuf *f, de_int64 pos, de_int64 len)
+static void do_iff_anno(deark *c, dbuf *f, i64 pos, i64 len)
 {
-	de_int64 foundpos;
+	i64 foundpos;
 
 	if(len<1) return;
 
@@ -1222,8 +1128,8 @@ void de_fmtutil_default_iff_chunk_identify(deark *c, struct de_iffctx *ictx)
 // specification.
 // They might be defined in the 8SVX specification. They seem to have
 // become unofficial standard chunks.
-static void de_fmtutil_handle_standard_iff_chunk(deark *c, dbuf *f, de_int64 dpos, de_int64 dlen,
-	de_uint32 chunktype)
+static void de_fmtutil_handle_standard_iff_chunk(deark *c, dbuf *f, i64 dpos, i64 dlen,
+	u32 chunktype)
 {
 	switch(chunktype) {
 		// Note that chunks appearing here should also be listed below,
@@ -1248,7 +1154,7 @@ static void de_fmtutil_handle_standard_iff_chunk(deark *c, dbuf *f, de_int64 dpo
 
 // ictx can be NULL
 int de_fmtutil_is_standard_iff_chunk(deark *c, struct de_iffctx *ictx,
-	de_uint32 ct)
+	u32 ct)
 {
 	switch(ct) {
 	case CODE__c_:
@@ -1272,33 +1178,33 @@ static int de_fmtutil_default_iff_chunk_handler(deark *c, struct de_iffctx *ictx
 
 static void fourcc_clear(struct de_fourcc *fourcc)
 {
-	de_memset(fourcc, 0, sizeof(struct de_fourcc));
+	de_zeromem(fourcc, sizeof(struct de_fourcc));
 }
 
 static int do_iff_chunk_sequence(deark *c, struct de_iffctx *ictx,
-	de_int64 pos1, de_int64 len, int level);
+	i64 pos1, i64 len, int level);
 
 // Returns 0 if we can't continue
-static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64 bytes_avail,
-	int level, de_int64 *pbytes_consumed)
+static int do_iff_chunk(deark *c, struct de_iffctx *ictx, i64 pos, i64 bytes_avail,
+	int level, i64 *pbytes_consumed)
 {
 	int ret;
-	de_int64 chunk_dlen_raw;
-	de_int64 chunk_dlen_padded;
-	de_int64 data_bytes_avail;
-	de_int64 hdrsize;
+	i64 chunk_dlen_raw;
+	i64 chunk_dlen_padded;
+	i64 data_bytes_avail;
+	i64 hdrsize;
 	struct de_iffchunkctx chunkctx;
 	int saved_indent_level;
 	int retval = 0;
 	char name_str[80];
 
-	de_memset(&chunkctx, 0, sizeof(struct de_iffchunkctx));
+	de_zeromem(&chunkctx, sizeof(struct de_iffchunkctx));
 
 	de_dbg_indent_save(c, &saved_indent_level);
 
 	hdrsize = 4+ictx->sizeof_len;
 	if(bytes_avail<hdrsize) {
-		de_warn(c, "Ignoring %"INT64_FMT" bytes at %"INT64_FMT"; too small "
+		de_warn(c, "Ignoring %"I64_FMT" bytes at %"I64_FMT"; too small "
 			"to be a chunk", bytes_avail, pos);
 		goto done;
 	}
@@ -1307,16 +1213,16 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 	dbuf_read_fourcc(ictx->f, pos, &chunkctx.chunk4cc, 4,
 		ictx->reversed_4cc ? DE_4CCFLAG_REVERSED : 0x0);
 	if(chunkctx.chunk4cc.id==0 && level==0) {
-		de_warn(c, "Chunk ID not found at %"INT64_FMT"; assuming the data ends "
+		de_warn(c, "Chunk ID not found at %"I64_FMT"; assuming the data ends "
 			"here", pos);
 		goto done;
 	}
 
 	if(ictx->sizeof_len==2) {
-		chunk_dlen_raw = dbuf_getui16x(ictx->f, pos+4, ictx->is_le);
+		chunk_dlen_raw = dbuf_getu16x(ictx->f, pos+4, ictx->is_le);
 	}
 	else {
-		chunk_dlen_raw = dbuf_getui32x(ictx->f, pos+4, ictx->is_le);
+		chunk_dlen_raw = dbuf_getu32x(ictx->f, pos+4, ictx->is_le);
 	}
 	chunkctx.dlen = chunk_dlen_raw;
 	chunkctx.dpos = pos+hdrsize;
@@ -1337,7 +1243,7 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 		name_str[0] = '\0';
 	}
 
-	de_dbg(c, "chunk '%s'%s at %"INT64_FMT", dpos=%"INT64_FMT", dlen=%"INT64_FMT,
+	de_dbg(c, "chunk '%s'%s at %"I64_FMT", dpos=%"I64_FMT", dlen=%"I64_FMT,
 		chunkctx.chunk4cc.id_dbgstr, name_str, pos,
 		chunkctx.dpos, chunkctx.dlen);
 	de_dbg_indent(c, 1);
@@ -1355,13 +1261,13 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 
 		if(should_warn) {
 			de_warn(c, "Invalid oversized chunk, or unexpected end of file "
-				"(chunk at %d ends at %" INT64_FMT ", "
-				"parent ends at %" INT64_FMT ")",
+				"(chunk at %d ends at %" I64_FMT ", "
+				"parent ends at %" I64_FMT ")",
 				(int)pos, chunkctx.dlen+chunkctx.dpos, pos+bytes_avail);
 		}
 
 		chunkctx.dlen = data_bytes_avail; // Try to continue
-		de_dbg(c, "adjusting chunk data len to %"INT64_FMT, chunkctx.dlen);
+		de_dbg(c, "adjusting chunk data len to %"I64_FMT, chunkctx.dlen);
 	}
 
 	chunk_dlen_padded = de_pad_to_n(chunkctx.dlen, ictx->alignment);
@@ -1384,7 +1290,7 @@ static int do_iff_chunk(deark *c, struct de_iffctx *ictx, de_int64 pos, de_int64
 	}
 
 	if(ictx->is_std_container || ictx->is_raw_container) {
-		de_int64 contents_dpos, contents_dlen;
+		i64 contents_dpos, contents_dlen;
 
 		ictx->chunkctx = NULL;
 		ictx->curr_container_fmt4cc = chunkctx.chunk4cc;
@@ -1448,11 +1354,11 @@ done:
 }
 
 static int do_iff_chunk_sequence(deark *c, struct de_iffctx *ictx,
-	de_int64 pos1, de_int64 len, int level)
+	i64 pos1, i64 len, int level)
 {
-	de_int64 pos;
-	de_int64 endpos;
-	de_int64 chunk_len;
+	i64 pos;
+	i64 endpos;
+	i64 chunk_len;
 	struct de_fourcc saved_container_fmt4cc;
 	struct de_fourcc saved_container_contentstype4cc;
 	int ret;
@@ -1482,7 +1388,7 @@ static int do_iff_chunk_sequence(deark *c, struct de_iffctx *ictx,
 }
 
 void de_fmtutil_read_iff_format(deark *c, struct de_iffctx *ictx,
-	de_int64 pos, de_int64 len)
+	i64 pos, i64 len)
 {
 	if(!ictx->f || !ictx->handle_chunk_fn) return; // Internal error
 
@@ -1501,7 +1407,7 @@ void de_fmtutil_read_iff_format(deark *c, struct de_iffctx *ictx,
 	do_iff_chunk_sequence(c, ictx, pos, len, 0);
 }
 
-const char *de_fmtutil_tiff_orientation_name(de_int64 n)
+const char *de_fmtutil_tiff_orientation_name(i64 n)
 {
 	static const char *names[9] = {
 		"?", "top-left", "top-right", "bottom-right", "bottom-left",
@@ -1511,9 +1417,9 @@ const char *de_fmtutil_tiff_orientation_name(de_int64 n)
 	return names[0];
 }
 
-const char *de_fmtutil_get_windows_charset_name(de_byte cs)
+const char *de_fmtutil_get_windows_charset_name(u8 cs)
 {
-	struct csname_struct { de_byte id; const char *name; };
+	struct csname_struct { u8 id; const char *name; };
 	static const struct csname_struct csname_arr[] = {
 		{0x00, "ANSI"},
 		{0x01, "default"},
@@ -1565,20 +1471,20 @@ const char *de_fmtutil_get_windows_cb_data_type_name(unsigned int ty)
 
 // Search for the ZIP "end of central directory" object.
 // Also useful for detecting hybrid ZIP files, such as self-extracting EXE.
-int de_fmtutil_find_zip_eocd(deark *c, dbuf *f, de_int64 *foundpos)
+int de_fmtutil_find_zip_eocd(deark *c, dbuf *f, i64 *foundpos)
 {
-	de_uint32 sig;
-	de_byte *buf = NULL;
+	u32 sig;
+	u8 *buf = NULL;
 	int retval = 0;
-	de_int64 buf_offset;
-	de_int64 buf_size;
-	de_int64 i;
+	i64 buf_offset;
+	i64 buf_size;
+	i64 i;
 
 	*foundpos = 0;
 	if(f->len < 22) goto done;
 
 	// End-of-central-dir record usually starts 22 bytes from EOF. Try that first.
-	sig = (de_uint32)dbuf_getui32le(f, f->len - 22);
+	sig = (u32)dbuf_getu32le(f, f->len - 22);
 	if(sig == 0x06054b50U) {
 		*foundpos = f->len - 22;
 		retval = 1;
@@ -1608,4 +1514,104 @@ int de_fmtutil_find_zip_eocd(deark *c, dbuf *f, de_int64 *foundpos)
 done:
 	de_free(c, buf);
 	return retval;
+}
+
+// Quick & dirty encoder that can wrap some formats in a TIFF container.
+static void wrap_in_tiff(deark *c, dbuf *f, i64 dpos, i64 dlen,
+	const char *swstring, unsigned int tag, const char *ext, unsigned int createflags)
+{
+	dbuf *outf = NULL;
+	i64 ifdoffs;
+	i64 sw_len, sw_len_padded;
+	i64 data_len_padded;
+
+	sw_len = 1+(i64)de_strlen(swstring);
+	if(sw_len<=4) return;
+	sw_len_padded = de_pad_to_2(sw_len);
+
+	if(dlen>4) {
+		data_len_padded = de_pad_to_2(dlen);
+	}
+	else {
+		data_len_padded = 0;
+	}
+
+	outf = dbuf_create_output_file(c, ext, NULL, 0);
+	dbuf_write(outf, (const u8*)"\x4d\x4d\x00\x2a", 4);
+	ifdoffs = 8 + sw_len_padded + data_len_padded;
+	dbuf_writeu32be(outf, ifdoffs);
+	dbuf_write(outf, (const u8*)swstring, sw_len);
+	if(sw_len%2) dbuf_writebyte(outf, 0);
+	if(dlen>4) {
+		dbuf_copy(f, dpos, dlen, outf);
+		if(dlen%2) dbuf_writebyte(outf, 0);
+	}
+
+	dbuf_writeu16be(outf, 2); // number of dir entries;
+
+	dbuf_writeu16be(outf, 305); // Software tag
+	dbuf_writeu16be(outf, 2); // type=ASCII
+	dbuf_writeu32be(outf, sw_len);
+	dbuf_writeu32be(outf, 8); // offset
+
+	dbuf_writeu16be(outf, (i64)tag);
+	dbuf_writeu16be(outf, 1);
+	dbuf_writeu32be(outf, dlen);
+	if(dlen>4) {
+		dbuf_writeu32be(outf, 8+sw_len_padded);
+	}
+	else {
+		dbuf_copy(f, dpos, dlen, outf);
+		dbuf_write_zeroes(outf, 4-dlen);
+	}
+
+	dbuf_writeu32be(outf, 0); // end of IFD
+	dbuf_close(outf);
+}
+
+// Find ID3 tag data at the beginning and end of file, process it, and return
+// information about its location.
+// Caller allocates id3i.
+void de_fmtutil_handle_id3(deark *c, dbuf *f, struct de_id3info *id3i,
+	unsigned int flags)
+{
+	i64 id3v1pos = 0;
+	int look_for_id3v1;
+
+	de_zeromem(id3i, sizeof(struct de_id3info));
+	id3i->main_start = 0;
+	id3i->main_end = f->len;
+
+	id3i->has_id3v2 = !dbuf_memcmp(f, 0, "ID3", 3);
+	if(id3i->has_id3v2) {
+		de_module_params id3v2mparams;
+
+		de_dbg(c, "ID3v2 data at %d", 0);
+		de_dbg_indent(c, 1);
+		de_zeromem(&id3v2mparams, sizeof(de_module_params));
+		id3v2mparams.in_params.codes = "I";
+		de_run_module_by_id_on_slice(c, "id3", &id3v2mparams, f, 0, f->len);
+		de_dbg_indent(c, -1);
+		id3i->main_start += id3v2mparams.out_params.int64_1;
+	}
+
+	look_for_id3v1 = 1;
+	if(look_for_id3v1) {
+		id3v1pos = f->len-128;
+		if(!dbuf_memcmp(f, id3v1pos, "TAG", 3)) {
+			id3i->has_id3v1 = 1;
+		}
+	}
+
+	if(id3i->has_id3v1) {
+		de_module_params id3v1mparams;
+
+		de_dbg(c, "ID3v1 data at %"I64_FMT, id3v1pos);
+		de_dbg_indent(c, 1);
+		de_zeromem(&id3v1mparams, sizeof(de_module_params));
+		id3v1mparams.in_params.codes = "1";
+		de_run_module_by_id_on_slice(c, "id3", &id3v1mparams, f, id3v1pos, 128);
+		de_dbg_indent(c, -1);
+		id3i->main_end = id3v1pos;
+	}
 }

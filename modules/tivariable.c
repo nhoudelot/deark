@@ -7,7 +7,7 @@
 DE_DECLARE_MODULE(de_module_tivariable);
 
 typedef struct localctx_struct {
-	de_int64 w, h;
+	i64 w, h;
 	int fmt;
 } lctx;
 
@@ -51,7 +51,7 @@ static const struct ti_ver_info ti_ver_info_arr[] = {
 
 static int identify_internal(deark *c)
 {
-	de_byte buf[8];
+	u8 buf[8];
 	int i;
 
 	de_read(buf, 0, 8);
@@ -66,9 +66,9 @@ static int identify_internal(deark *c)
 	return DE_FMT_UNKNOWN_TI;
 }
 
-static int do_bitmap(deark *c, lctx *d, de_int64 pos)
+static int do_bitmap(deark *c, lctx *d, i64 pos)
 {
-	de_int64 rowspan;
+	i64 rowspan;
 	int retval = 0;
 
 	de_dbg_dimensions(c, d->w, d->h);
@@ -86,15 +86,15 @@ done:
 	return retval;
 }
 
-static int do_bitmap_8ca(deark *c, lctx *d, de_int64 pos)
+static int do_bitmap_8ca(deark *c, lctx *d, i64 pos)
 {
 	de_bitmap *img = NULL;
-	de_int64 i;
-	de_int64 j;
-	de_int64 rowspan;
+	i64 i;
+	i64 j;
+	i64 rowspan;
 	int retval = 0;
-	de_byte b0, b1;
-	de_uint32 clr;
+	u8 b0, b1;
+	u32 clr;
 
 	de_dbg_dimensions(c, d->w, d->h);
 
@@ -113,7 +113,7 @@ static int do_bitmap_8ca(deark *c, lctx *d, de_int64 pos)
 		for(i=0; i<d->w; i++) {
 			b0 = de_getbyte(pos + j*rowspan + i*2);
 			b1 = de_getbyte(pos + j*rowspan + i*2 + 1);
-			clr = (((de_uint32)b1)<<8) | b0;
+			clr = (((u32)b1)<<8) | b0;
 			clr = de_rgb565_to_888(clr);
 			de_bitmap_setpixel_rgb(img, i, j, clr);
 		}
@@ -127,14 +127,14 @@ done:
 	return retval;
 }
 
-static int do_bitmap_8ci(deark *c, lctx *d, de_int64 pos)
+static int do_bitmap_8ci(deark *c, lctx *d, i64 pos)
 {
 	de_bitmap *img = NULL;
-	de_int64 i;
-	de_int64 j;
-	de_int64 rowspan;
+	i64 i;
+	i64 j;
+	i64 rowspan;
 	int retval = 0;
-	de_byte b0;
+	u8 b0;
 
 	de_dbg_dimensions(c, d->w, d->h);
 
@@ -169,12 +169,12 @@ done:
 	return retval;
 }
 
-static int do_ti83_picture_var(deark *c, lctx *d, de_int64 pos)
+static int do_ti83_picture_var(deark *c, lctx *d, i64 pos)
 {
-	de_int64 picture_size;
+	i64 picture_size;
 
 	de_dbg(c, "picture at %d", (int)pos);
-	picture_size = de_getui16le(pos);
+	picture_size = de_getu16le(pos);
 	de_dbg(c, "picture size: %d", (int)picture_size);
 
 	if(picture_size==21945) {
@@ -188,7 +188,7 @@ static int do_ti83_picture_var(deark *c, lctx *d, de_int64 pos)
 	return do_bitmap(c, d, pos+2);
 }
 
-static int do_ti83c_picture_var(deark *c, lctx *d, de_int64 pos)
+static int do_ti83c_picture_var(deark *c, lctx *d, i64 pos)
 {
 	// Try to support a type of color image (.8ca).
 	// This code may not be correct.
@@ -198,39 +198,39 @@ static int do_ti83c_picture_var(deark *c, lctx *d, de_int64 pos)
 	return do_bitmap_8ca(c, d, pos+3);
 }
 
-static int do_ti85_picture_var(deark *c, lctx *d, de_int64 pos)
+static int do_ti85_picture_var(deark *c, lctx *d, i64 pos)
 {
-	de_int64 x;
+	i64 x;
 
 	de_dbg(c, "picture at %d", (int)pos);
-	x = de_getui16le(pos);
+	x = de_getu16le(pos);
 	de_dbg(c, "picture size: %d", (int)x);
 	d->w = 128;
 	d->h = 63;
 	return do_bitmap(c, d, pos+2);
 }
 
-static int do_ti92_picture_var(deark *c, lctx *d, de_int64 pos)
+static int do_ti92_picture_var(deark *c, lctx *d, i64 pos)
 {
-	de_int64 x;
+	i64 x;
 
 	de_dbg(c, "picture at %d", (int)pos);
 	pos+=4;
 
-	x = de_getui16be(pos);
+	x = de_getu16be(pos);
 	de_dbg(c, "picture size: %d", (int)x);
-	d->h = de_getui16be(pos+2);
-	d->w = de_getui16be(pos+4);
+	d->h = de_getu16be(pos+2);
+	d->w = de_getu16be(pos+4);
 	return do_bitmap(c, d, pos+6);
 }
 
-static void do_ti92_var_table_entry(deark *c, lctx *d, de_int64 pos)
+static void do_ti92_var_table_entry(deark *c, lctx *d, i64 pos)
 {
-	de_int64 data_offset;
-	de_byte type_id;
+	i64 data_offset;
+	u8 type_id;
 
 	de_dbg(c, "var table entry at %d", (int)pos);
-	data_offset = de_getui32le(pos);
+	data_offset = de_getu32le(pos);
 
 	type_id = de_getbyte(pos+12);
 	de_dbg(c, "var type: 0x%02x", (unsigned int)type_id);
@@ -244,17 +244,17 @@ static void do_ti92_var_table_entry(deark *c, lctx *d, de_int64 pos)
 
 static void do_ti83(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_int64 data_section_size;
-	de_int64 data_section_end;
-	de_int64 var_data_size;
-	de_byte type_id;
+	i64 pos;
+	i64 data_section_size;
+	i64 data_section_end;
+	i64 var_data_size;
+	u8 type_id;
 
 	// 0-7: signature
 	// 8-10: 0x1a 0x0a 0x00
 	// 11-52: comment
 
-	data_section_size = de_getui16le(53);
+	data_section_size = de_getu16le(53);
 	de_dbg(c, "data section size: %d", (int)data_section_size);
 	data_section_end = 55+data_section_size;
 	if(data_section_end > c->infile->len) {
@@ -265,7 +265,7 @@ static void do_ti83(deark *c, lctx *d)
 	// Read the variables
 	pos = 55;
 	while(pos < data_section_end) {
-		var_data_size = de_getui16le(pos+2);
+		var_data_size = de_getu16le(pos+2);
 		type_id = de_getbyte(pos+4);
 		pos += 15;
 		if(d->fmt==DE_FMT_TI83F)
@@ -289,21 +289,21 @@ done:
 
 static void do_ti85(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_int64 data_section_size;
-	de_int64 data_section_end;
-	de_int64 var_data_size;
-	de_int64 name_len_reported;
-	de_int64 name_field_len;
-	de_byte type_id;
-	de_int64 x1, x2;
+	i64 pos;
+	i64 data_section_size;
+	i64 data_section_end;
+	i64 var_data_size;
+	i64 name_len_reported;
+	i64 name_field_len;
+	u8 type_id;
+	i64 x1, x2;
 	int warned = 0;
 
 	// 0-7: signature
 	// 8-10: 0x1a 0x0a 0x00
 	// 11-52: comment
 
-	data_section_size = de_getui16le(53);
+	data_section_size = de_getu16le(53);
 	de_dbg(c, "data section size: %d", (int)data_section_size);
 	data_section_end = 55+data_section_size;
 	if(data_section_end > c->infile->len) {
@@ -319,9 +319,9 @@ static void do_ti85(deark *c, lctx *d)
 			break;
 		}
 
-		var_data_size = de_getui16le(pos+2);
+		var_data_size = de_getu16le(pos+2);
 		type_id = de_getbyte(pos+4);
-		name_len_reported = (de_int64)de_getbyte(pos+5);
+		name_len_reported = (i64)de_getbyte(pos+5);
 		de_dbg(c, "reported var name length: %d", (int)name_len_reported);
 		if(d->fmt==DE_FMT_TI86) {
 			name_field_len = 8; // Initial default
@@ -333,8 +333,8 @@ static void do_ti85(deark *c, lctx *d)
 				// same value. Although this is bad design, we can exploit it to help
 				// guess the correct length of the variable name field.
 
-				x1 = de_getui16le(pos+14);
-				x2 = de_getui16le(pos+6+name_len_reported);
+				x1 = de_getu16le(pos+14);
+				x2 = de_getu16le(pos+6+name_len_reported);
 				if(x1!=var_data_size && x2==var_data_size) {
 					if(!warned) {
 						de_warn(c, "This TI86 file appears to use TI85 variable name format "
@@ -352,7 +352,7 @@ static void do_ti85(deark *c, lctx *d)
 
 		pos += 6+name_field_len;
 
-		x1 = de_getui16le(pos);
+		x1 = de_getu16le(pos);
 		if(x1!=var_data_size) {
 			de_warn(c, "Inconsistent variable-data-length fields. "
 				"This file may not be processed correctly.");
@@ -375,17 +375,17 @@ done:
 
 static void do_ti92(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_int64 numvars;
-	de_int64 x;
-	de_int64 i;
+	i64 pos;
+	i64 numvars;
+	i64 x;
+	i64 i;
 
 	// 0-7: signature
 	// 8-9: 0x01 0x00
 	// 10-17: default folder name
 	// 18-57: comment
 
-	numvars = de_getui16le(58);
+	numvars = de_getu16le(58);
 	de_dbg(c, "number of variables/folders: %d", (int)numvars);
 	if(!de_good_image_count(c, numvars)) goto done;
 
@@ -396,7 +396,7 @@ static void do_ti92(deark *c, lctx *d)
 	}
 
 	// Data section
-	x = de_getui32le(pos);
+	x = de_getu32le(pos);
 	de_dbg(c, "reported file size: %d", (int)x);
 
 done:

@@ -15,14 +15,21 @@ DE_DECLARE_MODULE(de_module_macpaint);
 
 typedef struct localctx_struct {
 	int has_macbinary_header;
+	int df_known;
+	i64 expected_dfpos;
+	i64 expected_dflen;
+	de_ucstring *filename;
+	struct de_timestamp mod_time_from_macbinary;
 } lctx;
 
-static void do_read_bitmap(deark *c, lctx *d, de_int64 pos)
+static void do_read_bitmap(deark *c, lctx *d, i64 pos)
 {
-	de_int64 ver_num;
+	i64 ver_num;
+	i64 cmpr_bytes_consumed = 0;
 	dbuf *unc_pixels = NULL;
+	de_finfo *fi = NULL;
 
-	ver_num = de_getui32be(pos);
+	ver_num = de_getu32be(pos);
 	de_dbg(c, "version number: %u", (unsigned int)ver_num);
 	if(ver_num!=0 && ver_num!=2 && ver_num!=3) {
 		de_warn(c, "Unrecognized version number: %u", (unsigned int)ver_num);
@@ -32,18 +39,40 @@ static void do_read_bitmap(deark *c, lctx *d, de_int64 pos)
 
 	unc_pixels = dbuf_create_membuf(c, MACPAINT_IMAGE_BYTES, 1);
 
-	de_fmtutil_uncompress_packbits(c->infile, pos, c->infile->len - pos, unc_pixels, NULL);
+	de_fmtutil_uncompress_packbits(c->infile, pos, c->infile->len - pos,
+		unc_pixels, &cmpr_bytes_consumed);
+
+	de_dbg(c, "decompressed %d to %d bytes", (int)cmpr_bytes_consumed,
+		(int)unc_pixels->len);
+
+	if(d->df_known) {
+		if(pos+cmpr_bytes_consumed > d->expected_dfpos+d->expected_dflen) {
+			de_warn(c, "Image (ends at %"I64_FMT") goes beyond end of "
+				"MacBinary data fork (ends at %"I64_FMT")",
+				pos+cmpr_bytes_consumed, d->expected_dfpos+d->expected_dflen);
+		}
+	}
 
 	if(unc_pixels->len < MACPAINT_IMAGE_BYTES) {
 		de_warn(c, "Image decompressed to %d bytes, expected %d.",
 			(int)unc_pixels->len, (int)MACPAINT_IMAGE_BYTES);
 	}
 
+	fi = de_finfo_create(c);
+	if(d->filename && c->filenames_from_file) {
+		de_finfo_set_name_from_ucstring(c, fi, d->filename, 0);
+	}
+
+	if(d->mod_time_from_macbinary.is_valid) {
+		fi->image_mod_time = d->mod_time_from_macbinary;
+	}
+
 	de_convert_and_write_image_bilevel(unc_pixels, 0,
 		MACPAINT_WIDTH, MACPAINT_HEIGHT, MACPAINT_WIDTH/8,
-		DE_CVTF_WHITEISZERO, NULL, 0);
+		DE_CVTF_WHITEISZERO, fi, 0);
 
 	dbuf_close(unc_pixels);
+	de_finfo_destroy(c, fi);
 }
 
 // A function to help determine if the file has a MacBinary header.
@@ -54,13 +83,13 @@ static void do_read_bitmap(deark *c, lctx *d, de_int64 pos)
 // figure this out, but hopefully it's pretty reliable.
 // Returns an integer (0, 1, 2) reflecting the likelihood that this is the
 // correct position.
-static int valid_file_at(deark *c, lctx *d, de_int64 pos1)
+static int valid_file_at(deark *c, lctx *d, i64 pos1)
 {
-	de_byte b;
-	de_int64 x;
-	de_int64 xpos, ypos;
-	de_int64 pos;
-	de_int64 imgstart;
+	u8 b;
+	i64 x;
+	i64 xpos, ypos;
+	i64 pos;
+	i64 imgstart;
 
 	imgstart = pos1+512;
 
@@ -85,7 +114,7 @@ static int valid_file_at(deark *c, lctx *d, de_int64 pos1)
 		pos++;
 
 		if(b<=127) {
-			x = 1+(de_int64)b;
+			x = 1+(i64)b;
 			pos+=x;
 			xpos+=8*x;
 			if(xpos==MACPAINT_WIDTH) {
@@ -98,7 +127,7 @@ static int valid_file_at(deark *c, lctx *d, de_int64 pos1)
 			}
 		}
 		else if(b>=129) {
-			x = 257 - (de_int64)b;
+			x = 257 - (i64)b;
 			pos++;
 			xpos+=8*x;
 			if(xpos==MACPAINT_WIDTH) {
@@ -121,19 +150,7 @@ static int valid_file_at(deark *c, lctx *d, de_int64 pos1)
 	return 1;
 }
 
-static de_uint32 x_dbuf_crc32(dbuf *f, de_int64 pos, de_int64 len)
-{
-	de_uint32 crc;
-	de_byte *buf;
-
-	buf = de_malloc(f->c, len);
-	dbuf_read(f, buf, pos, len);
-	crc = de_crc32(buf, len);
-	de_free(f->c, buf);
-	return crc;
-}
-
-static const char *get_pattern_set_info(de_uint32 patcrc, int *is_blank)
+static const char *get_pattern_set_info(u32 patcrc, int *is_blank)
 {
 	*is_blank = 0;
 	switch(patcrc) {
@@ -148,22 +165,28 @@ static const char *get_pattern_set_info(de_uint32 patcrc, int *is_blank)
 // Some MacPaint files contain a collection of brush patterns.
 // Essentially, MacPaint saves workspace settings inside image files.
 // (But these patterns are the only setting.)
-static void do_read_patterns(deark *c, lctx *d, de_int64 pos)
+static void do_read_patterns(deark *c, lctx *d, i64 pos)
 {
-	de_int64 cell;
-	de_int64 i, j;
-	de_byte x;
-	const de_int64 dispwidth = 19;
-	const de_int64 dispheight = 17;
-	de_int64 xpos, ypos;
+	i64 cell;
+	i64 i, j;
+	u8 x;
+	const i64 dispwidth = 19;
+	const i64 dispheight = 17;
+	i64 xpos, ypos;
 	int is_blank;
 	de_bitmap *pat = NULL;
-	de_uint32 patcrc;
+	u32 patcrc;
 	const char *patsetname;
+	de_finfo *fi = NULL;
+	de_ucstring *tmpname = NULL;
+	struct de_crcobj *crc32o;
 
 	pos += 4;
 
-	patcrc = x_dbuf_crc32(c->infile, pos, 38*8);
+	crc32o = de_crcobj_create(c, DE_CRCOBJ_CRC32_IEEE);
+	de_crcobj_addslice(crc32o, c->infile, pos, 38*8);
+	patcrc = de_crcobj_getval(crc32o);
+	de_crcobj_destroy(crc32o);
 	patsetname = get_pattern_set_info(patcrc, &is_blank);
 	de_dbg(c, "brush patterns crc: 0x%08x (%s)", (unsigned int)patcrc, patsetname);
 
@@ -197,24 +220,82 @@ static void do_read_patterns(deark *c, lctx *d, de_int64 pos)
 		}
 	}
 
-	de_bitmap_write_to_file(pat, "pat", DE_CREATEFLAG_IS_AUX);
+	tmpname = ucstring_create(c);
+	if(d->filename && c->filenames_from_file) {
+		ucstring_append_ucstring(tmpname, d->filename);
+		ucstring_append_sz(tmpname, ".", DE_ENCODING_LATIN1);
+	}
+	ucstring_append_sz(tmpname, "pat", DE_ENCODING_LATIN1);
+	fi = de_finfo_create(c);
+	de_finfo_set_name_from_ucstring(c, fi, tmpname, 0);
+	de_bitmap_write_to_file_finfo(pat, fi, DE_CREATEFLAG_IS_AUX);
 
 done:
 	de_bitmap_destroy(pat);
+	de_finfo_destroy(c, fi);
+	ucstring_destroy(tmpname);
+}
+
+static void do_macbinary(deark *c, lctx *d)
+{
+	u8 b0, b1;
+	de_module_params *mparams = NULL;
+
+	b0 = de_getbyte(0);
+	b1 = de_getbyte(1);
+
+	// Instead of a real MacBinary header, a few macpaint files just have
+	// 128 NUL bytes, or something like that. So we'll skip MacBinary parsing
+	// in some cases.
+	if(b0!=0) goto done;
+	if(b1<1 || b1>63) goto done;
+
+	de_dbg(c, "MacBinary header at %d", 0);
+	de_dbg_indent(c, 1);
+	mparams = de_malloc(c, sizeof(de_module_params));
+	mparams->in_params.codes = "D"; // = decode only, don't extract
+	mparams->out_params.fi = de_finfo_create(c); // A temporary finfo object
+	mparams->out_params.fi->name_other = ucstring_create(c);
+	de_run_module_by_id_on_slice(c, "macbinary", mparams, c->infile, 0, 128);
+	de_dbg_indent(c, -1);
+
+	if(mparams->out_params.uint1>0) {
+		d->df_known = 1;
+		d->expected_dfpos = (i64)mparams->out_params.uint1;
+		d->expected_dflen = (i64)mparams->out_params.uint2;
+	}
+
+	if(mparams->out_params.fi->mod_time.is_valid) {
+		d->mod_time_from_macbinary = mparams->out_params.fi->mod_time;
+	}
+
+	if(d->df_known) {
+		if(d->expected_dfpos+d->expected_dflen>c->infile->len) {
+			de_warn(c, "MacBinary data fork (ends at %"I64_FMT") "
+				"goes past end of file (%"I64_FMT")",
+			d->expected_dfpos+d->expected_dflen, c->infile->len);
+			d->df_known = 0;
+		}
+	}
+
+	if(ucstring_isnonempty(mparams->out_params.fi->name_other) && !d->filename) {
+		d->filename = ucstring_clone(mparams->out_params.fi->name_other);
+	}
+
+done:
+	if(mparams) {
+		de_finfo_destroy(c, mparams->out_params.fi);
+		de_free(c, mparams);
+	}
 }
 
 static void de_run_macpaint(deark *c, de_module_params *mparams)
 {
 	lctx *d;
-	de_int64 pos;
-	const char *s;
+	i64 pos;
 
 	d = de_malloc(c, sizeof(lctx));
-
-	d->has_macbinary_header = -1;
-
-	s = de_get_ext_option(c, "macpaint:macbinary");
-	if(s) d->has_macbinary_header = de_atoi(s);
+	d->has_macbinary_header = de_get_ext_option_bool(c, "macpaint:macbinary", -1);
 
 	if(d->has_macbinary_header == -1) {
 		int v512;
@@ -256,25 +337,36 @@ static void de_run_macpaint(deark *c, de_module_params *mparams)
 	else
 		de_declare_fmt(c, "MacPaint without MacBinary header");
 
-	pos = d->has_macbinary_header ? 128 : 0;
+	pos = 0;
+	if(d->has_macbinary_header) {
+		do_macbinary(c, d);
+		pos += 128;
+	}
 
 	do_read_bitmap(c, d, pos);
 
 	do_read_patterns(c, d, pos);
 
-	de_free(c, d);
+	if(d) {
+		ucstring_destroy(d->filename);
+		de_free(c, d);
+	}
 }
 
+// Note: This must be coordinated with the macbinary detection routine.
 static int de_identify_macpaint(deark *c)
 {
-	de_byte buf[8];
+	u8 buf[8];
 
 	de_read(buf, 65, 8);
 
 	// Not all MacPaint files can be easily identified, but this will work
 	// for some of them.
-	if(!de_memcmp(buf, "PNTGMPNT", 8)) return 80;
-	if(!de_memcmp(buf, "PNTG", 4)) return 70;
+	if(!de_memcmp(buf, "PNTG", 4)) {
+		if(c->detection_data.is_macbinary) return 100;
+		if(!de_memcmp(&buf[4], "MPNT", 4)) return 80;
+		return 70;
+	}
 
 	if(de_input_file_has_ext(c, "mac")) return 10;
 	if(de_input_file_has_ext(c, "macp")) return 15;
@@ -286,6 +378,8 @@ static void de_help_macpaint(deark *c)
 {
 	de_msg(c, "-opt macpaint:macbinary=<0|1> : Assume file doesn't/does have "
 		"a MacBinary header");
+	de_msg(c, "-m macbinary : Extract from MacBinary container, instead of "
+		"decoding");
 }
 
 void de_module_macpaint(deark *c, struct deark_module_info *mi)

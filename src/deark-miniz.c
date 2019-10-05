@@ -3,140 +3,211 @@
 // See the file COPYING for terms of use.
 
 // Interface to miniz
+// ZIP encoding
+// PNG encoding
 
 #define DE_NOT_IN_MODULE
 #include "deark-config.h"
 #include "deark-private.h"
 
 struct deark_file_attribs {
-	de_int64 modtime; // Unix time_t format
-	int modtime_valid;
-	de_byte is_executable;
-	de_uint16 extra_data_central_size;
-	de_uint16 extra_data_local_size;
-	de_byte *extra_data_central;
-	de_byte *extra_data_local;
+	struct de_timestamp modtime;
+	i64 modtime_unix;
+	unsigned int modtime_dosdate;
+	unsigned int modtime_dostime;
+	i64 modtime_as_FILETIME; // valid if nonzero
+	u8 is_executable;
+	u8 is_directory;
+	u16 extra_data_central_size;
+	u16 extra_data_local_size;
+	const u8 *extra_data_central;
+	const u8 *extra_data_local;
 };
 
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+#define MINIZ_NO_STDIO
 #include "../foreign/miniz.h"
 
 // Our custom version of mz_zip_archive
 struct zip_data_struct {
 	deark *c;
+	const char *pFilename;
+	dbuf *outf; // Using this instead of pZip->m_pState->m_pFile
 	mz_zip_archive *pZip;
+	mz_uint cmprlevel;
 };
 
+#define CODE_IDAT 0x49444154U
+#define CODE_IEND 0x49454e44U
+#define CODE_IHDR 0x49484452U
+#define CODE_pHYs 0x70485973U
+#define CODE_tIME 0x74494d45U
+
 struct deark_png_encode_info {
+	int width, height;
+	int num_chans;
+	int flip;
+	unsigned int level;
 	int has_phys;
 	mz_uint32 xdens;
 	mz_uint32 ydens;
 	mz_uint8 phys_units;
+	deark *c;
+	dbuf *outf;
+	struct de_timestamp image_mod_time;
 };
 
-// A copy of tdefl_write_image_to_png_file_in_memory_ex from miniz,
-// hacked to support pHYs chunks.
-static void *my_tdefl_write_image_to_png_file_in_memory_ex(const void *pImage, int w, int h, int num_chans,
-	size_t *pLen_out, mz_uint level, mz_bool flip, const struct deark_png_encode_info *pei)
+static void write_png_chunk_raw(dbuf *outf, const u8 *src, i64 src_len,
+	u32 chunktype)
 {
-	tdefl_compressor *pComp = (tdefl_compressor *)MZ_MALLOC(sizeof(tdefl_compressor));
+	u32 crc;
+	u8 buf[4];
+
+	// length field
+	dbuf_writeu32be(outf, src_len);
+
+	// chunk type field
+	de_writeu32be_direct(buf, (i64)chunktype);
+	crc = de_crc32(buf, 4);
+	dbuf_write(outf, buf, 4);
+
+	// data field
+	crc = de_crc32_continue(crc, src, src_len);
+	dbuf_write(outf, src, src_len);
+
+	// CRC field
+	dbuf_writeu32be(outf, (i64)crc);
+}
+
+static void write_png_chunk_from_cdbuf(dbuf *outf, dbuf *cdbuf, u32 chunktype)
+{
+	// We really shouldn't access ->membuf_buf directly, but we'll allow it
+	// here as a performance optimization.
+	write_png_chunk_raw(outf, cdbuf->membuf_buf, cdbuf->len, chunktype);
+}
+
+static void write_png_chunk_IHDR(struct deark_png_encode_info *pei,
+	dbuf *cdbuf)
+{
+	static const u8 color_type_code[] = {0x00, 0x00, 0x04, 0x02, 0x06};
+
+	dbuf_writeu32be(cdbuf, (i64)pei->width);
+	dbuf_writeu32be(cdbuf, (i64)pei->height);
+	dbuf_writebyte(cdbuf, 8); // bit depth
+	dbuf_writebyte(cdbuf, color_type_code[pei->num_chans]);
+	dbuf_truncate(cdbuf, 13); // rest of chunk is zeroes
+	write_png_chunk_from_cdbuf(pei->outf, cdbuf, CODE_IHDR);
+}
+
+static void write_png_chunk_pHYs(struct deark_png_encode_info *pei,
+	dbuf *cdbuf)
+{
+	dbuf_writeu32be(cdbuf, (i64)pei->xdens);
+	dbuf_writeu32be(cdbuf, (i64)pei->ydens);
+	dbuf_writebyte(cdbuf, pei->phys_units);
+	write_png_chunk_from_cdbuf(pei->outf, cdbuf, CODE_pHYs);
+}
+
+static void write_png_chunk_tIME(struct deark_png_encode_info *pei,
+	dbuf *cdbuf)
+{
+	struct de_struct_tm tm2;
+
+	de_gmtime(&pei->image_mod_time, &tm2);
+	if(!tm2.is_valid) return;
+
+	dbuf_writeu16be(cdbuf, (i64)tm2.tm_fullyear);
+	dbuf_writebyte(cdbuf, (u8)(1+tm2.tm_mon));
+	dbuf_writebyte(cdbuf, (u8)tm2.tm_mday);
+	dbuf_writebyte(cdbuf, (u8)tm2.tm_hour);
+	dbuf_writebyte(cdbuf, (u8)tm2.tm_min);
+	dbuf_writebyte(cdbuf, (u8)tm2.tm_sec);
+	write_png_chunk_from_cdbuf(pei->outf, cdbuf, CODE_tIME);
+}
+
+static int write_png_chunk_IDAT(struct deark_png_encode_info *pei, const mz_uint8 *src_pixels)
+{
+	tdefl_compressor *pComp = NULL;
 	tdefl_output_buffer out_buf;
-	int bpl = w * num_chans, y, z;
-	mz_uint32 c;
-	size_t idat_data_offset;
-	size_t size_of_extra_chunks = 0;
-	size_t curpos = 0;
+	int bpl = pei->width * pei->num_chans; // bytes per row in src_pixels
+	int y;
 	static const char nulbyte = '\0';
+	int retval = 0;
 
-	*pLen_out = 0;
-	if (!pComp) return NULL;
-	de_memset(pComp,0,sizeof(tdefl_compressor));
+	de_zeromem(&out_buf, sizeof(tdefl_output_buffer));
 
-	if(pei->has_phys) size_of_extra_chunks += 21;
+	pComp = MZ_MALLOC(sizeof(tdefl_compressor));
+	if (!pComp) goto done;
+	de_zeromem(pComp, sizeof(tdefl_compressor));
 
-	idat_data_offset = 41 + size_of_extra_chunks;
-
-	MZ_CLEAR_OBJ(out_buf);
 	out_buf.m_expandable = MZ_TRUE;
-	out_buf.m_capacity = 57+MZ_MAX(64, (1+bpl)*h) + size_of_extra_chunks;
-	if (NULL == (out_buf.m_pBuf = (mz_uint8*)MZ_MALLOC(out_buf.m_capacity))) { MZ_FREE(pComp); return NULL; }
-
-	// write dummy header
-	for (z = (int)idat_data_offset; z; --z) tdefl_output_buffer_putter(&nulbyte, 1, &out_buf);
+	out_buf.m_capacity = 16+(size_t)MZ_MAX(64, (1+bpl)*pei->height);
+	out_buf.m_pBuf = MZ_MALLOC(out_buf.m_capacity);
+	if (!out_buf.m_pBuf) { goto done; }
 
 	// compress image data
-	// TODO: It seems illogical to do this before writing the things that precede IDAT,
-	// though I guess it does ensure that out_buf.m_pBuf has enough bytes allocated.
-	tdefl_init(pComp, tdefl_output_buffer_putter, &out_buf, s_tdefl_num_probes[MZ_MIN(10, level)] | TDEFL_WRITE_ZLIB_HEADER);
+	tdefl_init(pComp, tdefl_output_buffer_putter, &out_buf,
+		s_tdefl_num_probes[MZ_MIN(10, pei->level)] | TDEFL_WRITE_ZLIB_HEADER);
 
-	for (y = 0; y < h; ++y) {
+	for (y = 0; y < pei->height; ++y) {
 		tdefl_compress_buffer(pComp, &nulbyte, 1, TDEFL_NO_FLUSH);
-		tdefl_compress_buffer(pComp, (mz_uint8*)pImage + (flip ? (h - 1 - y) : y) * bpl, bpl, TDEFL_NO_FLUSH);
+		tdefl_compress_buffer(pComp, &src_pixels[(pei->flip ? (pei->height - 1 - y) : y) * bpl],
+			bpl, TDEFL_NO_FLUSH);
 	}
-	if (tdefl_compress_buffer(pComp, NULL, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE) { MZ_FREE(pComp); MZ_FREE(out_buf.m_pBuf); return NULL; }
+	if (tdefl_compress_buffer(pComp, NULL, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE) { goto done; }
 
-	// write real header
-	// (signature, and entire IHDR chunk)
-	*pLen_out = out_buf.m_size-idat_data_offset;
+	write_png_chunk_raw(pei->outf, (const u8*)out_buf.m_pBuf, (i64)out_buf.m_size, CODE_IDAT);
+	retval = 1;
 
-	{
-		static const mz_uint8 chans[] = {0x00, 0x00, 0x04, 0x02, 0x06};
-		mz_uint8 pnghdr[33]={
-			0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a, // 8-byte signature
-			0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52, // IHDR length, type
-			0,0,0,0,0,0,0,0,8,0,0,0,0, // 13 bytes of IHDR data
-			0,0,0,0 // IHDR CRC
-		};
-		de_writeui32be_direct(&pnghdr[8+8+0], w);
-		de_writeui32be_direct(&pnghdr[8+8+4], h);
-		pnghdr[25] = chans[num_chans];
-		c=(mz_uint32)mz_crc32(MZ_CRC32_INIT,pnghdr+12,17);
-		de_writeui32be_direct(&pnghdr[8+8+13], (de_int64)c); // Set IHDR CRC
-		de_memcpy(out_buf.m_pBuf, pnghdr, 33);
-		curpos += 8+8+13+4;
-	}
+done:
+
+	if(pComp) MZ_FREE(pComp);
+	if(out_buf.m_pBuf) MZ_FREE(out_buf.m_pBuf);
+	return retval;
+}
+
+static int do_generate_png(struct deark_png_encode_info *pei, const mz_uint8 *src_pixels)
+{
+	static const u8 pngsig[8] = { 0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a };
+	dbuf *cdbuf = NULL;
+	int retval = 0;
+
+	// A membuf that we'll use and reuse for each chunk's data...
+	// except for the IDAT chunk. miniz has its own 'tdefl_output_buffer'
+	// resizable memory object, that we have to use with it.
+	cdbuf = dbuf_create_membuf(pei->c, 64, 0);
+
+	dbuf_write(pei->outf, pngsig, 8);
+
+	write_png_chunk_IHDR(pei, cdbuf);
 
 	if(pei->has_phys) {
-		de_writeui32be_direct(out_buf.m_pBuf+curpos+0, 9); // pHYs chunk data length (always 9)
-		de_memcpy(&out_buf.m_pBuf[curpos+4], "pHYs", 4);
-		de_writeui32be_direct(out_buf.m_pBuf+curpos+8, (de_int64)pei->xdens);
-		de_writeui32be_direct(out_buf.m_pBuf+curpos+12, (de_int64)pei->ydens);
-		out_buf.m_pBuf[curpos+16] = pei->phys_units;
-		c=(mz_uint32)mz_crc32(MZ_CRC32_INIT,out_buf.m_pBuf+curpos+4,13);
-		de_writeui32be_direct(out_buf.m_pBuf+curpos+17, (de_int64)c);
-		curpos += 8+9+4;
+		dbuf_truncate(cdbuf, 0);
+		write_png_chunk_pHYs(pei, cdbuf);
 	}
 
-	// Write IDAT header (chunk length and type)
-	{
-		mz_uint8 idathdr[8]={
-			0, 0, 0, 0, // IDAT len,
-			0x49,0x44,0x41,0x54 // IDAT type
-		};
-		de_writeui32be_direct(&idathdr[0], (de_int64)(*pLen_out));
-		de_memcpy(out_buf.m_pBuf+(idat_data_offset-8), idathdr, 8);
+	if(pei->image_mod_time.is_valid && pei->c->preserve_file_times_images) {
+		dbuf_truncate(cdbuf, 0);
+		write_png_chunk_tIME(pei, cdbuf);
 	}
 
-	// write footer (IDAT CRC-32, followed by IEND chunk)
-	if (!tdefl_output_buffer_putter("\0\0\0\0\0\0\0\0\x49\x45\x4e\x44\xae\x42\x60\x82", 16, &out_buf)) {
-		*pLen_out = 0; MZ_FREE(pComp); MZ_FREE(out_buf.m_pBuf); return NULL;
-	}
-	c = (mz_uint32)mz_crc32(MZ_CRC32_INIT,out_buf.m_pBuf+idat_data_offset-4, *pLen_out+4);
-	de_writeui32be_direct(out_buf.m_pBuf+out_buf.m_size-16, (de_int64)c);
+	if(!write_png_chunk_IDAT(pei, src_pixels)) goto done;
 
-	// compute final size of file, grab compressed data buffer and return
-	*pLen_out += 16 + idat_data_offset;
-	MZ_FREE(pComp);
-	return out_buf.m_pBuf;
+	dbuf_truncate(cdbuf, 0);
+	write_png_chunk_from_cdbuf(pei->outf, cdbuf, CODE_IEND);
+	retval = 1;
+
+done:
+	dbuf_close(cdbuf);
+	return retval;
 }
 
 int de_write_png(deark *c, de_bitmap *img, dbuf *f)
 {
-	size_t len_out = 0;
-	de_byte *memblk = NULL;
+	const char *opt_level;
 	struct deark_png_encode_info pei;
 
-	de_memset(&pei, 0, sizeof(struct deark_png_encode_info));
+	de_zeromem(&pei, sizeof(struct deark_png_encode_info));
 
 	if(img->invalid_image_flag) {
 		return 0;
@@ -149,21 +220,21 @@ int de_write_png(deark *c, de_bitmap *img, dbuf *f)
 		return 0;
 	}
 
-	if(img->density_code>0 && c->write_density) {
+	if(f->fi_copy && f->fi_copy->density.code>0 && c->write_density) {
 		pei.has_phys = 1;
-		if(img->density_code==1) { // unspecified units
+		if(f->fi_copy->density.code==1) { // unspecified units
 			pei.phys_units = 0;
-			pei.xdens = (mz_uint32)(img->xdens+0.5);
-			pei.ydens = (mz_uint32)(img->ydens+0.5);
+			pei.xdens = (mz_uint32)(f->fi_copy->density.xdens+0.5);
+			pei.ydens = (mz_uint32)(f->fi_copy->density.ydens+0.5);
 		}
-		else if(img->density_code==2) { // dpi
+		else if(f->fi_copy->density.code==2) { // dpi
 			pei.phys_units = 1; // pixels/meter
-			pei.xdens = (mz_uint32)(0.5+img->xdens/0.0254);
-			pei.ydens = (mz_uint32)(0.5+img->ydens/0.0254);
+			pei.xdens = (mz_uint32)(0.5+f->fi_copy->density.xdens/0.0254);
+			pei.ydens = (mz_uint32)(0.5+f->fi_copy->density.ydens/0.0254);
 		}
 	}
 
-	if(pei.has_phys && pei.xdens==pei.ydens && img->density_code==1) {
+	if(pei.has_phys && pei.xdens==pei.ydens && pei.phys_units==0) {
 		// Useless density information. Don't bother to write it.
 		pei.has_phys = 0;
 	}
@@ -177,39 +248,65 @@ int de_write_png(deark *c, de_bitmap *img, dbuf *f)
 		}
 	}
 
-	memblk = my_tdefl_write_image_to_png_file_in_memory_ex(img->bitmap,
-		(int)img->width, (int)img->height, img->bytes_per_pixel, &len_out, 9, img->flipped,
-		&pei);
+	pei.c = c;
+	pei.outf = f;
+	pei.width = (int)img->width;
+	pei.height = (int)img->height;
+	pei.flip = img->flipped;
+	pei.num_chans = img->bytes_per_pixel;
 
-	if(!memblk) {
+	if(!c->pngcprlevel_valid) {
+		c->pngcmprlevel = 9; // default
+		c->pngcprlevel_valid = 1;
+
+		opt_level = de_get_ext_option(c, "pngcmprlevel");
+		if(opt_level) {
+			i64 opt_level_n = de_atoi64(opt_level);
+			if(opt_level_n>10) {
+				c->pngcmprlevel = 10;
+			}
+			else if(opt_level_n<0) {
+				c->pngcmprlevel = 6;
+			}
+			else {
+				c->pngcmprlevel = (unsigned int)opt_level_n;
+			}
+		}
+	}
+	pei.level = c->pngcmprlevel;
+
+	if(f->fi_copy && f->fi_copy->image_mod_time.is_valid) {
+		pei.image_mod_time = f->fi_copy->image_mod_time;
+	}
+
+	if(!do_generate_png(&pei, img->bitmap)) {
 		de_err(c, "PNG write failed");
 		return 0;
 	}
 
-	dbuf_write(f, memblk, len_out);
-
-	mz_free(memblk);
 	return 1;
 }
 
-static int de_inflate_internal(dbuf *inf, de_int64 inputstart, de_int64 inputsize, dbuf *outf,
-	int is_zlib, de_int64 *bytes_consumed)
+static int de_inflate_internal(dbuf *inf, i64 inputstart, i64 inputsize, dbuf *outf,
+	i64 maxuncmprsize, i64 *bytes_consumed, unsigned int flags)
 {
 	mz_stream strm;
 	int ret;
 	int retval = 0;
 #define DE_DFL_INBUF_SIZE   32768
 #define DE_DFL_OUTBUF_SIZE  (DE_DFL_INBUF_SIZE*4)
-	de_byte *inbuf = NULL;
-	de_byte *outbuf = NULL;
-	de_int64 inbuf_num_valid_bytes; // Number of valid bytes in inbuf, starting with [0].
-	de_int64 inbuf_num_consumed_bytes; // Of inbuf_num_valid_bytes, the number that have been consumed.
-	de_int64 inbuf_num_consumed_bytes_this_time;
+	u8 *inbuf = NULL;
+	u8 *outbuf = NULL;
+	i64 inbuf_num_valid_bytes; // Number of valid bytes in inbuf, starting with [0].
+	i64 inbuf_num_consumed_bytes; // Of inbuf_num_valid_bytes, the number that have been consumed.
+	i64 inbuf_num_consumed_bytes_this_time;
 
 	unsigned int orig_avail_in;
-	de_int64 input_cur_pos;
-	de_int64 output_bytes_this_time;
-	de_int64 nbytes_to_read;
+	i64 input_cur_pos;
+	i64 output_bytes_this_time;
+	i64 nbytes_to_read;
+	i64 nbytes_to_write;
+	i64 nbytes_written_total = 0;
 	deark *c;
 	int stream_open_flag = 0;
 
@@ -223,8 +320,8 @@ static int de_inflate_internal(dbuf *inf, de_int64 inputstart, de_int64 inputsiz
 	inbuf = de_malloc(c, DE_DFL_INBUF_SIZE);
 	outbuf = de_malloc(c, DE_DFL_OUTBUF_SIZE);
 
-	de_memset(&strm,0,sizeof(strm));
-	if(is_zlib) {
+	de_zeromem(&strm, sizeof(strm));
+	if(flags&DE_DEFLATEFLAG_ISZLIB) {
 		ret = mz_inflateInit(&strm);
 	}
 	else {
@@ -247,9 +344,10 @@ static int de_inflate_internal(dbuf *inf, de_int64 inputstart, de_int64 inputsiz
 	while(1) {
 		de_dbg3(c, "input remaining: %d", (int)(inputstart+inputsize-input_cur_pos));
 
-		// If we have read all the available bytes from the file,
-		// and all bytes in inbuf are consumed, then stop.
-		if((inbuf_num_consumed_bytes>=inbuf_num_valid_bytes) && (input_cur_pos-inputstart)>=inputsize) break;
+		// If we have written enough bytes, stop.
+		if((flags&DE_DEFLATEFLAG_USEMAXUNCMPRSIZE) && (nbytes_written_total >= maxuncmprsize)) {
+			break;
+		}
 
 		if(inbuf_num_consumed_bytes>0) {
 			if(inbuf_num_valid_bytes>inbuf_num_consumed_bytes) {
@@ -290,7 +388,14 @@ static int de_inflate_internal(dbuf *inf, de_int64 inputstart, de_int64 inputsiz
 		output_bytes_this_time = DE_DFL_OUTBUF_SIZE - strm.avail_out;
 		de_dbg3(c, "got %d output bytes", (int)output_bytes_this_time);
 
-		dbuf_write(outf, outbuf, output_bytes_this_time);
+		nbytes_to_write = output_bytes_this_time;
+		if((flags&DE_DEFLATEFLAG_USEMAXUNCMPRSIZE) &&
+			(nbytes_to_write > maxuncmprsize - nbytes_written_total))
+		{
+			nbytes_to_write = maxuncmprsize - nbytes_written_total;
+		}
+		dbuf_write(outf, outbuf, nbytes_to_write);
+		nbytes_written_total += nbytes_to_write;
 
 		if(ret==MZ_STREAM_END) {
 			de_dbg2(c, "inflate finished normally");
@@ -298,7 +403,7 @@ static int de_inflate_internal(dbuf *inf, de_int64 inputstart, de_int64 inputsiz
 			goto done;
 		}
 
-		inbuf_num_consumed_bytes_this_time = (de_int64)(orig_avail_in - strm.avail_in);
+		inbuf_num_consumed_bytes_this_time = (i64)(orig_avail_in - strm.avail_in);
 		if(inbuf_num_consumed_bytes_this_time<1 && output_bytes_this_time<1) {
 			de_err(c, "Inflate error");
 			goto done;
@@ -310,7 +415,7 @@ static int de_inflate_internal(dbuf *inf, de_int64 inputstart, de_int64 inputsiz
 
 done:
 	if(retval) {
-		*bytes_consumed = (de_int64)strm.total_in;
+		*bytes_consumed = (i64)strm.total_in;
 		de_dbg2(c, "inflated %u to %u bytes", (unsigned int)strm.total_in,
 			(unsigned int)strm.total_out);
 	}
@@ -322,40 +427,31 @@ done:
 	return retval;
 }
 
-int de_uncompress_zlib(dbuf *inf, de_int64 inputstart, de_int64 inputsize, dbuf *outf)
+int de_decompress_deflate(dbuf *inf, i64 inputstart, i64 inputsize, dbuf *outf,
+	i64 maxuncmprsize, i64 *bytes_consumed, unsigned int flags)
 {
-	de_int64 bytes_consumed;
-	return de_inflate_internal(inf, inputstart, inputsize, outf, 1, &bytes_consumed);
+	i64 bc2 = 0;
+	return de_inflate_internal(inf, inputstart, inputsize, outf, maxuncmprsize,
+		bytes_consumed?bytes_consumed:(&bc2), flags);
 }
 
-int de_uncompress_deflate(dbuf *inf, de_int64 inputstart, de_int64 inputsize, dbuf *outf,
-	de_int64 *bytes_consumed)
-{
-	return de_inflate_internal(inf, inputstart, inputsize, outf, 0, bytes_consumed);
-}
-
-// TODO: We'd like to us a dbuf for ZIP output, both to make our I/O functions
-// consistent, and with the idea that we could write a ZIP file to stdout (via
-// a membuf). That will take a lot of work, though. For one thing, file-output
-// dbufs don't even support seeking yet.
 static size_t my_mz_zip_file_write_func(void *pOpaque, mz_uint64 file_ofs, const void *pBuf, size_t n)
 {
-  struct zip_data_struct *zzz = (struct zip_data_struct*)pOpaque;
-  mz_zip_archive *pZip = zzz->pZip;
-  mz_int64 cur_ofs = MZ_FTELL64(pZip->m_pState->m_pFile);
-  if (((mz_int64)file_ofs < 0) || (((cur_ofs != (mz_int64)file_ofs)) && (MZ_FSEEK64(pZip->m_pState->m_pFile, (mz_int64)file_ofs, SEEK_SET))))
-    return 0;
-  return MZ_FWRITE(pBuf, 1, n, pZip->m_pState->m_pFile);
+	struct zip_data_struct *zzz = (struct zip_data_struct*)pOpaque;
+
+	if((i64)file_ofs < 0) return 0;
+	dbuf_write_at(zzz->outf, (i64)file_ofs, pBuf, (i64)n);
+	return n;
 }
 
 // A customized copy of mz_zip_writer_init_file().
 // Customized to support Unicode filenames (on Windows), and to better
 // report errors.
-static mz_bool my_mz_zip_writer_init_file(deark *c, mz_zip_archive *pZip, const char *pFilename)
+static mz_bool my_mz_zip_writer_init_file(deark *c, struct zip_data_struct *zzz,
+	mz_zip_archive *pZip)
 {
-  MZ_FILE *pFile;
+  dbuf *pFile_dbuf;
   mz_uint64 size_to_reserve_at_beginning = 0;
-  char msgbuf[200];
 
   pZip->m_pWrite = my_mz_zip_file_write_func;
   if (!mz_zip_writer_init(pZip, size_to_reserve_at_beginning))
@@ -363,41 +459,31 @@ static mz_bool my_mz_zip_writer_init_file(deark *c, mz_zip_archive *pZip, const 
     de_err(c, "Failed to initialize ZIP file");
     return MZ_FALSE;
   }
-  if (NULL == (pFile = de_fopen_for_write(c, pFilename, msgbuf, sizeof(msgbuf), 0)))
+
+  if(c->archive_to_stdout) {
+    pFile_dbuf = dbuf_create_membuf(c, 4096, 0);
+  }
+  else{
+    pFile_dbuf = dbuf_create_unmanaged_file(c, zzz->pFilename, c->overwrite_mode, 0);
+  }
+
+  if (pFile_dbuf->btype==DBUF_TYPE_NULL)
   {
-    de_err(c, "Failed to write %s: %s", pFilename, msgbuf);
+    dbuf_close(pFile_dbuf);
     mz_zip_writer_end(pZip);
     return MZ_FALSE;
   }
-  pZip->m_pState->m_pFile = pFile;
+  zzz->outf = pFile_dbuf;
   return MZ_TRUE;
-}
-
-static void init_reproducible_archive_settings(deark *c)
-{
-	const char *s;
-
-	s = de_get_ext_option(c, "archive:timestamp");
-	if(s) {
-		c->reproducible_output = 1;
-		de_unix_time_to_timestamp(de_atoi64(s), &c->reproducible_timestamp);
-	}
-	else {
-		if(de_get_ext_option(c, "archive:repro")) {
-			c->reproducible_output = 1;
-		}
-	}
 }
 
 int de_zip_create_file(deark *c)
 {
 	struct zip_data_struct *zzz;
+	const char *opt_level;
 	mz_bool b;
-	const char *arcfn;
 
 	if(c->zip_data) return 1; // Already created. Shouldn't happen.
-
-	init_reproducible_archive_settings(c);
 
 	zzz = de_malloc(c, sizeof(struct zip_data_struct));
 	zzz->pZip = de_malloc(c, sizeof(mz_zip_archive));
@@ -405,38 +491,119 @@ int de_zip_create_file(deark *c)
 	zzz->pZip->m_pIO_opaque = (void*)zzz;
 	c->zip_data = (void*)zzz;
 
-	arcfn = c->output_archive_filename;
-	if(!arcfn) arcfn = "output.zip";
+	zzz->cmprlevel = MZ_BEST_COMPRESSION; // default
+	opt_level = de_get_ext_option(c, "archive:zipcmprlevel");
+	if(opt_level) {
+		i64 opt_level_n = de_atoi64(opt_level);
+		if(opt_level_n>9) {
+			zzz->cmprlevel = 9;
+		}
+		else if(opt_level_n<0) {
+			zzz->cmprlevel = MZ_DEFAULT_LEVEL;
+		}
+		else {
+			zzz->cmprlevel = (mz_uint)opt_level_n;
+		}
+	}
 
-	b = my_mz_zip_writer_init_file(c, zzz->pZip, arcfn);
+	if(c->archive_to_stdout) {
+		zzz->pFilename = "[stdout]";
+	}
+	else {
+		if(c->output_archive_filename) {
+			zzz->pFilename = c->output_archive_filename;
+		}
+		else {
+			zzz->pFilename = "output.zip";
+		}
+	}
+
+	b = my_mz_zip_writer_init_file(c, zzz, zzz->pZip);
 	if(!b) {
 		de_free(c, zzz->pZip);
 		de_free(c, zzz);
 		c->zip_data = NULL;
 		return 0;
 	}
-	de_msg(c, "Creating %s", arcfn);
+
+	if(!c->archive_to_stdout) {
+		de_info(c, "Creating %s", zzz->pFilename);
+	}
 
 	return 1;
 }
 
-static de_int64 de_get_reproducible_unix_timestamp(deark *c)
+static void set_dos_modtime(struct deark_file_attribs *dfa)
 {
-	if(c->reproducible_timestamp.is_valid) {
-		return de_timestamp_to_unix_time(&c->reproducible_timestamp);
+	struct de_timestamp tmpts;
+	struct de_struct_tm tm2;
+
+	// Clamp to the range of times supported
+	if(dfa->modtime_unix < 315532800) { // 1 Jan 1980 00:00:00
+		de_unix_time_to_timestamp(315532800, &tmpts, 0x0);
+		de_gmtime(&tmpts, &tm2);
+	}
+	else if(dfa->modtime_unix > 4354819198LL) { // 31 Dec 2107 23:59:58
+		de_unix_time_to_timestamp(4354819198LL, &tmpts, 0x0);
+		de_gmtime(&tmpts, &tm2);
+	}
+	else {
+		de_gmtime(&dfa->modtime, &tm2);
 	}
 
-	// An arbitrary timestamp
-	// $ date -u --date='2010-09-08 07:06:05' '+%s'
-	return 1283929565LL;
+	dfa->modtime_dostime = (unsigned int)(((tm2.tm_hour) << 11) +
+		((tm2.tm_min) << 5) + ((tm2.tm_sec) >> 1));
+	dfa->modtime_dosdate = (unsigned int)(((tm2.tm_fullyear - 1980) << 9) +
+		((tm2.tm_mon + 1) << 5) + tm2.tm_mday);
+}
+
+static void writei32le(dbuf *f, i64 n)
+{
+	if(n<0) {
+		dbuf_writeu32le(f, n+0x100000000LL);
+	}
+	else {
+		dbuf_writeu32le(f, n);
+	}
+}
+
+static void do_UT_times(deark *c, struct deark_file_attribs *dfa,
+	dbuf *ef, int is_central)
+{
+	// Note: Although our 0x5455 central and local extra data fields happen to
+	// be identical, that is not generally the case.
+
+	dbuf_writeu16le(ef, 0x5455);
+	dbuf_writeu16le(ef, (i64)5);
+	dbuf_writebyte(ef, 0x01); // has-modtime flag
+	writei32le(ef, dfa->modtime_unix);
+}
+
+static void do_ntfs_times(deark *c, struct deark_file_attribs *dfa,
+	dbuf *ef, int is_central)
+{
+	dbuf_writeu16le(ef, 0x000a); // = NTFS
+	dbuf_writeu16le(ef, 32); // data size
+	dbuf_write_zeroes(ef, 4);
+	dbuf_writeu16le(ef, 0x0001); // file times element
+	dbuf_writeu16le(ef, 24); // element data size
+	// We only know the mod time, but we are forced to make up something for
+	// the other timestamps.
+	dbuf_writeu64le(ef, (u64)dfa->modtime_as_FILETIME); // mod time
+	dbuf_writeu64le(ef, (u64)dfa->modtime_as_FILETIME); // access time
+	dbuf_writeu64le(ef, (u64)dfa->modtime_as_FILETIME); // create time
 }
 
 void de_zip_add_file_to_archive(deark *c, dbuf *f)
 {
 	struct zip_data_struct *zzz;
 	struct deark_file_attribs dfa;
+	dbuf *eflocal = NULL;
+	dbuf *efcentral = NULL;
+	int write_ntfs_times = 0;
+	int write_UT_time = 0;
 
-	de_memset(&dfa, 0, sizeof(struct deark_file_attribs));
+	de_zeromem(&dfa, sizeof(struct deark_file_attribs));
 
 	if(!c->zip_data) {
 		// ZIP file hasn't been created yet
@@ -447,55 +614,121 @@ void de_zip_add_file_to_archive(deark *c, dbuf *f)
 	}
 
 	zzz = (struct zip_data_struct*)c->zip_data;
-	if(!zzz) { de_err(c, "asdf"); de_fatalerror(c); }
 
-	de_dbg(c, "adding to zip: name:%s len:%d", f->name, (int)dbuf_get_length(f));
+	de_dbg(c, "adding to zip: name=%s len=%"I64_FMT, f->name, f->len);
 
-	if(c->preserve_file_times && f->mod_time.is_valid) {
-		dfa.modtime = de_timestamp_to_unix_time(&f->mod_time);
-		dfa.modtime_valid = 1;
+	if(f->fi_copy && f->fi_copy->is_directory) {
+		dfa.is_directory = 1;
+	}
+
+	if(f->fi_copy && (f->fi_copy->mode_flags&DE_MODEFLAG_EXE)) {
+		dfa.is_executable = 1;
+	}
+
+	if(c->preserve_file_times_archives && f->fi_copy && f->fi_copy->mod_time.is_valid) {
+		dfa.modtime = f->fi_copy->mod_time;
+		if(dfa.modtime.precision>DE_TSPREC_1SEC) {
+			write_ntfs_times = 1;
+		}
 	}
 	else if(c->reproducible_output) {
-		dfa.modtime = de_get_reproducible_unix_timestamp(c);
-		dfa.modtime_valid = 1;
+		de_get_reproducible_timestamp(c, &dfa.modtime);
 	}
 	else {
-		if(!c->current_time.is_valid) {
-			// Get/record the current time. (We'll use the same "current time"
-			// for all files in this archive.)
-			de_current_time_to_timestamp(&c->current_time);
-		}
+		de_cached_current_time_to_timestamp(c, &dfa.modtime);
 
-		dfa.modtime = de_timestamp_to_unix_time(&c->current_time);
-		dfa.modtime_valid = 1;
+		// We only write the current time because ZIP format leaves us little
+		// choice.
+		// Note that although c->current_time is probably high precision,
+		// we don't consider that good enough reason to force NTFS timestamps
+		// to be written.
 	}
 
-	dfa.is_executable = (f->mode_flags&DE_MODEFLAG_EXE)?1:0;
+	dfa.modtime_unix = de_timestamp_to_unix_time(&dfa.modtime);
+	set_dos_modtime(&dfa);
 
-	// Create ZIP "extra data" "Extended Timestamp" fields, containing the
-	// UTC timestamp.
-	// Note: Although our central and local extra data fields happen to be
-	// identical, that is not usually the case for tag 0x5455.
-	dfa.extra_data_local_size = 4 + 5;
-	dfa.extra_data_central_size = 4 + 5;
-	dfa.extra_data_local = de_malloc(c, (de_int64)dfa.extra_data_local_size);
-	dfa.extra_data_central = de_malloc(c, (de_int64)dfa.extra_data_central_size);
+	if((dfa.modtime_unix >= -0x80000000LL) && (dfa.modtime_unix <= 0x7fffffffLL)) {
+		// Always write a Unix timestamp if we can.
+		write_UT_time = 1;
 
-	de_writeui16le_direct(&dfa.extra_data_local[0], 0x5455);
-	de_writeui16le_direct(&dfa.extra_data_local[2], (de_int64)(dfa.extra_data_local_size-4));
-	de_writeui16le_direct(&dfa.extra_data_central[0], 0x5455);
-	de_writeui16le_direct(&dfa.extra_data_central[2], (de_int64)(dfa.extra_data_central_size-4));
+		if(dfa.modtime_unix < 0) {
+			// This negative Unix time is in range, but problematical,
+			// so write NTFS times as well.
+			write_ntfs_times = 1;
+		}
+	}
+	else { // Out of range of ZIP's (signed int32) Unix style timestamps
+		write_ntfs_times = 1;
+	}
 
-	dfa.extra_data_local[4] = 0x01; // has-modtime flag
-	de_writeui32le_direct(&dfa.extra_data_local[5], dfa.modtime);
-	dfa.extra_data_central[4] = dfa.extra_data_local[4];
-	de_writeui32le_direct(&dfa.extra_data_central[5], dfa.modtime);
+	if(write_ntfs_times) {
+		dfa.modtime_as_FILETIME = de_timestamp_to_FILETIME(&dfa.modtime);
+		if(dfa.modtime_as_FILETIME == 0) {
+			write_ntfs_times = 0;
+		}
+	}
 
-	mz_zip_writer_add_mem(zzz->pZip, f->name, f->membuf_buf, (size_t)dbuf_get_length(f),
-		MZ_BEST_COMPRESSION, &dfa);
+	// Create ZIP "extra data" "Extended Timestamp" and "NTFS" fields,
+	// containing the UTC timestamp.
 
-	de_free(c, dfa.extra_data_local);
-	de_free(c, dfa.extra_data_central);
+	// Use temporary dbufs to help construct the extra field data.
+	eflocal = dbuf_create_membuf(c, 256, 0);
+	efcentral = dbuf_create_membuf(c, 256, 0);
+
+	if(write_UT_time) {
+		do_UT_times(c, &dfa, eflocal, 0);
+		do_UT_times(c, &dfa, efcentral, 1);
+	}
+
+	if(write_ntfs_times) {
+		// Note: Info-ZIP says: "In the current implementations, this field [...]
+		// is only stored as local extra field.
+		// But 7-Zip supports it *only* as a central extra field.
+		// So we'll write both.
+		do_ntfs_times(c, &dfa, eflocal, 0);
+		do_ntfs_times(c, &dfa, efcentral, 1);
+	}
+
+	dfa.extra_data_local_size = (u16)eflocal->len;
+	dfa.extra_data_local = eflocal->membuf_buf;
+
+	dfa.extra_data_central_size = (u16)efcentral->len;
+	dfa.extra_data_central = efcentral->membuf_buf;
+
+	if(dfa.is_directory) {
+		size_t nlen;
+		char *name2;
+
+		// Append a "/" to the name
+		nlen = de_strlen(f->name);
+		name2 = de_malloc(c, (i64)nlen+2);
+		de_snprintf(name2, nlen+2, "%s/", f->name);
+
+		mz_zip_writer_add_mem(zzz->pZip, name2, f->membuf_buf, 0,
+			MZ_NO_COMPRESSION, &dfa);
+
+		de_free(c, name2);
+	}
+	else {
+		mz_zip_writer_add_mem(zzz->pZip, f->name, f->membuf_buf, (size_t)f->len,
+			zzz->cmprlevel, &dfa);
+	}
+
+	dbuf_close(eflocal);
+	dbuf_close(efcentral);
+}
+
+static int copy_to_FILE_cbfn(struct de_bufferedreadctx *brctx, const u8 *buf,
+	i64 buf_len)
+{
+	size_t ret;
+	ret = fwrite(buf, 1, (size_t)buf_len, (FILE*)brctx->userdata);
+	return (ret==(size_t)buf_len);
+}
+
+static void dbuf_copy_to_FILE(dbuf *inf, i64 input_offset, i64 input_len, FILE *outfile)
+{
+	dbuf_buffered_read(inf, input_offset, input_len, copy_to_FILE_cbfn, (void*)outfile);
 }
 
 void de_zip_close_file(deark *c)
@@ -509,7 +742,14 @@ void de_zip_close_file(deark *c)
 
 	mz_zip_writer_finalize_archive(zzz->pZip);
 	mz_zip_writer_end(zzz->pZip);
-	de_dbg(c, "zip file closed");
+
+	if(c->archive_to_stdout && zzz->outf && zzz->outf->btype==DBUF_TYPE_MEMBUF) {
+		dbuf_copy_to_FILE(zzz->outf, 0, zzz->outf->len, stdout);
+	}
+
+	if(zzz->outf) {
+		dbuf_close(zzz->outf);
+	}
 
 	de_free(c, zzz->pZip);
 	de_free(c, zzz);
@@ -519,12 +759,12 @@ void de_zip_close_file(deark *c)
 // For a one-shot CRC calculations, or the first part of a multi-part
 // calculation.
 // buf can be NULL (in which case buf_len should be 0, but is ignored)
-de_uint32 de_crc32(const void *buf, de_int64 buf_len)
+u32 de_crc32(const void *buf, i64 buf_len)
 {
-	return (de_uint32)mz_crc32(MZ_CRC32_INIT, (const mz_uint8*)buf, (size_t)buf_len);
+	return (u32)mz_crc32(MZ_CRC32_INIT, (const mz_uint8*)buf, (size_t)buf_len);
 }
 
-de_uint32 de_crc32_continue(de_uint32 prev_crc, const void *buf, de_int64 buf_len)
+u32 de_crc32_continue(u32 prev_crc, const void *buf, i64 buf_len)
 {
-	return (de_uint32)mz_crc32(prev_crc, (const mz_uint8*)buf, (size_t)buf_len);
+	return (u32)mz_crc32(prev_crc, (const mz_uint8*)buf, (size_t)buf_len);
 }

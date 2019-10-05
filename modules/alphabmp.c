@@ -10,21 +10,21 @@
 DE_DECLARE_MODULE(de_module_alphabmp);
 
 typedef struct localctx_struct {
-	de_int64 w, h;
-	de_int64 bpp;
+	i64 w, h;
+	i64 bpp;
 	unsigned int has_palette;
 	unsigned int palette_is_hls;
-	de_int64 compression;
-	de_int64 num_pal_entries;
-	de_uint32 pal[256];
+	i64 compression;
+	i64 num_pal_entries;
+	u32 pal[256];
 } lctx;
 
-static int do_read_palette(deark *c, lctx *d, de_int64 pos, de_int64 *pal_nbytes)
+static int do_read_palette(deark *c, lctx *d, i64 pos, i64 *pal_nbytes)
 {
 	de_dbg(c, "palette at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
-	d->num_pal_entries = de_getui16le(pos) + 1;
+	d->num_pal_entries = de_getu16le(pos) + 1;
 	de_dbg(c, "number of palette colors: %d", (int)d->num_pal_entries);
 	if(d->palette_is_hls)
 		*pal_nbytes = 2 + d->num_pal_entries * 6;
@@ -40,11 +40,11 @@ done:
 
 static void do_bitmap(deark *c, lctx *d, dbuf *unc_pixels)
 {
-	de_int64 i, j;
-	de_int64 rowspan;
-	de_uint32 clr;
+	i64 i, j;
+	i64 rowspan;
+	u32 clr;
 	de_bitmap *img = NULL;
-	de_byte b;
+	u8 b;
 
 	rowspan = (d->w * d->bpp +7)/8;
 
@@ -68,11 +68,11 @@ static void do_bitmap(deark *c, lctx *d, dbuf *unc_pixels)
 	de_bitmap_destroy(img);
 }
 
-static int do_uncompress_image(deark *c, lctx *d, de_int64 pos1, dbuf *unc_pixels)
+static int do_uncompress_image(deark *c, lctx *d, i64 pos1, dbuf *unc_pixels)
 {
-	de_int64 bytes_in_this_line;
-	de_int64 pos = pos1;
-	de_int64 j;
+	i64 bytes_in_this_line;
+	i64 pos = pos1;
+	i64 j;
 	int ret;
 
 	de_dbg(c, "decompressing bitmap");
@@ -80,7 +80,7 @@ static int do_uncompress_image(deark *c, lctx *d, de_int64 pos1, dbuf *unc_pixel
 	// Each line is compressed independently, using PackBits.
 
 	for(j=0; j<d->h; j++) {
-		bytes_in_this_line = de_getui16le(pos);
+		bytes_in_this_line = de_getu16le(pos);
 		pos += 2;
 		ret = de_fmtutil_uncompress_packbits(c->infile, pos, bytes_in_this_line,
 			unc_pixels, NULL);
@@ -96,8 +96,8 @@ static void de_run_alphabmp(deark *c, de_module_params *mparams)
 {
 	unsigned int flags;
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 palsize;
+	i64 pos;
+	i64 palsize;
 	dbuf *unc_pixels = NULL;
 	int saved_indent_level;
 
@@ -111,22 +111,22 @@ static void de_run_alphabmp(deark *c, de_module_params *mparams)
 	de_dbg(c, "bitmap image definition block at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
-	d->w = de_getui16le(pos);
-	d->h = de_getui16le(pos+2);
+	d->w = de_getu16le(pos);
+	d->h = de_getu16le(pos+2);
 	de_dbg_dimensions(c, d->w, d->h);
 	if(!de_good_image_dimensions(c, d->w, d->h)) goto done;
 
-	d->bpp = de_getui16le(pos+4);
+	d->bpp = de_getu16le(pos+4);
 	de_dbg(c, "bits/pixel: %d", (int)d->bpp);
 
-	flags = (unsigned int)de_getui16le(pos+6);
+	flags = (unsigned int)de_getu16le(pos+6);
 	d->has_palette = flags & 0x01;
 	d->palette_is_hls = (flags>>1) & 0x01;
 	de_dbg(c, "has-palette: %d", (int)d->has_palette);
 	if(d->has_palette)
 		de_dbg(c, "palette-is-HLS: %d", (int)d->palette_is_hls);
 
-	d->compression = de_getui16le(pos+8);
+	d->compression = de_getu16le(pos+8);
 	de_dbg(c, "compression: %d", (int)d->compression);
 	de_dbg_indent(c, -1);
 
@@ -172,11 +172,11 @@ done:
 
 static int de_identify_alphabmp(deark *c)
 {
-	de_int64 flg;
+	i64 flg;
 
 	if(!de_input_file_has_ext(c, "bmp")) return 0;
 
-	flg = de_getui16le(0);
+	flg = de_getu16le(0);
 	if(flg==0xffff || flg==0xfffe) {
 		return 60;
 	}

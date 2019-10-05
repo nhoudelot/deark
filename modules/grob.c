@@ -9,21 +9,21 @@
 DE_DECLARE_MODULE(de_module_grob);
 
 typedef struct localctx_struct {
-	de_int64 w, h_phys;
-	de_int64 bytes_consumed;
-	de_int64 num_planes;
+	i64 w, h_phys;
+	i64 bytes_consumed;
+	i64 num_planes;
 	int grayscale_lsb; // Does the plane of least-significant bits come first?
 } lctx;
 
-static void grob_read_binary_bitmap(deark *c, lctx *d, dbuf *inf, de_int64 pos)
+static void grob_read_binary_bitmap(deark *c, lctx *d, dbuf *inf, i64 pos)
 {
-	de_int64 h_logical;
-	de_int64 i, j;
-	de_int64 plane;
-	de_int64 rowspan;
-	de_byte b;
+	i64 h_logical;
+	i64 i, j;
+	i64 plane;
+	i64 rowspan;
+	u8 b;
 	unsigned int v;
-	de_byte v2;
+	u8 v2;
 	de_bitmap *img = NULL;
 
 	if(d->num_planes<=1) {
@@ -51,7 +51,7 @@ static void grob_read_binary_bitmap(deark *c, lctx *d, dbuf *inf, de_int64 pos)
 			v = 0;
 			for(plane=0; plane<d->num_planes; plane++) {
 				b = de_get_bits_symbol_lsb(inf, 1,
-					pos+rowspan*(h_logical*(de_int64)plane+j), i);
+					pos+rowspan*(h_logical*(i64)plane+j), i);
 				if(d->grayscale_lsb)
 					v |= b<<(unsigned int)plane;
 				else
@@ -69,9 +69,9 @@ done:
 
 static void de_run_grob_binary(deark *c, lctx *d)
 {
-	de_byte hdr[18];
-	de_int64 obj_id;
-	de_int64 length;
+	u8 hdr[18];
+	i64 obj_id;
+	i64 length;
 
 	de_declare_fmt(c, "HP GROB, binary encoded");
 
@@ -96,12 +96,12 @@ static void de_run_grob_binary(deark *c, lctx *d)
 }
 
 // On return, sets d->bytes_consumed
-static void grob_text_1_image(deark *c, lctx *d, de_int64 pos1)
+static void grob_text_1_image(deark *c, lctx *d, i64 pos1)
 {
-	de_int64 data_start;
-	de_byte x;
-	de_byte b0, b1;
-	de_int64 pos;
+	i64 data_start;
+	u8 x;
+	u8 b0, b1;
+	i64 pos;
 	dbuf *bin_bmp = NULL; // Binary version of the bitmap
 
 	pos = pos1;
@@ -173,10 +173,10 @@ done:
 
 static void de_run_grob_text(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_int64 img_pos = 0;
+	i64 pos;
+	i64 img_pos = 0;
 	int ret;
-	int img_count = 0;
+	i64 img_count = 0;
 
 	de_declare_fmt(c, "HP GROB, text encoded");
 
@@ -191,7 +191,7 @@ static void de_run_grob_text(deark *c, lctx *d)
 		// Maybe we should make sure "GROB" is the first nonwhitespace on the line,
 		// but even that isn't enough.
 
-		ret = dbuf_search(c->infile, (const de_byte*)"GROB", 4, pos, c->infile->len-pos, &img_pos);
+		ret = dbuf_search(c->infile, (const u8*)"GROB", 4, pos, c->infile->len-pos, &img_pos);
 		if(!ret) {
 			// No more images in this file.
 			break;
@@ -200,6 +200,7 @@ static void de_run_grob_text(deark *c, lctx *d)
 		de_dbg(c, "GROB format found at %d", (int)img_pos);
 
 		img_count++;
+		if(!de_good_image_count(c, img_count)) break;
 		grob_text_1_image(c, d, img_pos);
 
 		if(d->bytes_consumed<1) break;
@@ -214,7 +215,7 @@ static void de_run_grob_text(deark *c, lctx *d)
 static void de_run_grob(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_byte buf[4];
+	u8 buf[4];
 	const char *s;
 
 	d = de_malloc(c, sizeof(lctx));
@@ -249,7 +250,7 @@ done:
 
 static int de_identify_grob(deark *c)
 {
-	de_byte buf[10];
+	u8 buf[10];
 	de_read(buf, 0, 10);
 
 	if(buf[0]=='H' && buf[1]=='P' && buf[2]=='H' && buf[3]=='P' &&

@@ -12,9 +12,9 @@ typedef struct localctx_struct {
 	int convert_images; // 0=extract PIC, 1=convert PIC
 } lctx;
 
-static void handle_embedded_file(deark *c, lctx *d, de_int64 offset, de_int64 len)
+static void handle_embedded_file(deark *c, lctx *d, i64 offset, i64 len)
 {
-	de_byte buf[16];
+	u8 buf[16];
 	const char *ext;
 	int extract_this_file;
 	int is_pic;
@@ -60,25 +60,25 @@ static void handle_embedded_file(deark *c, lctx *d, de_int64 offset, de_int64 le
 
 static void do_opo_opa(deark *c, lctx *d)
 {
-	de_int64 offset_2ndheader;
-	de_int64 pos;
-	de_int64 n;
-	de_int64 len;
+	i64 offset_2ndheader;
+	i64 pos;
+	i64 n;
+	i64 len;
 
 	de_declare_fmt(c, "Psion OPO/OPA");
 
 	// The second header marks the end of the embedded files section, I guess.
-	offset_2ndheader = de_getui16le(18);
+	offset_2ndheader = de_getu16le(18);
 	de_dbg(c, "offset of second header: %d", (int)offset_2ndheader);
 	pos = 20;
 
 	// Read length of source filename
-	n = (de_int64)de_getbyte(pos);
+	n = (i64)de_getbyte(pos);
 	pos++;
 	pos+=n;
 	while(pos<offset_2ndheader) {
 		// Read length of this embedded file
-		len = de_getui16le(pos);
+		len = de_getu16le(pos);
 		pos+=2;
 		handle_embedded_file(c, d, pos, len);
 		pos+=len;
@@ -87,15 +87,15 @@ static void do_opo_opa(deark *c, lctx *d)
 
 static void do_img_app(deark *c, lctx *d)
 {
-	de_int64 i;
-	de_int64 offset;
-	de_int64 len;
+	i64 i;
+	i64 offset;
+	i64 len;
 
 	de_declare_fmt(c, "Psion IMG/APP");
 
 	for(i=0; i<4; i++) {
-		offset = de_getui16le(40 + 4*i);
-		len = de_getui16le(40 + 4*i + 2);
+		offset = de_getu16le(40 + 4*i);
+		len = de_getu16le(40 + 4*i + 2);
 		if(offset==0) break;
 		handle_embedded_file(c, d, offset, len);
 	}
@@ -103,7 +103,7 @@ static void do_img_app(deark *c, lctx *d)
 
 static void de_run_psionapp(deark *c, de_module_params *mparams)
 {
-	de_byte b;
+	u8 b;
 	const char *s;
 	lctx *d = NULL;
 
@@ -127,7 +127,7 @@ static void de_run_psionapp(deark *c, de_module_params *mparams)
 
 static int de_identify_psionapp(deark *c)
 {
-	de_byte b[16];
+	u8 b[16];
 	de_read(b, 0, 16);
 	if(!de_memcmp(b, "ImageFileType**\0", 16))
 		return 100;

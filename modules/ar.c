@@ -7,35 +7,35 @@
 DE_DECLARE_MODULE(de_module_ar);
 
 typedef struct localctx_struct {
-	de_int64 extended_name_table_pos; // 0=none
-	de_int64 extended_name_table_size;
+	i64 extended_name_table_pos; // 0=none
+	i64 extended_name_table_size;
 } lctx;
 
-static int do_ar_item(deark *c, lctx *d, de_int64 pos1, de_int64 *p_item_len)
+static int do_ar_item(deark *c, lctx *d, i64 pos1, i64 *p_item_len)
 {
 	char name_orig[17];
 	size_t name_orig_len;
 	de_ucstring *rawname_ucstring = NULL;
 	de_ucstring *filename_ucstring = NULL;
 	char timestamp_buf[64];
-	de_int64 mod_time;
-	de_int64 file_mode;
-	de_int64 file_offset;
-	de_int64 file_size = 0;
-	de_int64 name_offset;
+	i64 mod_time;
+	i64 file_mode;
+	i64 file_offset;
+	i64 file_size = 0;
+	i64 name_offset;
 	de_finfo *fi = NULL;
-	de_int64 k;
+	i64 k;
 	int retval = 0;
 	int ret;
-	de_int64 foundpos;
-	de_int64 ext_name_len;
+	i64 foundpos;
+	i64 ext_name_len;
 
 	de_dbg(c, "archive member at %d", (int)pos1);
 	de_dbg_indent(c, 1);
 
 	fi = de_finfo_create(c);
 
-	de_read((de_byte*)name_orig, pos1, 16);
+	de_read((u8*)name_orig, pos1, 16);
 	// Strip trailing spaces
 	name_orig[16] = '\0';
 	for(k=15; k>=0; k--) {
@@ -45,14 +45,14 @@ static int do_ar_item(deark *c, lctx *d, de_int64 pos1, de_int64 *p_item_len)
 	name_orig_len = de_strlen(name_orig);
 
 	rawname_ucstring = ucstring_create(c);
-	ucstring_append_bytes(rawname_ucstring, (const de_byte*)name_orig, name_orig_len, 0, DE_ENCODING_UTF8);
+	ucstring_append_bytes(rawname_ucstring, (const u8*)name_orig, name_orig_len, 0, DE_ENCODING_UTF8);
 
 	de_dbg(c, "member raw name: \"%s\"", ucstring_getpsz(rawname_ucstring));
 
 	(void)dbuf_read_ascii_number(c->infile, pos1+16, 12, 10, &mod_time);
-	de_unix_time_to_timestamp(mod_time, &fi->mod_time);
-	de_timestamp_to_string(&fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 1);
-	de_dbg(c, "mod time: %" INT64_FMT " (%s)", mod_time, timestamp_buf);
+	de_unix_time_to_timestamp(mod_time, &fi->mod_time, 0x1);
+	de_timestamp_to_string(&fi->mod_time, timestamp_buf, sizeof(timestamp_buf), 0);
+	de_dbg(c, "mod time: %" I64_FMT " (%s)", mod_time, timestamp_buf);
 
 	(void)dbuf_read_ascii_number(c->infile, pos1+40, 8, 8, &file_mode);
 	de_dbg(c, "file mode: octal(%06o)", (int)file_mode);
@@ -113,7 +113,7 @@ static int do_ar_item(deark *c, lctx *d, de_int64 pos1, de_int64 *p_item_len)
 
 		de_dbg(c, "extended filename: \"%s\"", ucstring_getpsz(filename_ucstring));
 
-		de_finfo_set_name_from_ucstring(c, fi, filename_ucstring);
+		de_finfo_set_name_from_ucstring(c, fi, filename_ucstring, 0);
 		fi->original_filename_flag = 1;
 	}
 	else if(name_orig[0]=='/') {
@@ -122,7 +122,7 @@ static int do_ar_item(deark *c, lctx *d, de_int64 pos1, de_int64 *p_item_len)
 		goto done;
 	}
 	else {
-		de_int64 adjusted_len;
+		i64 adjusted_len;
 
 		filename_ucstring = ucstring_create(c);
 
@@ -132,11 +132,11 @@ static int do_ar_item(deark *c, lctx *d, de_int64 pos1, de_int64 *p_item_len)
 			// trailing spaces. Strip off the '/'.
 			adjusted_len--;
 		}
-		ucstring_append_bytes(filename_ucstring, (de_byte*)name_orig, adjusted_len,
+		ucstring_append_bytes(filename_ucstring, (u8*)name_orig, adjusted_len,
 			0, DE_ENCODING_UTF8);
 
 		de_dbg(c, "filename: \"%s\"", ucstring_getpsz(filename_ucstring));
-		de_finfo_set_name_from_ucstring(c, fi, filename_ucstring);
+		de_finfo_set_name_from_ucstring(c, fi, filename_ucstring, 0);
 		fi->original_filename_flag = 1;
 	}
 
@@ -156,8 +156,8 @@ done:
 static void de_run_ar(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 item_len;
+	i64 pos;
+	i64 item_len;
 	int ret;
 
 	d = de_malloc(c, sizeof(lctx));

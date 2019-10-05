@@ -49,7 +49,7 @@ static void do_text_chunk(deark *c, struct de_iffctx *ictx, const char *name)
 	ucstring_destroy(s);
 }
 
-static int is_container_chunk(deark *c, lctx *d, de_uint32 ct)
+static int is_container_chunk(deark *c, lctx *d, u32 ct)
 {
 	if(d->fmt==FMT_FOR4) {
 		if(ct==CODE_FOR4 || ct==CODE_LIS4 || ct==CODE_CAT4) return 1;
@@ -83,19 +83,19 @@ done:
 
 static int identify_internal(deark *c, int *confidence)
 {
-	de_byte buf[8];
+	u8 buf[8];
 
 	de_read(buf, 0, sizeof(buf));
 
-	if(!de_memcmp(buf, (const de_byte*)"FORM", 4)) {
+	if(!de_memcmp(buf, (const u8*)"FORM", 4)) {
 		if(confidence) *confidence = 9;
 		return FMT_FORM;
 	}
-	if(!de_memcmp(buf, (const de_byte*)"FOR4", 4)) {
+	if(!de_memcmp(buf, (const u8*)"FOR4", 4)) {
 		if(confidence) *confidence = 25;
 		return FMT_FOR4;
 	}
-	if(!de_memcmp(buf, (const de_byte*)"AT&TFORM", 8)) {
+	if(!de_memcmp(buf, (const u8*)"AT&TFORM", 8)) {
 		if(confidence) *confidence = 100;
 		return FMT_DJVU;
 	}
@@ -109,7 +109,7 @@ static void de_run_iff(deark *c, de_module_params *mparams)
 	lctx *d = NULL;
 	struct de_iffctx *ictx = NULL;
 	const char *s;
-	de_int64 pos;
+	i64 pos;
 
 
 	d = de_malloc(c, sizeof(lctx));
@@ -178,14 +178,14 @@ void de_module_iff(deark *c, struct deark_module_info *mi)
 static void do_midi_MThd(deark *c, struct de_iffctx *ictx,
 	const struct de_iffchunkctx *chunkctx)
 {
-	de_int64 format_field, ntrks_field, division_field;
+	i64 format_field, ntrks_field, division_field;
 
 	if(chunkctx->dlen<6) return;
-	format_field = dbuf_getui16be(ictx->f, chunkctx->dpos);
+	format_field = dbuf_getu16be(ictx->f, chunkctx->dpos);
 	de_dbg(c, "format: %d", (int)format_field);
-	ntrks_field = dbuf_getui16be(ictx->f, chunkctx->dpos+2);
+	ntrks_field = dbuf_getu16be(ictx->f, chunkctx->dpos+2);
 	de_dbg(c, "ntrks: %d", (int)ntrks_field);
-	division_field = dbuf_getui16be(ictx->f, chunkctx->dpos+4);
+	division_field = dbuf_getu16be(ictx->f, chunkctx->dpos+4);
 	de_dbg(c, "division: %d", (int)division_field);
 }
 
@@ -205,7 +205,7 @@ static void de_run_midi(deark *c, de_module_params *mparams)
 	lctx *d = NULL;
 	struct de_iffctx *ictx = NULL;
 
-	de_msg(c, "Note: MIDI files can be parsed, but no files can be extracted from them.");
+	de_info(c, "Note: MIDI files can be parsed, but no files can be extracted from them.");
 	d = de_malloc(c, sizeof(lctx));
 
 	ictx = de_malloc(c, sizeof(struct de_iffctx));

@@ -9,6 +9,7 @@
 #include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_bmp);
 DE_DECLARE_MODULE(de_module_dib);
+DE_DECLARE_MODULE(de_module_ddb);
 
 #define FILEHEADER_SIZE 14
 
@@ -16,7 +17,7 @@ DE_DECLARE_MODULE(de_module_dib);
 #define CODE_MBED 0x4d424544U
 
 struct bitfieldsinfo {
-	de_uint32 mask;
+	u32 mask;
 	unsigned int shift;
 	double scale; // Amount to multiply the sample value by, to scale it to [0..255]
 };
@@ -27,17 +28,18 @@ typedef struct localctx_struct {
 #define DE_BMPVER_WINV345  3 // Windows v3+
 	int version;
 
-	de_int64 fsize; // The "file size" field in the file header
-	de_int64 bits_offset; // The bfOffBits field in the file header
-	de_int64 infohdrsize;
-	de_int64 bitcount;
-	de_uint32 compression_field;
-	de_int64 size_image; // biSizeImage
-	de_int64 width, height;
+	de_finfo *fi;
+	i64 fsize; // The "file size" field in the file header
+	i64 bits_offset; // The bfOffBits field in the file header
+	i64 infohdrsize;
+	i64 bitcount;
+	u32 compression_field;
+	i64 size_image; // biSizeImage
+	i64 width, height;
 	int top_down;
-	de_int64 pal_entries; // Actual number stored in file. 0 means no palette.
-	de_int64 pal_pos;
-	de_int64 bytes_per_pal_entry;
+	i64 pal_entries; // Actual number stored in file. 0 means no palette.
+	i64 pal_pos;
+	i64 bytes_per_pal_entry;
 	int pal_is_grayscale;
 
 #define BF_NONE       0 // Bitfields are not applicable
@@ -45,9 +47,9 @@ typedef struct localctx_struct {
 #define BF_SEGMENT    2 // Use the bitfields segment in the file
 #define BF_IN_HEADER  3 // Use the bitfields fields in the infoheader
 	int bitfields_type;
-	de_int64 bitfields_segment_len; // Used if bitfields_type==BF_SEGMENT
+	i64 bitfields_segment_len; // Used if bitfields_type==BF_SEGMENT
 
-	de_int64 xpelspermeter, ypelspermeter;
+	i64 xpelspermeter, ypelspermeter;
 
 #define CMPR_NONE       0
 #define CMPR_RLE4       11
@@ -59,31 +61,31 @@ typedef struct localctx_struct {
 	int compression_type;
 
 	struct de_fourcc cstype4cc;
-	de_int64 profile_offset_raw;
-	de_int64 profile_offset;
-	de_int64 profile_size;
+	i64 profile_offset_raw;
+	i64 profile_offset;
+	i64 profile_size;
 
-	de_int64 rowspan;
+	i64 rowspan;
 	struct bitfieldsinfo bitfield[4];
-	de_uint32 pal[256];
+	u32 pal[256];
 } lctx;
 
 // Sets d->version, and certain header fields.
 static int detect_bmp_version(deark *c, lctx *d)
 {
-	de_int64 pos;
+	i64 pos;
 
 	pos = 0;
-	d->fsize = de_getui32le(pos+2);
+	d->fsize = de_getu32le(pos+2);
 
 	pos += FILEHEADER_SIZE;
-	d->infohdrsize = de_getui32le(pos);
+	d->infohdrsize = de_getu32le(pos);
 
 	if(d->infohdrsize<=12) {
-		d->bitcount = de_getui16le(pos+10);
+		d->bitcount = de_getu16le(pos+10);
 	}
 	else {
-		d->bitcount = de_getui16le(pos+14);
+		d->bitcount = de_getu16le(pos+14);
 	}
 
 	if(d->infohdrsize==12) {
@@ -95,7 +97,7 @@ static int detect_bmp_version(deark *c, lctx *d)
 	}
 
 	if(d->infohdrsize>=20) {
-		d->compression_field = (de_uint32)de_getui32le(pos+16);
+		d->compression_field = (u32)de_getu32le(pos+16);
 	}
 
 	if(d->infohdrsize>=16 && d->infohdrsize<=64) {
@@ -121,12 +123,12 @@ static int detect_bmp_version(deark *c, lctx *d)
 	return 1;
 }
 
-static int read_fileheader(deark *c, lctx *d, de_int64 pos)
+static int read_fileheader(deark *c, lctx *d, i64 pos)
 {
 	de_dbg(c, "file header at %d", (int)pos);
 	de_dbg_indent(c, 1);
 	de_dbg(c, "bfSize: %d", (int)d->fsize);
-	d->bits_offset = de_getui32le(pos+10);
+	d->bits_offset = de_getu32le(pos+10);
 	de_dbg(c, "bfOffBits: %d", (int)d->bits_offset);
 	de_dbg_indent(c, -1);
 	return 1;
@@ -135,8 +137,8 @@ static int read_fileheader(deark *c, lctx *d, de_int64 pos)
 // Calculate .shift and .scale
 static void update_bitfields_info(deark *c, lctx *d)
 {
-	de_int64 k;
-	de_uint32 tmpmask;
+	i64 k;
+	u32 tmpmask;
 
 	for(k=0; k<4; k++) {
 		tmpmask = d->bitfield[k].mask;
@@ -149,13 +151,13 @@ static void update_bitfields_info(deark *c, lctx *d)
 	}
 }
 
-static void do_read_bitfields(deark *c, lctx *d, de_int64 pos, de_int64 len)
+static void do_read_bitfields(deark *c, lctx *d, i64 pos, i64 len)
 {
-	de_int64 k;
+	i64 k;
 
 	if(len>16) len=16;
 	for(k=0; 4*k<len; k++) {
-		d->bitfield[k].mask = (de_uint32)de_getui32le(pos+4*k);
+		d->bitfield[k].mask = (u32)de_getu32le(pos+4*k);
 		de_dbg(c, "mask[%d]: 0x%08x", (int)k, (unsigned int)d->bitfield[k].mask);
 	}
 	update_bitfields_info(c, d);
@@ -199,22 +201,22 @@ static void get_cstype_descr_dbgstr(struct de_fourcc *cstype4cc, char *s_dbgstr,
 // de_fmtutil_get_bmpinfo() library function. The BMP module's needs are
 // not quite aligned with what that function is intended for, and it
 // would be too messy to try to add the necessary features to it.
-static int read_infoheader(deark *c, lctx *d, de_int64 pos)
+static int read_infoheader(deark *c, lctx *d, i64 pos)
 {
-	de_int64 height_raw;
-	de_int64 clr_used_raw;
+	i64 height_raw;
+	i64 clr_used_raw;
 	int cmpr_ok;
 	int retval = 0;
-	de_int64 nplanes;
+	i64 nplanes;
 
 	de_dbg(c, "info header at %d", (int)pos);
 	de_dbg_indent(c, 1);
 	de_dbg(c, "info header size: %d", (int)d->infohdrsize);
 
 	if(d->version==DE_BMPVER_OS2V1) {
-		d->width = de_getui16le(pos+4);
-		d->height = de_getui16le(pos+6);
-		nplanes = de_getui16le(pos+8);
+		d->width = de_getu16le(pos+4);
+		d->height = de_getu16le(pos+6);
+		nplanes = de_getu16le(pos+8);
 	}
 	else {
 		d->width = de_geti32le(pos+4);
@@ -226,7 +228,7 @@ static int read_infoheader(deark *c, lctx *d, de_int64 pos)
 		else {
 			d->height = height_raw;
 		}
-		nplanes = de_getui16le(pos+12);
+		nplanes = de_getu16le(pos+12);
 	}
 	de_dbg_dimensions(c, d->width, d->height);
 	if(!de_good_image_dimensions(c, d->width, d->height)) {
@@ -335,7 +337,7 @@ static int read_infoheader(deark *c, lctx *d, de_int64 pos)
 	}
 
 	if(d->infohdrsize>=24) {
-		d->size_image = de_getui32le(pos+20);
+		d->size_image = de_getu32le(pos+20);
 		de_dbg(c, "biSizeImage: %d", (int)d->size_image);
 	}
 
@@ -343,15 +345,20 @@ static int read_infoheader(deark *c, lctx *d, de_int64 pos)
 		d->xpelspermeter = de_geti32le(pos+24);
 		d->ypelspermeter = de_geti32le(pos+28);
 		de_dbg(c, "density: %d"DE_CHAR_TIMES"%d pixels/meter", (int)d->xpelspermeter, (int)d->ypelspermeter);
+		if(d->xpelspermeter>0 && d->ypelspermeter>0) {
+			d->fi->density.code = DE_DENSITY_DPI;
+			d->fi->density.xdens = (double)d->xpelspermeter * 0.0254;
+			d->fi->density.ydens = (double)d->ypelspermeter * 0.0254;
+		}
 	}
 
 	if(d->infohdrsize>=36)
-		clr_used_raw = de_getui32le(pos+32);
+		clr_used_raw = de_getu32le(pos+32);
 	else
 		clr_used_raw = 0;
 
 	if(d->bitcount>=1 && d->bitcount<=8 && clr_used_raw==0) {
-		d->pal_entries = ((de_int64)1)<<d->bitcount;
+		d->pal_entries = ((i64)1)<<d->bitcount;
 	}
 	else {
 		d->pal_entries = clr_used_raw;
@@ -377,18 +384,18 @@ static int read_infoheader(deark *c, lctx *d, de_int64 pos)
 	}
 
 	if(d->version==DE_BMPVER_WINV345 && d->infohdrsize>=124) {
-		de_uint32 intent;
-		intent = (de_uint32)de_getui32le(pos+108);
+		u32 intent;
+		intent = (u32)de_getu32le(pos+108);
 		de_dbg(c, "intent: %u", (unsigned int)intent);
 	}
 
 	if(d->version==DE_BMPVER_WINV345 && d->infohdrsize>=124 &&
 		(d->cstype4cc.id==CODE_MBED || d->cstype4cc.id==CODE_LINK))
 	{
-		d->profile_offset_raw = de_getui32le(pos+112);
+		d->profile_offset_raw = de_getu32le(pos+112);
 		de_dbg(c, "profile offset: %d+%d", FILEHEADER_SIZE,
 			(int)d->profile_offset_raw);
-		d->profile_size = de_getui32le(pos+116);
+		d->profile_size = de_getu32le(pos+116);
 		de_dbg(c, "profile size: %d", (int)d->profile_size);
 	}
 
@@ -442,9 +449,9 @@ static void do_read_profile(deark *c, lctx *d)
 // Try to detect them.
 static void do_os2v2_bad_palette(deark *c, lctx *d)
 {
-	de_int64 pal_space_avail;
-	de_int64 pal_bytes_if_3bpc;
-	de_int64 pal_bytes_if_4bpc;
+	i64 pal_space_avail;
+	i64 pal_bytes_if_3bpc;
+	i64 pal_bytes_if_4bpc;
 	int nonzero_rsvd;
 	int i;
 
@@ -474,7 +481,7 @@ static void do_os2v2_bad_palette(deark *c, lctx *d)
 
 static void do_read_palette(deark *c, lctx *d)
 {
-	de_int64 pal_size_in_bytes;
+	i64 pal_size_in_bytes;
 
 	if(d->pal_entries<1) return;
 
@@ -504,30 +511,25 @@ static de_bitmap *bmp_bitmap_create(deark *c, lctx *d, int bypp)
 
 	img = de_bitmap_create(c, d->width, d->height, bypp);
 	img->flipped = !d->top_down;
-	if(d->xpelspermeter>0 && d->ypelspermeter>0) {
-		img->density_code = DE_DENSITY_DPI;
-		img->xdens = (double)d->xpelspermeter * 0.0254;
-		img->ydens = (double)d->ypelspermeter * 0.0254;
-	}
 	return img;
 }
 
-static void do_image_paletted(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset)
+static void do_image_paletted(deark *c, lctx *d, dbuf *bits, i64 bits_offset)
 {
 	de_bitmap *img = NULL;
 
 	img = bmp_bitmap_create(c, d, d->pal_is_grayscale?1:3);
 	de_convert_image_paletted(bits, bits_offset,
 		d->bitcount, d->rowspan, d->pal, img, 0);
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, d->fi, 0);
 	de_bitmap_destroy(img);
 }
 
-static void do_image_24bit(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset)
+static void do_image_24bit(deark *c, lctx *d, dbuf *bits, i64 bits_offset)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_uint32 clr;
+	i64 i, j;
+	u32 clr;
 
 	img = bmp_bitmap_create(c, d, 3);
 	for(j=0; j<d->height; j++) {
@@ -536,18 +538,18 @@ static void do_image_24bit(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset)
 			de_bitmap_setpixel_rgb(img, i, j, clr);
 		}
 	}
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, d->fi, 0);
 	de_bitmap_destroy(img);
 }
 
-static void do_image_16_32bit(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset)
+static void do_image_16_32bit(deark *c, lctx *d, dbuf *bits, i64 bits_offset)
 {
 	de_bitmap *img = NULL;
-	de_int64 i, j;
+	i64 i, j;
 	int has_transparency;
-	de_uint32 v;
-	de_int64 k;
-	de_byte sm[4];
+	u32 v;
+	i64 k;
+	u8 sm[4];
 
 	if(d->bitfields_type==BF_SEGMENT) {
 		has_transparency = (d->bitfields_segment_len>=16 && d->bitfield[3].mask!=0);
@@ -563,15 +565,15 @@ static void do_image_16_32bit(deark *c, lctx *d, dbuf *bits, de_int64 bits_offse
 	for(j=0; j<d->height; j++) {
 		for(i=0; i<d->width; i++) {
 			if(d->bitcount==16) {
-				v = (de_uint32)dbuf_getui16le(bits, bits_offset + j*d->rowspan + 2*i);
+				v = (u32)dbuf_getu16le(bits, bits_offset + j*d->rowspan + 2*i);
 			}
 			else {
-				v = (de_uint32)dbuf_getui32le(bits, bits_offset + j*d->rowspan + 4*i);
+				v = (u32)dbuf_getu32le(bits, bits_offset + j*d->rowspan + 4*i);
 			}
 
 			for(k=0; k<4; k++) {
 				if(d->bitfield[k].mask!=0) {
-					sm[k] = (de_byte)(0.5 + d->bitfield[k].scale * (double)((v&d->bitfield[k].mask) >> d->bitfield[k].shift));
+					sm[k] = (u8)(0.5 + d->bitfield[k].scale * (double)((v&d->bitfield[k].mask) >> d->bitfield[k].shift));
 				}
 				else {
 					if(k==3)
@@ -583,22 +585,22 @@ static void do_image_16_32bit(deark *c, lctx *d, dbuf *bits, de_int64 bits_offse
 			de_bitmap_setpixel_rgba(img, i, j, DE_MAKE_RGBA(sm[0], sm[1], sm[2], sm[3]));
 		}
 	}
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, d->fi, 0);
 	de_bitmap_destroy(img);
 }
 
-static void do_image_rle_4_8_24(deark *c, lctx *d, dbuf *bits, de_int64 bits_offset)
+static void do_image_rle_4_8_24(deark *c, lctx *d, dbuf *bits, i64 bits_offset)
 {
-	de_int64 pos;
-	de_int64 xpos, ypos;
-	de_byte b1, b2;
-	de_byte b;
-	de_byte cr, cg, cb;
+	i64 pos;
+	i64 xpos, ypos;
+	u8 b1, b2;
+	u8 b;
+	u8 cr, cg, cb;
 	de_bitmap *img = NULL;
-	de_uint32 clr1, clr2;
-	de_int64 num_bytes;
-	de_int64 num_pixels;
-	de_int64 k;
+	u32 clr1, clr2;
+	i64 num_bytes;
+	i64 num_pixels;
+	i64 k;
 	int bypp;
 
 	if(d->pal_is_grayscale && d->compression_type!=CMPR_RLE24) {
@@ -634,14 +636,14 @@ static void do_image_rle_4_8_24(deark *c, lctx *d, dbuf *bits, de_int64 bits_off
 		}
 		else if(b1==0 && b2==2) { // Delta
 			b = dbuf_getbyte(bits, pos++);
-			xpos += (de_int64)b;
+			xpos += (i64)b;
 			b = dbuf_getbyte(bits, pos++);
-			ypos += (de_int64)b;
+			ypos += (i64)b;
 		}
 		else if(b1==0) { // b2 uncompressed pixels follow
-			num_pixels = (de_int64)b2;
+			num_pixels = (i64)b2;
 			if(d->compression_type==CMPR_RLE4) {
-				de_int64 pixels_copied = 0;
+				i64 pixels_copied = 0;
 				// There are 4 bits per pixel, but padded to a multiple of 16 bits.
 				num_bytes = ((num_pixels+3)/4)*2;
 				for(k=0; k<num_bytes; k++) {
@@ -680,7 +682,7 @@ static void do_image_rle_4_8_24(deark *c, lctx *d, dbuf *bits, de_int64 bits_off
 			}
 		}
 		else { // Compressed pixels
-			num_pixels = (de_int64)b1;
+			num_pixels = (i64)b1;
 			if(d->compression_type==CMPR_RLE4) {
 				// b1 pixels alternating between the colors in b2
 				clr1 = d->pal[((unsigned int)b2)>>4];
@@ -708,13 +710,13 @@ static void do_image_rle_4_8_24(deark *c, lctx *d, dbuf *bits, de_int64 bits_off
 		}
 	}
 
-	de_bitmap_write_to_file(img, NULL, DE_CREATEFLAG_OPT_IMAGE);
+	de_bitmap_write_to_file_finfo(img, d->fi, DE_CREATEFLAG_OPT_IMAGE);
 	de_bitmap_destroy(img);
 }
 
 static void extract_embedded_image(deark *c, lctx *d, const char *ext)
 {
-	de_int64 nbytes;
+	i64 nbytes;
 
 	nbytes = d->size_image;
 
@@ -772,9 +774,10 @@ done:
 static void de_run_bmp(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
+	i64 pos;
 
 	d = de_malloc(c, sizeof(lctx));
+	d->fi = de_finfo_create(c);
 
 	if(dbuf_memcmp(c->infile, 0, "BM", 2)) {
 		de_err(c, "Not a BMP file.");
@@ -828,17 +831,20 @@ static void de_run_bmp(deark *c, de_module_params *mparams)
 	do_read_profile(c, d);
 
 done:
-	de_free(c, d);
+	if(d) {
+		de_finfo_destroy(c, d->fi);
+		de_free(c, d);
+	}
 }
 
 // Note that this function must work together with de_identify_vbm().
 static int de_identify_bmp(deark *c)
 {
-	de_int64 fsize;
-	de_int64 bits_offset;
-	de_int64 infohdrsize;
+	i64 fsize;
+	i64 bits_offset;
+	i64 infohdrsize;
 	int bmp_ext;
-	de_byte buf[6];
+	u8 buf[6];
 
 	de_read(buf, 0, sizeof(buf));
 	if(de_memcmp(buf, "BM", 2)) {
@@ -846,9 +852,9 @@ static int de_identify_bmp(deark *c)
 	}
 
 	bmp_ext = de_input_file_has_ext(c, "bmp");
-	fsize = de_getui32le_direct(&buf[2]);
-	bits_offset = de_getui32le(10);
-	infohdrsize = de_getui32le(14);
+	fsize = de_getu32le_direct(&buf[2]);
+	bits_offset = de_getu32le(10);
+	infohdrsize = de_getu32le(14);
 
 	if(infohdrsize<12) return 0;
 	if(infohdrsize>256) return 0;
@@ -892,7 +898,7 @@ static void de_run_dib(deark *c, de_module_params *mparams)
 		goto done;
 	}
 
-	if(mparams && mparams->in_params.codes && de_strchr(mparams->in_params.codes, 'X')) {
+	if(de_havemodcode(c, mparams, 'X')) {
 		createflags |= DE_CREATEFLAG_IS_AUX;
 	}
 
@@ -910,13 +916,13 @@ done:
 
 static int de_identify_dib(deark *c)
 {
-	de_int64 n;
+	i64 n;
 
-	n = de_getui32le(0); // biSize
+	n = de_getu32le(0); // biSize
 	if(n!=40) return 0;
-	n = de_getui16le(12); // biPlanes
+	n = de_getu16le(12); // biPlanes
 	if(n!=1) return 0;
-	n = de_getui16le(14); // biBitCount
+	n = de_getu16le(14); // biBitCount
 	if(n==1 || n==4 || n==8 || n==16 || n==24 || n==32) return 15;
 	return 0;
 }
@@ -929,4 +935,196 @@ void de_module_dib(deark *c, struct deark_module_info *mi)
 	mi->desc = "DIB (raw Windows bitmap)";
 	mi->run_fn = de_run_dib;
 	mi->identify_fn = de_identify_dib;
+}
+
+// **************************************************************************
+// DDB / "BMP v1"
+// **************************************************************************
+
+struct ddbctx_struct {
+	i64 bmWidthBytes;
+	de_finfo *fi;
+};
+
+static void ddb_convert_pal4planar(deark *c, struct ddbctx_struct *d,
+	i64 fpos, de_bitmap *img)
+{
+	const i64 nplanes = 4;
+	i64 i, j, plane;
+	i64 rowspan;
+	u8 *rowbuf = NULL;
+	static const u32 pal16[16] = {
+		0x000000,0x800000,0x008000,0x808000,0x000080,0x800080,0x008080,0x808080,
+		0xc0c0c0,0xff0000,0x00ff00,0xffff00,0x0000ff,0xff00ff,0x00ffff,0xffffff
+	};
+
+	rowspan = d->bmWidthBytes * nplanes;
+	rowbuf = de_malloc(c, rowspan);
+
+	// The usual order seems to be
+	//  row0_plane0x1, row0_plane0x2, row0_plane0x4, row0_plane0x8,
+	//  row1_plane0x1, row1_plane0x2, row1_plane0x4, row1_plane0x8,
+	//  ...
+	// But I have seen another, and I see no way to detect/support it.
+
+	for(j=0; j<img->height; j++) {
+		de_read(rowbuf, fpos+j*rowspan, rowspan);
+
+		for(i=0; i<img->width; i++) {
+			unsigned int palent = 0;
+			u32 clr;
+
+			for(plane=0; plane<nplanes; plane++) {
+				unsigned int n = 0;
+				i64 idx;
+
+				idx = d->bmWidthBytes*plane + i/8;
+				if(idx<rowspan) n = rowbuf[idx];
+				if(n & (1<<(7-i%8))) {
+					palent |= (1<<plane);
+				}
+			}
+
+			clr = DE_MAKE_OPAQUE(pal16[palent]);
+			de_bitmap_setpixel_rgb(img, i, j, clr);
+		}
+	}
+
+	de_free(c, rowbuf);
+}
+
+static void ddb_convert_pal8(deark *c, struct ddbctx_struct *d,
+	i64 fpos, de_bitmap *img)
+{
+	i64 i, j;
+	int badcolorflag = 0;
+	// Palette is from libwps (except I might have red/blue swapped it).
+	// I haven't confirmed that it's correct.
+	static const u32 pal_part1[8] = {
+		0x000000,0x800000,0x008000,0x808000,0x000080,0x800080,0x008080,0xc0c0c0
+	};
+	static const u32 pal_part2[8] = {
+		0x808080,0xff0000,0x00ff00,0xffff00,0x0000ff,0xff00ff,0x00ffff,0xffffff
+	};
+
+	for(j=0; j<img->height; j++) {
+		for(i=0; i<img->width; i++) {
+			unsigned int palent;
+			u32 clr;
+
+			palent = de_getbyte(fpos+j*d->bmWidthBytes+i);
+			if(palent<8) {
+				clr = pal_part1[palent];
+			}
+			else if(palent>=248) {
+				clr = pal_part2[palent-248];
+			}
+			else {
+				clr = DE_MAKE_RGB(254,palent,254); // Just an arbitrary color
+				badcolorflag = 1;
+			}
+			de_bitmap_setpixel_rgb(img, i, j, clr);
+		}
+	}
+	if(badcolorflag) {
+		de_warn(c, "Image uses nonportable colors");
+	}
+}
+
+static void do_ddb_bitmap(deark *c, struct ddbctx_struct *d, i64 pos1)
+{
+	i64 pos = pos1;
+	unsigned int bmType;
+	i64 bmWidth, bmHeight;
+	i64 bmPlanes;
+	i64 bmBitsPixel;
+	i64 src_realbitsperpixel;
+	de_bitmap *img = NULL;
+
+	bmType = (unsigned int)de_getu16le_p(&pos);
+	de_dbg(c, "bmType: %u", bmType);
+
+	bmWidth = de_getu16le_p(&pos);
+	bmHeight = de_getu16le_p(&pos);
+	de_dbg_dimensions(c, bmWidth, bmHeight);
+
+	d->bmWidthBytes = de_getu16le_p(&pos);
+	de_dbg(c, "bytes/row: %d", (int)d->bmWidthBytes);
+
+	bmPlanes = (i64)de_getbyte_p(&pos);
+	de_dbg(c, "planes: %d", (int)bmPlanes);
+
+	bmBitsPixel = (i64)de_getbyte_p(&pos);
+	de_dbg(c, "bmBitsPixel: %d", (int)bmBitsPixel);
+
+	pos += 4; // Placeholder for a pointer?
+
+	if((bmBitsPixel==1 && bmPlanes==1) ||
+		(bmBitsPixel==1 && bmPlanes==4) ||
+		(bmBitsPixel==8 && bmPlanes==1))
+	{
+		;
+	}
+	else {
+		de_err(c, "This type of DDB bitmap is not supported "
+			"(bmBitsPixel=%d, planes=%d)", (int)bmBitsPixel, (int)bmPlanes);
+		goto done;
+	}
+
+	de_dbg(c, "pixels at %"I64_FMT, pos);
+
+	src_realbitsperpixel = bmBitsPixel * bmPlanes;
+	if(!de_good_image_dimensions(c, bmWidth, bmHeight)) goto done;
+	img = de_bitmap_create(c, bmWidth, bmHeight, (src_realbitsperpixel==1)?1:3);
+
+	if(bmBitsPixel==1 && bmPlanes==1) {
+		de_convert_image_bilevel(c->infile, pos, d->bmWidthBytes, img, 0);
+	}
+	else if(bmBitsPixel==1 || bmPlanes==4) {
+		ddb_convert_pal4planar(c, d, pos, img);
+	}
+	else if(bmBitsPixel==8 || bmPlanes==1) {
+		ddb_convert_pal8(c, d, pos, img);
+	}
+
+	de_bitmap_write_to_file_finfo(img, d->fi, 0);
+
+done:
+	de_bitmap_destroy(img);
+}
+
+
+static void de_run_ddb(deark *c, de_module_params *mparams)
+{
+	int has_filetype = 1;
+	struct ddbctx_struct *d = NULL;
+	i64 pos = 0;
+
+	d = de_malloc(c, sizeof(struct ddbctx_struct));
+
+	if(de_havemodcode(c, mparams, 'N')) {
+		has_filetype = 0;
+	}
+	if(mparams && mparams->in_params.fi) {
+		d->fi = mparams->in_params.fi;
+	}
+
+	if(has_filetype) {
+		unsigned int file_type;
+		file_type = (unsigned int)de_getu16le_p(&pos);
+		de_dbg(c, "file type: 0x%04x", file_type);
+	}
+
+	do_ddb_bitmap(c, d, pos);
+
+	de_free(c, d);
+}
+
+void de_module_ddb(deark *c, struct deark_module_info *mi)
+{
+	mi->id = "ddb";
+	mi->desc = "Windows DDB bitmap";
+	mi->run_fn = de_run_ddb;
+	mi->identify_fn = NULL;
+	mi->flags |= DE_MODFLAG_HIDDEN;
 }

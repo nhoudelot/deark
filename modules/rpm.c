@@ -23,7 +23,7 @@ DE_DECLARE_MODULE(de_module_rpm);
 #define DE_RPM_CMPR_XZ      4
 
 typedef struct localctx_struct {
-	de_byte ver_major, ver_minor;
+	u8 ver_major, ver_minor;
 	int cmpr_type;
 
 	struct de_stringreaderdata *name_srd;
@@ -52,9 +52,9 @@ done:
 	return retval;
 }
 
-static void read_compression_type(deark *c, lctx *d, de_int64 pos)
+static void read_compression_type(deark *c, lctx *d, i64 pos)
 {
-	de_byte buf[16];
+	u8 buf[16];
 
 	de_dbg(c, "compression type at %d", (int)pos);
 
@@ -69,17 +69,17 @@ static void read_compression_type(deark *c, lctx *d, de_int64 pos)
 
 // Note that a header *structure* is distinct from the header *section*.
 // Both the signature section and the header section use a header structure.
-static int do_header_structure(deark *c, lctx *d, int is_sig, de_int64 pos1,
-	de_int64 *section_size)
+static int do_header_structure(deark *c, lctx *d, int is_sig, i64 pos1,
+	i64 *section_size)
 {
-	de_int64 pos;
-	de_int64 indexcount;
-	de_int64 storesize;
-	de_byte buf[4];
-	de_byte header_ver;
-	de_int64 i;
-	de_int64 tag_id, tag_type, tag_offset, tag_count;
-	de_int64 data_store_pos;
+	i64 pos;
+	i64 indexcount;
+	i64 storesize;
+	u8 buf[4];
+	u8 header_ver;
+	i64 i;
+	i64 tag_id, tag_type, tag_offset, tag_count;
+	i64 data_store_pos;
 	const char *hdrname;
 	int retval = 0;
 
@@ -100,8 +100,8 @@ static int do_header_structure(deark *c, lctx *d, int is_sig, de_int64 pos1,
 	}
 	pos += 8;
 
-	indexcount = de_getui32be(pos);
-	storesize = de_getui32be(pos+4);
+	indexcount = de_getu32be(pos);
+	storesize = de_getu32be(pos+4);
 	de_dbg(c, "%s: pos=%d indexcount=%d storesize=%d", hdrname,
 		(int)pos, (int)indexcount, (int)storesize);
 	pos += 8;
@@ -114,10 +114,10 @@ static int do_header_structure(deark *c, lctx *d, int is_sig, de_int64 pos1,
 	de_dbg_indent(c, 1);
 
 	for(i=0; i<indexcount; i++) {
-		tag_id = de_getui32be(pos);
-		tag_type = de_getui32be(pos+4);
-		tag_offset = de_getui32be(pos+8);
-		tag_count = de_getui32be(pos+12);
+		tag_id = de_getu32be(pos);
+		tag_type = de_getu32be(pos+4);
+		tag_offset = de_getu32be(pos+8);
+		tag_count = de_getu32be(pos+12);
 
 		de_dbg2(c, "tag #%d type=%d offset=%d count=%d", (int)tag_id,
 			(int)tag_type, (int)tag_offset, (int)tag_count);
@@ -170,10 +170,10 @@ done:
 static void de_run_rpm(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_byte buf[8];
+	i64 pos;
+	u8 buf[8];
 	const char *ext;
-	de_int64 section_size = 0;
+	i64 section_size = 0;
 	de_finfo *fi = NULL;
 	char filename[128];
 
@@ -233,13 +233,13 @@ static void de_run_rpm(deark *c, de_module_params *mparams)
 		const char *version2 = "x";
 		const char *release2 = "x";
 
-		if(d->version_srd) version2 = (const char*)d->version_srd->sz;
-		if(d->release_srd) release2 = (const char*)d->release_srd->sz;
+		if(d->version_srd) version2 = d->version_srd->sz;
+		if(d->release_srd) release2 = d->release_srd->sz;
 
 		fi = de_finfo_create(c);
 		de_snprintf(filename, sizeof(filename), "%s-%s.%s",
 			d->name_srd->sz, version2, release2);
-		de_finfo_set_name_from_sz(c, fi, filename, DE_ENCODING_ASCII);
+		de_finfo_set_name_from_sz(c, fi, filename, 0, DE_ENCODING_ASCII);
 	}
 
 	dbuf_create_file_from_slice(c->infile, pos, c->infile->len - pos, ext, fi, 0);

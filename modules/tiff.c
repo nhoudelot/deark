@@ -41,6 +41,7 @@ DE_DECLARE_MODULE(de_module_tiff);
 #define DE_TIFFFMT_JPEGXR     7 // JPEG XR
 #define DE_TIFFFMT_MPEXT      8 // "MP Extension" data from MPF format
 #define DE_TIFFFMT_NIKONMN    9 // Nikon MakerNote
+#define DE_TIFFFMT_APPLEMN    10 // Apple iOS MakerNote
 
 #define IFDTYPE_NORMAL       0
 #define IFDTYPE_SUBIFD       1
@@ -48,7 +49,9 @@ DE_DECLARE_MODULE(de_module_tiff);
 #define IFDTYPE_EXIFINTEROP  3
 #define IFDTYPE_GPS          4
 #define IFDTYPE_GLOBALPARAMS 5 // TIFF-FX
-#define IFDTYPE_NIKONPREVIEW 6
+#define IFDTYPE_NIKONMN      6 // First IFD of a Nikon MakerNote
+#define IFDTYPE_NIKONPREVIEW 7
+#define IFDTYPE_APPLEMN      8
 
 struct localctx_struct;
 typedef struct localctx_struct lctx;
@@ -56,7 +59,7 @@ struct taginfo;
 struct tagnuminfo;
 
 struct ifdstack_item {
-	de_int64 offset;
+	i64 offset;
 	int ifdtype;
 };
 
@@ -66,8 +69,8 @@ typedef void (*handler_fn_type)(deark *c, lctx *d, const struct taginfo *tg,
 struct valdec_params {
 	lctx *d;
 	const struct taginfo *tg;
-	de_int64 idx;
-	de_int64 n;
+	i64 idx;
+	i64 n;
 };
 struct valdec_result {
 	// Value decoders will be called with a valid, empty ucstring 's'.
@@ -80,6 +83,7 @@ struct tagnuminfo {
 	int tagnum;
 
 	// 0x0001=NOT valid in normal TIFF files/IFDs
+	// 0x0004=multi-string ASCII type expected
 	// 0x08=suppress auto display of values
 	// 0x10=this is an Exif tag
 	// 0x20=an Exif Interoperability-IFD tag
@@ -90,6 +94,7 @@ struct tagnuminfo {
 	// 0x0400=tags valid in JPEG XR files (from the spec, and jxrlib)
 	// 0x0800=tags for Multi-Picture Format (.MPO) extensions
 	// 0x1000=tags for Nikon MakerNote
+	// 0x2000=tags for Apple iOS MakerNote
 	unsigned int flags;
 
 	const char *tagname;
@@ -98,12 +103,12 @@ struct tagnuminfo {
 };
 
 struct page_ctx {
-	de_int64 ifd_idx;
-	de_int64 ifdpos;
+	i64 ifd_idx;
+	i64 ifdpos;
 	int ifdtype;
-	de_uint32 orientation;
-	de_uint32 ycbcrpositioning;
-	de_int64 imagewidth, imagelength; // Raw tag values, before considering Orientation
+	u32 orientation;
+	u32 ycbcrpositioning;
+	i64 imagewidth, imagelength; // Raw tag values, before considering Orientation
 };
 
 // Data associated with an actual tag in an IFD in the file
@@ -111,10 +116,10 @@ struct taginfo {
 	int tagnum;
 	int datatype;
 	int tag_known;
-	de_int64 valcount;
-	de_int64 val_offset;
-	de_int64 unit_size;
-	de_int64 total_size;
+	i64 valcount;
+	i64 val_offset;
+	i64 unit_size;
+	i64 total_size;
 	// Might be more logical for us to have a separate struct for page_ctx, but
 	// I don't want to add a param to every "handler" function
 	struct page_ctx *pg;
@@ -127,12 +132,13 @@ struct localctx_struct {
 	int is_exif_submodule;
 	int host_is_le;
 	int can_decode_fltpt;
+	u8 is_deark_iptc, is_deark_8bim;
 	const char *errmsgprefix;
 
-	de_uint32 first_ifd_orientation; // Valid if != 0
-	de_uint32 exif_version_as_uint32; // Valid if != 0
-	de_byte has_exif_gps;
-	de_byte first_ifd_cosited;
+	u32 first_ifd_orientation; // Valid if != 0
+	u32 exif_version_as_uint32; // Valid if != 0
+	u8 has_exif_gps;
+	u8 first_ifd_cosited;
 
 	struct ifdstack_item *ifdstack;
 	int ifdstack_capacity;
@@ -140,16 +146,15 @@ struct localctx_struct {
 	int current_textfield_encoding;
 
 	struct de_inthashtable *ifds_seen;
-	de_int64 ifd_count; // Number of IFDs that we currently know of
+	i64 ifd_count; // Number of IFDs that we currently know of
 
-	de_int64 ifdhdrsize;
-	de_int64 ifditemsize;
-	de_int64 offsetoffset;
-	de_int64 offsetsize; // Number of bytes in a file offset
+	i64 ifdhdrsize;
+	i64 ifditemsize;
+	i64 offsetoffset;
+	i64 offsetsize; // Number of bytes in a file offset
 
 	const struct de_module_in_params *in_params;
 
-	de_int64 mpf_min_file_size;
 	unsigned int mpf_main_image_count;
 };
 
@@ -192,9 +197,9 @@ static void detiff_warn(deark *c, lctx *d, const char *fmt, ...)
 }
 
 // Returns 0 if stack is empty.
-static de_int64 pop_ifd(deark *c, lctx *d, int *ifdtype)
+static i64 pop_ifd(deark *c, lctx *d, int *ifdtype)
 {
-	de_int64 ifdpos;
+	i64 ifdpos;
 	if(!d->ifdstack) return 0;
 	if(d->ifdstack_numused<1) return 0;
 	ifdpos = d->ifdstack[d->ifdstack_numused-1].offset;
@@ -203,7 +208,7 @@ static de_int64 pop_ifd(deark *c, lctx *d, int *ifdtype)
 	return ifdpos;
 }
 
-static void push_ifd(deark *c, lctx *d, de_int64 ifdpos, int ifdtype)
+static void push_ifd(deark *c, lctx *d, i64 ifdpos, int ifdtype)
 {
 	if(ifdpos==0) return;
 
@@ -224,7 +229,7 @@ static void push_ifd(deark *c, lctx *d, de_int64 ifdpos, int ifdtype)
 	// Add to the IFD stack (of unprocessed IFDs).
 	if(!d->ifdstack) {
 		d->ifdstack_capacity = 200;
-		d->ifdstack = de_malloc(c, d->ifdstack_capacity * sizeof(struct ifdstack_item));
+		d->ifdstack = de_mallocarray(c, d->ifdstack_capacity, sizeof(struct ifdstack_item));
 		d->ifdstack_numused = 0;
 	}
 	if(d->ifdstack_numused >= d->ifdstack_capacity) {
@@ -258,21 +263,21 @@ static int size_of_data_type(int tt)
 	return 0;
 }
 
-static int read_rational_as_double(deark *c, lctx *d, de_int64 pos, double *n)
+static int read_rational_as_double(deark *c, lctx *d, i64 pos, double *n)
 {
-	de_int64 num, den;
+	i64 num, den;
 
 	*n = 0.0;
-	num = dbuf_getui32x(c->infile, pos, d->is_le);
-	den = dbuf_getui32x(c->infile, pos+4, d->is_le);
+	num = dbuf_getu32x(c->infile, pos, d->is_le);
+	den = dbuf_getu32x(c->infile, pos+4, d->is_le);
 	if(den==0) return 0;
 	*n = (double)num/(double)den;
 	return 1;
 }
 
-static int read_srational_as_double(deark *c, lctx *d, de_int64 pos, double *n)
+static int read_srational_as_double(deark *c, lctx *d, i64 pos, double *n)
 {
-	de_int64 num, den;
+	i64 num, den;
 
 	*n = 0.0;
 	num = dbuf_geti32x(c->infile, pos, d->is_le);
@@ -285,9 +290,9 @@ static int read_srational_as_double(deark *c, lctx *d, de_int64 pos, double *n)
 // FIXME: This function seems superfluous.
 // It should somehow be consolidated with read_numeric_value().
 static int read_tag_value_as_double(deark *c, lctx *d, const struct taginfo *tg,
-	de_int64 value_index, double *n)
+	i64 value_index, double *n)
 {
-	de_int64 offs;
+	i64 offs;
 
 	*n = 0.0;
 	if(value_index<0 || value_index>=tg->valcount) return 0;
@@ -313,10 +318,10 @@ static int read_tag_value_as_double(deark *c, lctx *d, const struct taginfo *tg,
 }
 
 static int read_tag_value_as_int64(deark *c, lctx *d, const struct taginfo *tg,
-	de_int64 value_index, de_int64 *n)
+	i64 value_index, i64 *n)
 {
 	double v_dbl;
-	de_int64 offs;
+	i64 offs;
 
 	*n = 0;
 	if(value_index<0 || value_index>=tg->valcount) return 0;
@@ -324,21 +329,21 @@ static int read_tag_value_as_int64(deark *c, lctx *d, const struct taginfo *tg,
 
 	switch(tg->datatype) {
 	case DATATYPE_UINT16:
-		*n = dbuf_getui16x(c->infile, offs, d->is_le);
+		*n = dbuf_getu16x(c->infile, offs, d->is_le);
 		return 1;
 	case DATATYPE_UINT32:
 	case DATATYPE_IFD32:
-		*n = dbuf_getui32x(c->infile, offs, d->is_le);
+		*n = dbuf_getu32x(c->infile, offs, d->is_le);
 		return 1;
 	case DATATYPE_BYTE:
 	case DATATYPE_UNDEF:
 	case DATATYPE_ASCII:
-		*n = (de_int64)de_getbyte(offs);
+		*n = (i64)de_getbyte(offs);
 		return 1;
 	case DATATYPE_UINT64:
 	case DATATYPE_IFD64:
 		// TODO: Somehow support unsigned 64-bit ints that don't fit into
-		// a de_int64?
+		// a i64?
 		*n = dbuf_geti64x(c->infile, offs, d->is_le);
 		if(*n < 0) return 0;
 		return 1;
@@ -352,15 +357,14 @@ static int read_tag_value_as_int64(deark *c, lctx *d, const struct taginfo *tg,
 		*n = dbuf_geti64x(c->infile, offs, d->is_le);
 		return 1;
 	case DATATYPE_SBYTE:
-		*n = (de_int64)de_getbyte(offs);
-		if(*n > 127) *n -= 256;
+		*n = dbuf_geti8(c->infile, offs);
 		return 1;
 	case DATATYPE_RATIONAL:
 	case DATATYPE_SRATIONAL:
 	case DATATYPE_FLOAT32:
 	case DATATYPE_FLOAT64:
 		if(read_tag_value_as_double(c, d, tg, value_index, &v_dbl)) {
-			*n = (de_int64)v_dbl;
+			*n = (i64)v_dbl;
 			return 1;
 		}
 		return 0;
@@ -376,17 +380,17 @@ static void format_double(de_ucstring *s, double val)
 
 struct numeric_value {
 	int isvalid;
-	de_int64 val_int64;
+	i64 val_int64;
 	double val_double;
 };
 
 // Do-it-all function for reading numeric values.
 // If dbglinebuf!=NULL, print a string representation of the value to it.
 static void read_numeric_value(deark *c, lctx *d, const struct taginfo *tg,
-	de_int64 value_index, struct numeric_value *nv, de_ucstring *dbgline)
+	i64 value_index, struct numeric_value *nv, de_ucstring *dbgline)
 {
 	int ret;
-	de_int64 offs;
+	i64 offs;
 
 	nv->isvalid = 0;
 	nv->val_int64 = 0;
@@ -413,7 +417,7 @@ static void read_numeric_value(deark *c, lctx *d, const struct taginfo *tg,
 		nv->isvalid = ret;
 		if(dbgline) {
 			if(nv->isvalid)
-				ucstring_printf(dbgline, DE_ENCODING_UTF8, "%" INT64_FMT, nv->val_int64);
+				ucstring_printf(dbgline, DE_ENCODING_UTF8, "%" I64_FMT, nv->val_int64);
 			else
 				ucstring_append_sz(dbgline, "?", DE_ENCODING_UTF8);
 		}
@@ -422,15 +426,15 @@ static void read_numeric_value(deark *c, lctx *d, const struct taginfo *tg,
 	case DATATYPE_RATIONAL:
 	case DATATYPE_SRATIONAL:
 		{
-			de_int64 num, den;
+			i64 num, den;
 
 			if(tg->datatype==DATATYPE_SRATIONAL) {
 				num = dbuf_geti32x(c->infile, offs, d->is_le);
 				den = dbuf_geti32x(c->infile, offs+4, d->is_le);
 			}
 			else {
-				num = dbuf_getui32x(c->infile, offs, d->is_le);
-				den = dbuf_getui32x(c->infile, offs+4, d->is_le);
+				num = dbuf_getu32x(c->infile, offs, d->is_le);
+				den = dbuf_getu32x(c->infile, offs+4, d->is_le);
 			}
 
 			if(den==0) {
@@ -438,14 +442,14 @@ static void read_numeric_value(deark *c, lctx *d, const struct taginfo *tg,
 				nv->val_double = 0.0;
 				nv->val_int64 = 0;
 				if(dbgline) {
-					ucstring_printf(dbgline, DE_ENCODING_UTF8, "%" INT64_FMT "/%" INT64_FMT, num, den);
+					ucstring_printf(dbgline, DE_ENCODING_UTF8, "%" I64_FMT "/%" I64_FMT, num, den);
 				}
 
 			}
 			else {
 				nv->isvalid = 1;
 				nv->val_double = (double)num/(double)den;
-				nv->val_int64 = (de_int64)nv->val_double;
+				nv->val_int64 = (i64)nv->val_double;
 				if(dbgline) {
 					format_double(dbgline, nv->val_double);
 				}
@@ -461,7 +465,7 @@ static void read_numeric_value(deark *c, lctx *d, const struct taginfo *tg,
 		else {
 			nv->val_double = dbuf_getfloat32x(c->infile, offs, d->is_le);
 		}
-		nv->val_int64 = (de_int64)nv->val_double;
+		nv->val_int64 = (i64)nv->val_double;
 		nv->isvalid = 1;
 		if(dbgline) {
 			format_double(dbgline, nv->val_double);
@@ -475,15 +479,15 @@ static void read_numeric_value(deark *c, lctx *d, const struct taginfo *tg,
 	}
 }
 
-static de_int64 getfpos(deark *c, lctx *d, de_int64 pos)
+static i64 getfpos(deark *c, lctx *d, i64 pos)
 {
 	if(d->is_bigtiff) {
 		return dbuf_geti64x(c->infile, pos, d->is_le);
 	}
-	return dbuf_getui32x(c->infile, pos, d->is_le);
+	return dbuf_getu32x(c->infile, pos, d->is_le);
 }
 
-static void do_oldjpeg(deark *c, lctx *d, de_int64 jpegoffset, de_int64 jpeglength)
+static void do_oldjpeg(deark *c, lctx *d, i64 jpegoffset, i64 jpeglength)
 {
 	const char *extension;
 	unsigned int createflags;
@@ -493,18 +497,18 @@ static void do_oldjpeg(deark *c, lctx *d, de_int64 jpegoffset, de_int64 jpegleng
 		// of the file.
 		jpeglength = c->infile->len - jpegoffset;
 	}
-	if(jpeglength>DE_MAX_FILE_SIZE) {
+	if(jpeglength>DE_MAX_SANE_OBJECT_SIZE) {
 		return;
 	}
 
 	if(jpegoffset+jpeglength>c->infile->len) {
-		detiff_warn(c, d, "Invalid offset/length of embedded JPEG data (offset=%"INT64_FMT
-			", len=%"INT64_FMT")", jpegoffset, jpeglength);
+		detiff_warn(c, d, "Invalid offset/length of embedded JPEG data (offset=%"I64_FMT
+			", len=%"I64_FMT")", jpegoffset, jpeglength);
 		return;
 	}
 
 	if(dbuf_memcmp(c->infile, jpegoffset, "\xff\xd8\xff", 3)) {
-		detiff_warn(c, d, "Expected JPEG data at %"INT64_FMT" not found", jpegoffset);
+		detiff_warn(c, d, "Expected JPEG data at %"I64_FMT" not found", jpegoffset);
 		return;
 	}
 
@@ -525,12 +529,12 @@ static void do_oldjpeg(deark *c, lctx *d, de_int64 jpegoffset, de_int64 jpegleng
 	dbuf_create_file_from_slice(c->infile, jpegoffset, jpeglength, extension, NULL, createflags);
 }
 
-static void do_leaf_metadata(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void do_leaf_metadata(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_int64 pos;
-	de_byte buf[4];
-	de_byte segtype[40];
-	de_int64 data_len;
+	i64 pos;
+	u8 buf[4];
+	u8 segtype[40];
+	i64 data_len;
 
 	if(len<1) return;
 	if(pos1+len > c->infile->len) return;
@@ -553,7 +557,7 @@ static void do_leaf_metadata(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 		pos+=40;
 
 		// TODO: Is this always big-endian?
-		data_len = de_getui32be(pos);
+		data_len = de_getu32be(pos);
 		pos+=4;
 
 		if(!de_memcmp(segtype, "JPEG_preview_data\0", 18)) {
@@ -565,16 +569,16 @@ static void do_leaf_metadata(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 }
 
 struct int_and_str {
-	de_int64 n;
+	i64 n;
 	const char *s;
 };
 
 static int lookup_str_and_append_to_ucstring(const struct int_and_str *items, size_t num_items,
-	de_int64 n, de_ucstring *s)
+	i64 n, de_ucstring *s)
 {
-	de_int64 i;
+	i64 i;
 
-	for(i=0; i<(de_int64)num_items; i++) {
+	for(i=0; i<(i64)num_items; i++) {
 		if(items[i].n==n) {
 			ucstring_append_sz(s, items[i].s, DE_ENCODING_UTF8);
 			return 1;
@@ -843,7 +847,7 @@ static int valdec_lightsource(deark *c, const struct valdec_params *vp, struct v
 
 static int valdec_flash(deark *c, const struct valdec_params *vp, struct valdec_result *vr)
 {
-	de_int64 v;
+	i64 v;
 
 	ucstring_append_flags_item(vr->s, (vp->n&0x01)?"flash fired":"flash did not fire");
 
@@ -1019,6 +1023,21 @@ static void handler_hexdumpb(deark *c, lctx *d, const struct taginfo *tg, const 
 	de_dbg_hexdump(c, c->infile, tg->val_offset, tg->total_size, 256, NULL, 0);
 }
 
+static void handler_bplist(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
+{
+	if(tg->total_size>=40 &&
+		!dbuf_memcmp(c->infile, tg->val_offset, "bplist", 6))
+	{
+		de_dbg(c, "binary .plist at %"I64_FMT", len=%"I64_FMT, tg->val_offset, tg->total_size);
+		de_dbg_indent(c, 1);
+		de_fmtutil_handle_plist(c, c->infile, tg->val_offset, tg->total_size, NULL, 0x0);
+		de_dbg_indent(c, -1);
+	}
+	else {
+		handler_hexdump(c, d, tg, tni);
+	}
+}
+
 static void handler_imagewidth(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
 	if(tg->valcount!=1) return;
@@ -1033,12 +1052,12 @@ static void handler_imagelength(deark *c, lctx *d, const struct taginfo *tg, con
 
 static void handler_orientation(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_int64 tmpval;
+	i64 tmpval;
 
 	if(tg->valcount!=1) return;
 	read_tag_value_as_int64(c, d, tg, 0, &tmpval);
 	if(tmpval>=1 && tmpval<=8) {
-		tg->pg->orientation = (de_uint32)tmpval;
+		tg->pg->orientation = (u32)tmpval;
 		if(tg->pg->ifd_idx==0) { // FIXME: Don't do this here.
 			d->first_ifd_orientation = tg->pg->orientation;
 		}
@@ -1047,24 +1066,24 @@ static void handler_orientation(deark *c, lctx *d, const struct taginfo *tg, con
 
 static void handler_colormap(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_int64 num_entries;
-	de_int64 i;
+	i64 num_entries;
+	i64 i;
 
 	num_entries = tg->valcount / 3;
 	de_dbg(c, "ColorMap with %d entries", (int)num_entries);
 	if(c->debug_level<2) return;
 	for(i=0; i<num_entries; i++) {
-		de_int64 r1, g1, b1;
-		de_byte r2, g2, b2;
-		de_uint32 clr;
+		i64 r1, g1, b1;
+		u8 r2, g2, b2;
+		u32 clr;
 		char tmps[80];
 
 		read_tag_value_as_int64(c, d, tg, num_entries*0 + i, &r1);
 		read_tag_value_as_int64(c, d, tg, num_entries*1 + i, &g1);
 		read_tag_value_as_int64(c, d, tg, num_entries*2 + i, &b1);
-		r2 = (de_byte)(r1>>8);
-		g2 = (de_byte)(g1>>8);
-		b2 = (de_byte)(b1>>8);
+		r2 = (u8)(r1>>8);
+		g2 = (u8)(g1>>8);
+		b2 = (u8)(b1>>8);
 		clr = DE_MAKE_RGB(r2, g2, b2);
 		de_snprintf(tmps, sizeof(tmps), "(%5d,%5d,%5d) "DE_CHAR_RIGHTARROW" ",
 			(int)r1, (int)g1, (int)b1);
@@ -1074,8 +1093,8 @@ static void handler_colormap(deark *c, lctx *d, const struct taginfo *tg, const 
 
 static void handler_subifd(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_int64 j;
-	de_int64 tmpoffset;
+	i64 j;
+	i64 tmpoffset;
 	int ifdtype = IFDTYPE_NORMAL;
 
 	if(d->fmt==DE_TIFFFMT_NIKONMN && tg->tagnum==0x11) ifdtype = IFDTYPE_NIKONPREVIEW;
@@ -1094,11 +1113,11 @@ static void handler_subifd(deark *c, lctx *d, const struct taginfo *tg, const st
 
 static void handler_ycbcrpositioning(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_int64 tmpval;
+	i64 tmpval;
 
 	if(tg->valcount!=1) return;
 	read_tag_value_as_int64(c, d, tg, 0, &tmpval);
-	tg->pg->ycbcrpositioning = (de_uint32)tmpval;
+	tg->pg->ycbcrpositioning = (u32)tmpval;
 }
 
 static void handler_xmp(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
@@ -1108,7 +1127,8 @@ static void handler_xmp(deark *c, lctx *d, const struct taginfo *tg, const struc
 
 static void handler_iptc(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_fmtutil_handle_iptc(c, c->infile, tg->val_offset, tg->total_size);
+	de_fmtutil_handle_iptc(c, c->infile, tg->val_offset, tg->total_size,
+		d->is_deark_iptc?0x2:0x0);
 }
 
 static void handler_photoshoprsrc(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
@@ -1116,22 +1136,24 @@ static void handler_photoshoprsrc(deark *c, lctx *d, const struct taginfo *tg, c
 	de_dbg(c, "Photoshop resources at %d, len=%d",
 		(int)tg->val_offset, (int)tg->total_size);
 	de_dbg_indent(c, 1);
-	de_fmtutil_handle_photoshop_rsrc(c, c->infile, tg->val_offset, tg->total_size);
+	de_fmtutil_handle_photoshop_rsrc(c, c->infile, tg->val_offset, tg->total_size,
+		d->is_deark_8bim?0x2:0x0);
 	de_dbg_indent(c, -1);
 }
 
 struct makernote_id_info {
 #define MAKERNOTE_NIKON 1
+#define MAKERNOTE_APPLE_IOS 2
 	int mntype;
 	char name[32];
 };
 
 static void identify_makernote(deark *c, lctx *d, const struct taginfo *tg, struct makernote_id_info *mni)
 {
-	de_byte buf[32];
-	de_int64 amt_to_read;
+	u8 buf[32];
+	i64 amt_to_read;
 
-	de_memset(buf, 0, sizeof(buf));
+	de_zeromem(buf, sizeof(buf));
 	amt_to_read = sizeof(buf);
 	if(amt_to_read > tg->total_size) amt_to_read = tg->total_size;
 	de_read(buf, tg->val_offset, amt_to_read);
@@ -1145,19 +1167,24 @@ static void identify_makernote(deark *c, lctx *d, const struct taginfo *tg, stru
 		de_strlcpy(mni->name, "Nikon type 3", sizeof(mni->name));
 		goto done;
 	}
+	else if(!de_memcmp(buf, "Apple iOS\x00\x00\x01\x4d\x4d", 14)) {
+		mni->mntype = MAKERNOTE_APPLE_IOS;
+		de_strlcpy(mni->name, "Apple iOS", sizeof(mni->name));
+		goto done;
+	}
 
 done:
 	;
 }
 
-static void do_makernote_nikon(deark *c, lctx *d, de_int64 pos1, de_int64 len)
+static void do_makernote_nikon(deark *c, lctx *d, i64 pos1, i64 len)
 {
-	de_int64 dpos;
-	de_int64 dlen;
+	i64 dpos;
+	i64 dlen;
 	unsigned int ver;
 
 	if(len<10) return;
-	ver = (unsigned int)de_getui16be(pos1+6);
+	ver = (unsigned int)de_getu16be(pos1+6);
 	de_dbg(c, "version: 0x%04x", ver); // This is a guess
 
 	dpos = pos1+10;
@@ -1166,6 +1193,24 @@ static void do_makernote_nikon(deark *c, lctx *d, de_int64 pos1, de_int64 len)
 	de_dbg(c, "Nikon MakerNote tag data at %d, len=%d", (int)dpos, (int)dlen);
 	de_dbg_indent(c, 1);
 	de_run_module_by_id_on_slice2(c, "tiff", "N", c->infile, dpos, dlen);
+	de_dbg_indent(c, -1);
+}
+
+static void do_makernote_apple_ios(deark *c, lctx *d, i64 pos1, i64 len)
+{
+	unsigned int ver;
+
+	if(len<12) return;
+	ver = (unsigned int)de_getu16be(pos1+10);
+	de_dbg(c, "version: 0x%04x", ver); // This is a guess
+	if(ver!=1) return;
+	if(len<20) return;
+
+	// Apple iOS offsets are relative to the beginning of the "Apple iOS"
+	// signature, so that's the data we'll pass to the submodule.
+	de_dbg(c, "Apple MakerNote tag data at %"I64_FMT", len=%"I64_FMT, pos1, len);
+	de_dbg_indent(c, 1);
+	de_run_module_by_id_on_slice2(c, "tiff", "A", c->infile, pos1, len);
 	de_dbg_indent(c, -1);
 }
 
@@ -1183,6 +1228,9 @@ static void handler_makernote(deark *c, lctx *d, const struct taginfo *tg, const
 	if(mni->mntype==MAKERNOTE_NIKON) {
 		do_makernote_nikon(c, d, tg->val_offset, tg->total_size);
 	}
+	else if(mni->mntype==MAKERNOTE_APPLE_IOS) {
+		do_makernote_apple_ios(c, d, tg->val_offset, tg->total_size);
+	}
 	else {
 		handler_hexdump(c, d, tg, tni);
 	}
@@ -1192,10 +1240,10 @@ static void handler_makernote(deark *c, lctx *d, const struct taginfo *tg, const
 
 static void handler_usercomment(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	static de_byte charcode[8];
+	static u8 charcode[8];
 	de_ucstring *s = NULL;
-	int enc = DE_ENCODING_UNKNOWN;
-	de_int64 bytes_per_char = 1;
+	de_encoding enc = DE_ENCODING_UNKNOWN;
+	i64 bytes_per_char = 1;
 
 	if(tg->datatype != DATATYPE_UNDEF) goto done;
 	if(tg->total_size < 8) goto done;
@@ -1236,7 +1284,7 @@ done:
 
 static void handler_olepropset(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_dbg(c, "OLE property set storage dump at %"INT64_FMT", len=%"INT64_FMT,
+	de_dbg(c, "OLE property set storage dump at %"I64_FMT", len=%"I64_FMT,
 		tg->val_offset, tg->total_size);
 	de_dbg_indent(c, 1);
 	de_run_module_by_id_on_slice2(c, "cfb", "T", c->infile, tg->val_offset, tg->total_size);
@@ -1247,8 +1295,8 @@ static void handler_olepropset(deark *c, lctx *d, const struct taginfo *tg, cons
 static void handler_37724(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
 	const char *codes;
-	static const de_int64 siglen = 36;
-	de_int64 dpos, dlen;
+	static const i64 siglen = 36;
+	i64 dpos, dlen;
 	int psdver = 0;
 
 	if(tg->total_size<siglen) {
@@ -1291,16 +1339,61 @@ static void handler_exifversion(deark *c, lctx *d, const struct taginfo *tg, con
 	// for later use.
 	if(tg->valcount!=4) return;
 	if(tg->datatype!=DATATYPE_UNDEF) return;
-	d->exif_version_as_uint32 = (de_uint32)de_getui32be(tg->val_offset);
+	d->exif_version_as_uint32 = (u32)de_getu32be(tg->val_offset);
+}
+
+struct mpfctx_struct {
+	int warned;
+	// per image:
+	int is_thumb;
+	i64 imgoffs_abs;
+	i64 imgsize;
+};
+
+static void try_to_extract_mpf_image(deark *c, lctx *d, struct mpfctx_struct *mpfctx)
+{
+	dbuf *inf;
+
+	de_dbg2(c, "[trying to extract image at %d, size=%d]", (int)mpfctx->imgoffs_abs,
+		(int)mpfctx->imgsize);
+	if(!d->in_params) goto done;
+	if(!(d->in_params->flags&0x01)) goto done;
+	if(!d->in_params->parent_dbuf) goto done;
+	if(mpfctx->imgoffs_abs<1) goto done;
+	inf = d->in_params->parent_dbuf;
+
+	if(mpfctx->imgoffs_abs + mpfctx->imgsize > inf->len) {
+		if(mpfctx->warned) goto done;
+		mpfctx->warned = 1;
+		de_warn(c, "Invalid MPF multi-picture data. File size should be at "
+			"least %"I64_FMT", is %"I64_FMT".",
+			mpfctx->imgoffs_abs+mpfctx->imgsize, inf->len);
+		goto done;
+	}
+
+	if(dbuf_memcmp(inf, mpfctx->imgoffs_abs, "\xff\xd8\xff", 3)) {
+		de_warn(c, "Invalid or unsupported MPF multi-picture data. Expected image at "
+			"%"I64_FMT" not found.", mpfctx->imgoffs_abs);
+		goto done;
+	}
+
+	dbuf_create_file_from_slice(inf, mpfctx->imgoffs_abs, mpfctx->imgsize,
+		mpfctx->is_thumb?"mpfthumb.jpg":"mpf.jpg",
+		NULL, DE_CREATEFLAG_IS_AUX);
+
+done:
+	;
 }
 
 static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
-	de_int64 num_entries;
-	de_int64 k;
-	de_int64 pos = tg->val_offset;
+	i64 num_entries;
+	i64 k;
+	i64 pos = tg->val_offset;
 	de_ucstring *s = NULL;
+	struct mpfctx_struct mpfctx;
 
+	de_zeromem(&mpfctx, sizeof(struct mpfctx_struct));
 	d->mpf_main_image_count = 0;
 	// Length is supposed to be 16x{NumberOfImages; tag 45057}. We'll just assume
 	// it's correct.
@@ -1308,18 +1401,18 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 
 	s = ucstring_create(c);
 	for(k=0; k<num_entries; k++) {
-		de_int64 n;
-		de_int64 imgoffs_rel, imgoffs_abs;
-		de_int64 imgsize;
-		de_uint32 attrs;
-		de_uint32 dataformat;
-		de_uint32 typecode;
+		i64 n;
+		i64 imgoffs_rel, imgoffs_abs;
+		i64 imgsize;
+		u32 attrs;
+		u32 dataformat;
+		u32 typecode;
 		char offset_descr[80];
 
 		de_dbg(c, "entry #%d", (int)(k+1));
 		de_dbg_indent(c, 1);
 
-		attrs = (de_uint32)dbuf_getui32x(c->infile, pos, d->is_le);
+		attrs = (u32)dbuf_getu32x(c->infile, pos, d->is_le);
 		dataformat = (attrs&0x07000000)>>24;
 		typecode = attrs&0x00ffffff;
 		ucstring_empty(s);
@@ -1333,18 +1426,23 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 		if(typecode==0x020001U) ucstring_append_flags_item(s, "multi-frame image panorama");
 		if(typecode==0x020002U) ucstring_append_flags_item(s, "multi-frame image disparity");
 		if(typecode==0x020003U) ucstring_append_flags_item(s, "multi-frame image multi-angle");
-		if(typecode!=0x010001U && typecode!=0x010002U) {
+
+		if(typecode==0x010001U || typecode==0x010002U) {
+			mpfctx.is_thumb = 1;
+		}
+		else {
 			// Count that number of non-thumbnail images
 			d->mpf_main_image_count++;
+			mpfctx.is_thumb = 0;
 		}
 
 		de_dbg(c, "image attribs: 0x%08x (%s)", (unsigned int)attrs,
 			ucstring_getpsz(s));
 
-		imgsize = dbuf_getui32x(c->infile, pos+4, d->is_le);
+		imgsize = dbuf_getu32x(c->infile, pos+4, d->is_le);
 		de_dbg(c, "image size: %u", (unsigned int)imgsize);
 
-		imgoffs_rel = dbuf_getui32x(c->infile, pos+8, d->is_le);
+		imgoffs_rel = dbuf_getu32x(c->infile, pos+8, d->is_le);
 		// This is relative to beginning of the payload data (the TIFF header)
 		// of the MPF segment, except that 0 is a special case.
 		if(imgoffs_rel==0) {
@@ -1353,7 +1451,7 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 		}
 		else if(d->in_params && (d->in_params->flags&0x01)) {
 			imgoffs_abs = d->in_params->offset_in_parent+imgoffs_rel;
-			de_snprintf(offset_descr, sizeof(offset_descr), "absolute offset %"INT64_FMT,
+			de_snprintf(offset_descr, sizeof(offset_descr), "absolute offset %"I64_FMT,
 				imgoffs_abs);
 		}
 		else {
@@ -1362,17 +1460,15 @@ static void handler_mpentry(deark *c, lctx *d, const struct taginfo *tg, const s
 		}
 		de_dbg(c, "image offset: %u (%s)", (unsigned int)imgoffs_rel, offset_descr);
 
-		if(imgoffs_rel>0 && d->in_params && (d->in_params->flags&0x01)) {
-			// Record the minimum parent file size implied by this entry, if it's the
-			// largest we've seen so far.
-			if(imgoffs_abs+imgsize > d->mpf_min_file_size) {
-				d->mpf_min_file_size = imgoffs_abs+imgsize;
-			}
+		if(imgoffs_rel>0) {
+			mpfctx.imgoffs_abs = imgoffs_abs;
+			mpfctx.imgsize = imgsize;
+			try_to_extract_mpf_image(c, d, &mpfctx);
 		}
 
-		n = dbuf_getui16x(c->infile, pos+12, d->is_le);
+		n = dbuf_getu16x(c->infile, pos+12, d->is_le);
 		de_dbg(c, "dep. image #1 entry: %u", (unsigned int)n);
-		n = dbuf_getui16x(c->infile, pos+14, d->is_le);
+		n = dbuf_getu16x(c->infile, pos+14, d->is_le);
 		de_dbg(c, "dep. image #2 entry: %u", (unsigned int)n);
 		de_dbg_indent(c, -1);
 		pos += 16;
@@ -1404,7 +1500,7 @@ static void handler_utf16(deark *c, lctx *d, const struct taginfo *tg, const str
 	s = ucstring_create(c);
 	dbuf_read_to_ucstring_n(c->infile, tg->val_offset, tg->total_size,
 		DE_TIFF_MAX_CHARS_TO_PRINT*2, s, 0, DE_ENCODING_UTF16LE);
-	ucstring_strip_trailing_NUL(s);
+	ucstring_truncate_at_NUL(s);
 	de_dbg(c, "UTF-16 string: \"%s\"", ucstring_getpsz(s));
 
 done:
@@ -1415,7 +1511,7 @@ done:
 static void handler_dngprivatedata(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
 	struct de_stringreaderdata *srd;
-	de_int64 nbytes_to_scan;
+	i64 nbytes_to_scan;
 
 	nbytes_to_scan = tg->total_size;
 	if(nbytes_to_scan>128) nbytes_to_scan=128;
@@ -1485,7 +1581,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 328, 0x00, "ConsecutiveBadFaxLines", NULL, NULL },
 	{ 330, 0x08, "SubIFD", handler_subifd, NULL },
 	{ 332, 0x0000, "InkSet", NULL, valdec_inkset },
-	{ 333, 0x00, "InkNames", NULL, NULL },
+	{ 333, 0x0004, "InkNames", NULL, NULL },
 	{ 334, 0x00, "NumberOfInks", NULL, NULL },
 	{ 336, 0x00, "DotRange", NULL, NULL },
 	{ 337, 0x00, "TargetPrinter", NULL, NULL },
@@ -1563,7 +1659,7 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 33422, 0x0100, "CFAPattern", NULL, NULL },
 	{ 33423, 0x0100, "BatteryLevel", NULL, NULL },
 	//{ 33424, 0x0000, "KodakIFD", NULL, NULL },
-	{ 33432, 0x0400, "Copyright", NULL, NULL },
+	{ 33432, 0x0404, "Copyright", NULL, NULL },
 	{ 33434, 0x10, "ExposureTime", NULL, NULL },
 	{ 33437, 0x10, "FNumber", NULL, NULL },
 	{ 33445, 0x0000, "MD FileTag", NULL, NULL },
@@ -1643,6 +1739,9 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 36864, 0x10, "ExifVersion", handler_exifversion, NULL },
 	{ 36867, 0x10, "DateTimeOriginal", NULL, NULL },
 	{ 36868, 0x10, "DateTimeDigitized", NULL, NULL },
+	{ 36880, 0x0010, "OffsetTime", NULL, NULL },
+	{ 36881, 0x0010, "OffsetTimeOriginal", NULL, NULL },
+	{ 36882, 0x0010, "OffsetTimeDigitized", NULL, NULL },
 	{ 37121, 0x10, "ComponentsConfiguration", NULL, valdec_componentsconfiguration },
 	{ 37122, 0x10, "CompressedBitsPerPixel", NULL, NULL },
 	{ 37377, 0x10, "ShutterSpeedValue", NULL, NULL },
@@ -1678,6 +1777,12 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 37680, 0x0008, "OLE Property Set Storage", handler_olepropset, NULL },
 	{ 37681, 0x0000, "OCR Text Position Info", NULL, NULL },
 	{ 37724, 0x0008, "Photoshop ImageSourceData", handler_37724, NULL },
+	{ 37888, 0x0010, "Temperature", NULL, NULL },
+	{ 37889, 0x0010, "Humidity", NULL, NULL },
+	{ 37890, 0x0010, "Pressure", NULL, NULL },
+	{ 37891, 0x0010, "WaterDepth", NULL, NULL },
+	{ 37892, 0x0010, "Acceleration", NULL, NULL },
+	{ 37893, 0x0010, "CameraElevationAngle", NULL, NULL },
 	{ 40091, 0x0408, "XPTitle/Caption", handler_utf16, NULL },
 	{ 40092, 0x0008, "XPComment", handler_utf16, NULL },
 	{ 40093, 0x0008, "XPAuthor", handler_utf16, NULL },
@@ -1993,18 +2098,27 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 0xe13, 0x1001, "NikonCaptureEditVersions", NULL, NULL },
 	{ 0xe1d, 0x1001, "NikonICCProfile", NULL, NULL },
 	{ 0xe1e, 0x1001, "NikonCaptureOutput", NULL, NULL },
-	{ 0xe22, 0x1001, "NEFBitDepth", NULL, NULL }
+	{ 0xe22, 0x1001, "NEFBitDepth", NULL, NULL },
+
+	{ 2, 0x2009, "?", handler_bplist, NULL },
+	{ 3, 0x2009, "RunTime", handler_bplist, NULL },
+	{ 8, 0x2001, "AccelerationVector", NULL, NULL },
+	{ 0xa, 0x2001, "HDRImageType", NULL, NULL },
+	{ 0xb, 0x2001, "BurstUUID", NULL, NULL },
+	{ 0xe, 0x2001, "Orientation?", NULL, NULL },
+	{ 0x11, 0x2001, "ContentIdentifier", NULL, NULL },
+	{ 0x15, 0x2001, "ImageUniqueID", NULL, NULL }
 };
 
 static void do_dbg_print_numeric_values(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni,
 	de_ucstring *dbgline)
 {
-	de_int64 i;
+	i64 i;
 	struct valdec_params vp;
 	struct valdec_result vr;
 	struct numeric_value nv;
 
-	de_memset(&vr, 0, sizeof(struct valdec_result));
+	de_zeromem(&vr, sizeof(struct valdec_result));
 
 	switch(tg->datatype) {
 	case DATATYPE_BYTE: case DATATYPE_SBYTE:
@@ -2055,14 +2169,13 @@ done:
 	if(vr.s) ucstring_destroy(vr.s);
 }
 
-static void do_dbg_print_text_values(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni,
-	de_ucstring *dbgline)
+static void do_dbg_print_text_multi_values(deark *c, lctx *d, const struct taginfo *tg,
+	const struct tagnuminfo *tni, de_ucstring *dbgline)
 {
-	struct de_stringreaderdata *srd;
 	int is_truncated = 0;
 	int str_count = 0;
-	de_int64 pos, endpos;
-	de_int64 adj_totalsize;
+	i64 pos, endpos;
+	i64 adj_totalsize;
 
 	// An ASCII field is a sequence of NUL-terminated strings.
 	// The spec does not say what to do if an ASCII field does not end in a NUL.
@@ -2079,10 +2192,12 @@ static void do_dbg_print_text_values(deark *c, lctx *d, const struct taginfo *tg
 	}
 	endpos = tg->val_offset + adj_totalsize;
 
-	ucstring_append_sz(dbgline, " {", DE_ENCODING_UTF8);
+	ucstring_append_sz(dbgline, " {", DE_ENCODING_LATIN1);
 
 	pos = tg->val_offset;
 	while(1) {
+		struct de_stringreaderdata *srd;
+
 		if(pos>=endpos && str_count>0) break;
 
 		srd = dbuf_read_string(c->infile, pos, endpos-pos, endpos-pos,
@@ -2099,9 +2214,30 @@ static void do_dbg_print_text_values(deark *c, lctx *d, const struct taginfo *tg
 	}
 
 	if(is_truncated) {
-		ucstring_append_sz(dbgline, "...", DE_ENCODING_UTF8);
+		ucstring_append_sz(dbgline, "...", DE_ENCODING_LATIN1);
 	}
-	ucstring_append_sz(dbgline, "}", DE_ENCODING_UTF8);
+	ucstring_append_sz(dbgline, "}", DE_ENCODING_LATIN1);
+}
+
+// Used for ASCII-type tag numbers that we expect to contain only a single
+// string (i.e. nearly all of them).
+static void do_dbg_print_text_single_value(deark *c, lctx *d, const struct taginfo *tg,
+	const struct tagnuminfo *tni, de_ucstring *dbgline)
+{
+	struct de_stringreaderdata *srd = NULL;
+
+	srd = dbuf_read_string(c->infile, tg->val_offset, tg->total_size,
+		DE_TIFF_MAX_CHARS_TO_PRINT, DE_CONVFLAG_STOP_AT_NUL,
+		d->current_textfield_encoding);
+
+	ucstring_append_sz(dbgline, " {\"", DE_ENCODING_LATIN1);
+	ucstring_append_ucstring(dbgline, srd->str);
+	if(srd->was_truncated) {
+		ucstring_append_sz(dbgline, "...", DE_ENCODING_LATIN1);
+	}
+	ucstring_append_sz(dbgline, "\"}", DE_ENCODING_LATIN1);
+
+	de_destroy_stringreaderdata(c, srd);
 }
 
 static void do_dbg_print_values(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni,
@@ -2112,7 +2248,12 @@ static void do_dbg_print_values(deark *c, lctx *d, const struct taginfo *tg, con
 	if(tg->valcount<1) return;
 
 	if(tg->datatype==DATATYPE_ASCII) {
-		do_dbg_print_text_values(c, d, tg, tni, dbgline);
+		if(tni->flags & 0x0004) {
+			do_dbg_print_text_multi_values(c, d, tg, tni, dbgline);
+		}
+		else {
+			do_dbg_print_text_single_value(c, d, tg, tni, dbgline);
+		}
 	}
 	else {
 		do_dbg_print_numeric_values(c, d, tg, tni, dbgline);
@@ -2137,6 +2278,18 @@ static const struct tagnuminfo *find_tagnuminfo(int tagnum, int filefmt, int ifd
 		else if(ifdtype==IFDTYPE_GPS) {
 			// For GPS IFDs, allow only special tags
 			if(!(tagnuminfo_arr[i].flags&0x40)) {
+				continue;
+			}
+		}
+		else if(ifdtype==IFDTYPE_NIKONMN) {
+			// For this IFD, allow only special tags
+			if(!(tagnuminfo_arr[i].flags&0x1000)) {
+				continue;
+			}
+		}
+		else if(ifdtype==IFDTYPE_APPLEMN) {
+			// For this IFD, allow only special tags
+			if(!(tagnuminfo_arr[i].flags&0x2000)) {
 				continue;
 			}
 		}
@@ -2167,14 +2320,14 @@ static const struct tagnuminfo *find_tagnuminfo(int tagnum, int filefmt, int ifd
 	return NULL;
 }
 
-static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, int ifdtype1)
+static void process_ifd(deark *c, lctx *d, i64 ifd_idx1, i64 ifdpos1, int ifdtype1)
 {
 	struct page_ctx *pg = NULL;
 	int num_tags;
 	int i;
-	de_int64 jpegoffset = 0;
-	de_int64 jpeglength = -1;
-	de_int64 tmpoffset;
+	i64 jpegoffset = 0;
+	i64 jpeglength = -1;
+	i64 tmpoffset;
 	de_ucstring *dbgline = NULL;
 	struct taginfo tg;
 	const char *name;
@@ -2221,11 +2374,11 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 		name="";
 	}
 
-	de_dbg(c, "IFD at %"INT64_FMT"%s", pg->ifdpos, name);
+	de_dbg(c, "IFD at %"I64_FMT"%s", pg->ifdpos, name);
 	de_dbg_indent(c, 1);
 
 	if(pg->ifdpos >= c->infile->len || pg->ifdpos<8) {
-		detiff_warn(c, d, "Invalid IFD offset (%"INT64_FMT")", pg->ifdpos);
+		detiff_warn(c, d, "Invalid IFD offset (%"I64_FMT")", pg->ifdpos);
 		goto done;
 	}
 
@@ -2233,7 +2386,7 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 		num_tags = (int)dbuf_geti64x(c->infile, pg->ifdpos, d->is_le);
 	}
 	else {
-		num_tags = (int)dbuf_getui16x(c->infile, pg->ifdpos, d->is_le);
+		num_tags = (int)dbuf_getu16x(c->infile, pg->ifdpos, d->is_le);
 	}
 
 	de_dbg(c, "number of tags: %d", num_tags);
@@ -2244,7 +2397,7 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 
 	// Record the next IFD in the main list.
 	tmpoffset = getfpos(c, d, pg->ifdpos+d->ifdhdrsize+num_tags*d->ifditemsize);
-	de_dbg(c, "offset of next IFD: %"INT64_FMT"%s", tmpoffset, tmpoffset==0?" (none)":"");
+	de_dbg(c, "offset of next IFD: %"I64_FMT"%s", tmpoffset, tmpoffset==0?" (none)":"");
 	push_ifd(c, d, tmpoffset, IFDTYPE_NORMAL);
 
 	dbgline = ucstring_create(c);
@@ -2252,11 +2405,11 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 	for(i=0; i<num_tags; i++) {
 		const struct tagnuminfo *tni;
 
-		de_memset(&tg, 0, sizeof(struct taginfo));
+		de_zeromem(&tg, sizeof(struct taginfo));
 		tg.pg = pg;
 
-		tg.tagnum = (int)dbuf_getui16x(c->infile, pg->ifdpos+d->ifdhdrsize+i*d->ifditemsize, d->is_le);
-		tg.datatype = (int)dbuf_getui16x(c->infile, pg->ifdpos+d->ifdhdrsize+i*d->ifditemsize+2, d->is_le);
+		tg.tagnum = (int)dbuf_getu16x(c->infile, pg->ifdpos+d->ifdhdrsize+i*d->ifditemsize, d->is_le);
+		tg.datatype = (int)dbuf_getu16x(c->infile, pg->ifdpos+d->ifdhdrsize+i*d->ifditemsize+2, d->is_le);
 		// Not a file pos, but getfpos() does the right thing.
 		tg.valcount = getfpos(c, d, pg->ifdpos+d->ifdhdrsize+i*d->ifditemsize+4);
 
@@ -2279,7 +2432,7 @@ static void process_ifd(deark *c, lctx *d, de_int64 ifd_idx1, de_int64 ifdpos1, 
 
 		ucstring_empty(dbgline);
 		ucstring_printf(dbgline, DE_ENCODING_UTF8,
-			"tag %d (%s) ty=%d #=%d offs=%" INT64_FMT,
+			"tag %d (%s) ty=%d #=%d offs=%" I64_FMT,
 			tg.tagnum, tni->tagname,
 			tg.datatype, (int)tg.valcount,
 			tg.val_offset);
@@ -2339,30 +2492,44 @@ done:
 
 static void do_tiff(deark *c, lctx *d)
 {
-	de_int64 pos;
-	de_int64 ifdoffs;
-	de_int64 ifd_idx;
+	i64 pos;
+	i64 ifdoffs;
+	i64 ifd_idx;
+	int need_to_read_header = 1;
 
 	pos = 0;
-	de_dbg(c, "TIFF file header at %d", (int)pos);
-	de_dbg_indent(c, 1);
 
-	de_dbg(c, "byte order: %s-endian", d->is_le?"little":"big");
-
-	// Skip over the signature
-	if(d->is_bigtiff) {
-		pos += 8;
-	}
-	else {
-		pos += 4;
+	if(d->fmt==DE_TIFFFMT_APPLEMN) {
+		push_ifd(c, d, 14, IFDTYPE_APPLEMN);
+		need_to_read_header = 0;
 	}
 
-	// Read the first IFD offset
-	ifdoffs = getfpos(c, d, pos);
-	de_dbg(c, "offset of first IFD: %d", (int)ifdoffs);
-	push_ifd(c, d, ifdoffs, IFDTYPE_NORMAL);
+	if(need_to_read_header) {
+		de_dbg(c, "TIFF file header at %d", (int)pos);
+		de_dbg_indent(c, 1);
 
-	de_dbg_indent(c, -1);
+		de_dbg(c, "byte order: %s-endian", d->is_le?"little":"big");
+
+		// Skip over the signature
+		if(d->is_bigtiff) {
+			pos += 8;
+		}
+		else {
+			pos += 4;
+		}
+
+		// Read the first IFD offset
+		ifdoffs = getfpos(c, d, pos);
+		de_dbg(c, "offset of first IFD: %d", (int)ifdoffs);
+		if(d->fmt==DE_TIFFFMT_NIKONMN) {
+			push_ifd(c, d, ifdoffs, IFDTYPE_NIKONMN);
+		}
+		else {
+			push_ifd(c, d, ifdoffs, IFDTYPE_NORMAL);
+		}
+
+		de_dbg_indent(c, -1);
+	}
 
 	// Process IFDs until we run out of them.
 	// ifd_idx tracks how many IFDs we have finished processing, but it's not
@@ -2380,17 +2547,17 @@ static void do_tiff(deark *c, lctx *d)
 
 static int de_identify_tiff_internal(deark *c, int *is_le)
 {
-	de_int64 byte_order_sig;
-	de_int64 magic;
+	i64 byte_order_sig;
+	i64 magic;
 	int fmt = 0;
 
-	byte_order_sig = de_getui16be(0);
+	byte_order_sig = de_getu16be(0);
 	*is_le = (byte_order_sig == 0x4d4d) ? 0 : 1;
 
 	if(*is_le)
-		magic = de_getui16le(2);
+		magic = de_getu16le(2);
 	else
-		magic = de_getui16be(2);
+		magic = de_getu16be(2);
 
 	if(byte_order_sig==0x4550 && magic==0x002a) {
 		fmt = DE_TIFFFMT_MDI;
@@ -2427,6 +2594,21 @@ static int de_identify_tiff_internal(deark *c, int *is_le)
 	return fmt;
 }
 
+// Deark TIFF container formats. See de_fmtutil_handle_iptc() for example.
+static void identify_deark_formats(deark *c, lctx *d)
+{
+	u8 buf[20];
+	de_read(buf, 8, sizeof(buf));
+	if(de_memcmp(buf, "Deark extracted ", 16)) return;
+	if(!de_memcmp(&buf[16], "IPTC", 4)) {
+		d->is_deark_iptc = 1;
+		return;
+	}
+	if(!de_memcmp(&buf[16], "8BIM", 4)) {
+		d->is_deark_8bim = 1;
+	}
+}
+
 static void de_run_tiff(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
@@ -2437,23 +2619,31 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 		d->in_params = &mparams->in_params;
 	}
 
-	d->fmt = de_identify_tiff_internal(c, &d->is_le);
+	if(de_havemodcode(c, mparams, 'A')) {
+		d->fmt = DE_TIFFFMT_APPLEMN;
+		d->is_le = 0;
+		d->errmsgprefix = "[Apple MakerNote] ";
+	}
+	else {
+		d->fmt = de_identify_tiff_internal(c, &d->is_le);
+	}
 
-	if(mparams && mparams->in_params.codes) {
-		if(de_strchr(mparams->in_params.codes, 'N')) {
-			d->errmsgprefix = "[Nikon MakerNote] ";
-			d->fmt = DE_TIFFFMT_NIKONMN;
-		}
+	if(de_havemodcode(c, mparams, 'N')) {
+		d->errmsgprefix = "[Nikon MakerNote] ";
+		d->fmt = DE_TIFFFMT_NIKONMN;
+	}
 
-		if(de_strchr(mparams->in_params.codes, 'M') && (d->fmt==DE_TIFFFMT_TIFF))
-		{
-			d->fmt = DE_TIFFFMT_MPEXT;
-		}
+	if(de_havemodcode(c, mparams, 'M') && (d->fmt==DE_TIFFFMT_TIFF)) {
+		d->fmt = DE_TIFFFMT_MPEXT;
+	}
 
-		if(de_strchr(mparams->in_params.codes, 'E')) {
-			d->is_exif_submodule = 1;
-			d->errmsgprefix = "[Exif] ";
-		}
+	if(de_havemodcode(c, mparams, 'E')) {
+		d->is_exif_submodule = 1;
+		d->errmsgprefix = "[Exif] ";
+	}
+
+	if(d->fmt==DE_TIFFFMT_TIFF) {
+		identify_deark_formats(c, d);
 	}
 
 	switch(d->fmt) {
@@ -2503,6 +2693,12 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 	do_tiff(c, d);
 
 	if(mparams) {
+		// .out_params.flags:
+		//  0x08: has_exif_gps
+		//  0x10: first IFD has subsampling=cosited
+		//  0x20: uint1 = first IFD's orientation
+		//  0x40: uint2 = Exif version
+		//  0x80: uint3 = main image count
 		if(d->has_exif_gps) {
 			mparams->out_params.flags |= 0x08;
 		}
@@ -2517,10 +2713,9 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 			mparams->out_params.flags |= 0x40;
 			mparams->out_params.uint2 = d->exif_version_as_uint32;
 		}
-		if(d->fmt==DE_TIFFFMT_MPEXT && d->mpf_min_file_size>0) {
+		if(d->fmt==DE_TIFFFMT_MPEXT) {
 			mparams->out_params.flags |= 0x80;
 			mparams->out_params.uint3 = d->mpf_main_image_count;
-			mparams->out_params.int64_1 = d->mpf_min_file_size;
 		}
 	}
 

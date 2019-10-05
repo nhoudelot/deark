@@ -12,45 +12,45 @@ DE_DECLARE_MODULE(de_module_wmf);
 typedef struct localctx_struct {
 	int has_aldus_header;
 	int input_encoding;
-	de_int64 wmf_file_type;
-	de_int64 wmf_windows_version;
+	i64 wmf_file_type;
+	i64 wmf_windows_version;
 	unsigned int num_objects;
 	dbuf *embedded_emf;
-	de_byte *object_table;
+	u8 *object_table;
 } lctx;
 
 struct escape_info {
-	de_uint16 escfn;
+	u16 escfn;
 	const char *name;
 	void *reserved1;
 };
 
 struct decoder_params {
-	de_uint16 recfunc;
-	de_byte rectype; // low byte of recfunc
-	de_int64 recpos;
-	de_int64 recsize_words; // total record size in 16-bit units
-	de_int64 recsize_bytes; // total record size in bytes
-	de_int64 dpos;
-	de_int64 dlen;
+	u16 recfunc;
+	u8 rectype; // low byte of recfunc
+	i64 recpos;
+	i64 recsize_words; // total record size in 16-bit units
+	i64 recsize_bytes; // total record size in bytes
+	i64 dpos;
+	i64 dlen;
 };
 
 // Handler functions return 0 on fatal error, otherwise 1.
 typedef int (*record_decoder_fn)(deark *c, lctx *d, struct decoder_params *dp);
 
 struct wmf_func_info {
-	de_byte rectype; // Low byte of the RecordFunction field
+	u8 rectype; // Low byte of the RecordFunction field
 	// Flags:
 	//  0x1: Creates an object
-	de_byte flags;
+	u8 flags;
 	const char *name;
 	record_decoder_fn fn;
 };
 
 // Note: This is duplicated in emf.c
-static de_uint32 colorref_to_color(de_uint32 colorref)
+static u32 colorref_to_color(u32 colorref)
 {
-	de_uint32 r,g,b;
+	u32 r,g,b;
 	r = DE_COLOR_B(colorref);
 	g = DE_COLOR_G(colorref);
 	b = DE_COLOR_R(colorref);
@@ -58,9 +58,9 @@ static de_uint32 colorref_to_color(de_uint32 colorref)
 }
 
 // Note: This is duplicated in emf.c
-static void do_dbg_colorref(deark *c, lctx *d, struct decoder_params *dp, de_uint32 colorref)
+static void do_dbg_colorref(deark *c, lctx *d, struct decoder_params *dp, u32 colorref)
 {
-	de_uint32 clr;
+	u32 clr;
 	char csamp[16];
 
 	clr = colorref_to_color(colorref);
@@ -70,10 +70,10 @@ static void do_dbg_colorref(deark *c, lctx *d, struct decoder_params *dp, de_uin
 
 static int handler_colorref(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_uint32 colorref;
+	u32 colorref;
 
 	if(dp->dlen<4) goto done;
-	colorref = (de_uint32)de_getui32le(dp->dpos);
+	colorref = (u32)de_getu32le(dp->dpos);
 	do_dbg_colorref(c, d, dp, colorref);
 done:
 	return 1;
@@ -81,11 +81,11 @@ done:
 
 static int wmf_handler_TEXTOUT(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->dpos;
-	de_int64 stringlen;
+	i64 pos = dp->dpos;
+	i64 stringlen;
 	de_ucstring *s = NULL;
 
-	stringlen = de_getui16le(pos);
+	stringlen = de_getu16le(pos);
 	pos += 2;
 
 	if(pos+stringlen > dp->dpos+dp->dlen) goto done;
@@ -101,23 +101,23 @@ done:
 
 static int wmf_handler_BITBLT_STRETCHBLT_DIBBITBLT(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->dpos;
+	i64 pos = dp->dpos;
 	int has_src_bitmap;
 	unsigned int RasterOperation;
-	de_int64 XSrc, YSrc;
-	de_int64 Width, Height;
-	de_int64 YDest, XDest;
+	i64 XSrc, YSrc;
+	i64 Width, Height;
+	i64 YDest, XDest;
 
-	has_src_bitmap = (dp->recsize_words != ((dp->recfunc>>8)+3));
+	has_src_bitmap = (dp->recsize_words != ((i64)(dp->recfunc>>8)+3));
 	de_dbg(c, "has src bitmap: %d", has_src_bitmap);
 	if(!has_src_bitmap) goto done;
 
-	RasterOperation = (unsigned int)de_getui32le(pos);
+	RasterOperation = (unsigned int)de_getu32le(pos);
 	de_dbg(c, "RasterOperation: 0x%08x", RasterOperation);
 	pos += 4;
 
 	if(dp->rectype==0x23) { // STRETCHBLT
-		de_int64 SrcWidth, SrcHeight;
+		i64 SrcWidth, SrcHeight;
 		SrcHeight = de_geti16le_p(&pos);
 		SrcWidth = de_geti16le_p(&pos);
 		de_dbg(c, "SrcWidth, SrcHeight: %d"DE_CHAR_TIMES"%d",
@@ -138,7 +138,7 @@ static int wmf_handler_BITBLT_STRETCHBLT_DIBBITBLT(deark *c, lctx *d, struct dec
 
 	// TODO: Bitmap16 object (if BITBLT or STRETCHBLT)
 	if(dp->rectype==0x40) { // DIBBITBLT
-		de_int64 dib_pos, dib_len;
+		i64 dib_pos, dib_len;
 
 		// TODO: Merge this with the DIBSTRETCHBLT, STRETCHDIB code.
 		dib_pos = pos;
@@ -220,48 +220,48 @@ static const struct escape_info escape_info_arr[] = {
 };
 
 static void do_ESCAPE_MFCOMMENT_EMF(deark *c, lctx *d, struct decoder_params *dp,
-	de_int64 pos1, de_int64 bytecount)
+	i64 pos1, i64 bytecount)
 {
-	de_int64 pos = pos1;
-	de_int64 endpos = dp->dpos + dp->dlen;
+	i64 pos = pos1;
+	i64 endpos = dp->dpos + dp->dlen;
 	unsigned int CommentId;
-	de_int64 n;
-	de_int64 CommentRecordCount, CurrentRecordSize;
-	de_int64 RemainingBytes, EnhancedMetafileDataSize;
+	i64 n;
+	i64 CommentRecordCount, CurrentRecordSize;
+	i64 RemainingBytes, EnhancedMetafileDataSize;
 
 	if(pos+34>endpos) {
 		de_dbg(c, "[bad/unsupported embedded EMF data (too short)]");
 		goto done;
 	}
 
-	CommentId = (unsigned int)de_getui32le_p(&pos);
+	CommentId = (unsigned int)de_getu32le_p(&pos);
 	de_dbg(c, "CommentIdentifier: 0x%08x", CommentId);
 	if(CommentId!=0x43464d57U) goto done;
 
-	n = de_getui32le_p(&pos);
+	n = de_getu32le_p(&pos);
 	de_dbg(c, "CommentType: 0x%08x", (unsigned int)n);
 	if(n != 1) {
 		de_dbg(c, "[bad/unsupported embedded EMF data (unsupported CommentType)]");
 		goto done;
 	}
 
-	n = de_getui32le_p(&pos);
+	n = de_getu32le_p(&pos);
 	de_dbg(c, "Version: 0x%08x", (unsigned int)n);
-	n = de_getui16le_p(&pos);
+	n = de_getu16le_p(&pos);
 	de_dbg(c, "CheckSum (reported): 0x%04x", (unsigned int)n);
-	n = de_getui32le_p(&pos);
+	n = de_getu32le_p(&pos);
 	de_dbg(c, "Flags: 0x%08x", (unsigned int)n);
-	CommentRecordCount = de_getui32le_p(&pos);
+	CommentRecordCount = de_getu32le_p(&pos);
 	de_dbg(c, "CommentRecordCount: %d", (int)CommentRecordCount);
-	CurrentRecordSize = de_getui32le_p(&pos);
+	CurrentRecordSize = de_getu32le_p(&pos);
 	de_dbg(c, "CurrentRecordSize: %d", (int)CurrentRecordSize);
-	RemainingBytes = de_getui32le_p(&pos);
+	RemainingBytes = de_getu32le_p(&pos);
 	de_dbg(c, "RemainingBytes: %d", (int)RemainingBytes);
 
 	// The spec says that the ByteCount field must be 34 +
 	// EnhancedMetafileDataSize, but that doesn't make sense to me.
 	// Maybe it was supposed to be 34 + CurrentRecordSize?
-	EnhancedMetafileDataSize = de_getui32le_p(&pos);
+	EnhancedMetafileDataSize = de_getu32le_p(&pos);
 	de_dbg(c, "EnhancedMetafileDataSize: %d", (int)EnhancedMetafileDataSize);
 
 	if(pos+CurrentRecordSize>endpos) goto done;
@@ -287,10 +287,10 @@ done:
 }
 
 static void do_ESCAPE_MFCOMMENT(deark *c, lctx *d, struct decoder_params *dp,
-	de_int64 bytecount)
+	i64 bytecount)
 {
-	de_int64 pos;
-	de_int64 endpos;
+	i64 pos;
+	i64 endpos;
 	int commenttype = 0;
 	const char *commenttype_name = "?";
 	unsigned int sig;
@@ -300,7 +300,7 @@ static void do_ESCAPE_MFCOMMENT(deark *c, lctx *d, struct decoder_params *dp,
 	if(pos+bytecount > endpos) goto done;
 
 	if(bytecount>=4) {
-		sig = (unsigned int)de_getui32le(pos);
+		sig = (unsigned int)de_getu32le(pos);
 		if(sig==0x43464d57U) {
 			commenttype = 1;
 			commenttype_name = "META_ESCAPE_ENHANCED_METAFILE";
@@ -321,13 +321,13 @@ done:
 
 static int wmf_handler_ESCAPE(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_uint16 escfn;
-	de_int64 bytecount = 0;
+	u16 escfn;
+	i64 bytecount = 0;
 	const struct escape_info *einfo = NULL;
 	const char *name;
 	size_t k;
 
-	escfn = (de_uint16)de_getui16le(dp->dpos);
+	escfn = (u16)de_getu16le(dp->dpos);
 
 	// Find the name, etc. of this record type
 	for(k=0; k<DE_ITEMS_IN_ARRAY(escape_info_arr); k++) {
@@ -345,7 +345,7 @@ static int wmf_handler_ESCAPE(deark *c, lctx *d, struct decoder_params *dp)
 	de_dbg(c, "escape function: 0x%04x (%s)", (unsigned int)escfn, name);
 
 	if(dp->dlen>=4) {
-		bytecount = de_getui16le(dp->dpos+2);
+		bytecount = de_getu16le(dp->dpos+2);
 		de_dbg(c, "bytecount: %d (offset %d + %d = %d)", (int)bytecount,
 			(int)(dp->dpos+4), (int)bytecount, (int)(dp->dpos+4+bytecount));
 	}
@@ -364,17 +364,17 @@ done:
 
 static int wmf_handler_EXTTEXTOUT(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 pos = dp->dpos;
-	de_int64 stringlen;
+	i64 pos = dp->dpos;
+	i64 stringlen;
 	de_ucstring *s = NULL;
-	de_uint32 fwOpts;
+	u32 fwOpts;
 
 	pos += 4; // Y, X
 
-	stringlen = de_getui16le(pos);
+	stringlen = de_getu16le(pos);
 	pos += 2;
 
-	fwOpts = (de_uint32)de_getui16le(pos);
+	fwOpts = (u32)de_getu16le(pos);
 	pos += 2;
 
 	if(fwOpts & 0x0004) {
@@ -397,13 +397,13 @@ done:
 
 static int wmf_handler_DIBSTRETCHBLT_STRETCHDIB(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 dib_pos;
-	de_int64 dib_len;
+	i64 dib_pos;
+	i64 dib_len;
 	int hdrsize;
 	int has_src_bitmap = 1;
 
 	if(dp->rectype==0x41) { // DIBSTRETCHBLT
-		has_src_bitmap = (dp->recsize_words != ((dp->recfunc>>8)+3));
+		has_src_bitmap = (dp->recsize_words != ((i64)(dp->recfunc>>8)+3));
 		de_dbg(c, "has src bitmap: %d", has_src_bitmap);
 	}
 
@@ -430,7 +430,7 @@ done:
 static int handler_SELECTOBJECT(deark *c, lctx *d, struct decoder_params *dp)
 {
 	unsigned int oi;
-	oi = (unsigned int)de_getui16le(dp->dpos);
+	oi = (unsigned int)de_getu16le(dp->dpos);
 	de_dbg(c, "object index: %u", oi);
 	return 1;
 }
@@ -438,7 +438,7 @@ static int handler_SELECTOBJECT(deark *c, lctx *d, struct decoder_params *dp)
 static int handler_DELETEOBJECT(deark *c, lctx *d, struct decoder_params *dp)
 {
 	unsigned int oi;
-	oi = (unsigned int)de_getui16le(dp->dpos);
+	oi = (unsigned int)de_getu16le(dp->dpos);
 	de_dbg(c, "object index: %u", oi);
 	if(d->object_table && oi<d->num_objects) {
 		d->object_table[oi] = 0; // Mark this index as available
@@ -461,22 +461,22 @@ static const char* get_brushstyle_name(unsigned int n)
 static int handler_CREATEBRUSHINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
 {
 	unsigned int style;
-	de_int64 pos = dp->dpos;
+	i64 pos = dp->dpos;
 
 	if(dp->dlen<8) goto done;
-	style = (unsigned int)de_getui16le_p(&pos);
+	style = (unsigned int)de_getu16le_p(&pos);
 	de_dbg(c, "style: 0x%04x (%s)", style, get_brushstyle_name(style));
 
 	if(style==0x0 || style==0x2) {
-		de_uint32 colorref;
-		colorref = (de_uint32)de_getui32le(pos);
+		u32 colorref;
+		colorref = (u32)de_getu32le(pos);
 		do_dbg_colorref(c, d, dp, colorref);
 	}
 	pos += 4;
 
 	if(style==0x2) {
 		unsigned int h;
-		h = (unsigned int)de_getui16le(pos);
+		h = (unsigned int)de_getu16le(pos);
 		de_dbg(c, "hatch: %u", h);
 	}
 
@@ -498,15 +498,15 @@ static const char *get_penbasestyle_name(unsigned int n)
 
 static int handler_CREATEPENINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_uint32 colorref;
-	de_int64 pos = dp->dpos;
+	u32 colorref;
+	i64 pos = dp->dpos;
 	unsigned int width;
 	unsigned int style;
 	unsigned int base_style;
 	de_ucstring *style_descr = NULL;
 
 	if(dp->dlen<10) goto done;
-	style = (unsigned int)de_getui16le_p(&pos);
+	style = (unsigned int)de_getu16le_p(&pos);
 	base_style = style&0x0f; // ?
 	style_descr = ucstring_create(c);
 	ucstring_append_flags_item(style_descr, get_penbasestyle_name(base_style));
@@ -517,14 +517,14 @@ static int handler_CREATEPENINDIRECT(deark *c, lctx *d, struct decoder_params *d
 	de_dbg(c, "style: 0x%04x (%s)", style, ucstring_getpsz(style_descr));
 
 	if(base_style!=0x5) {
-		width = (unsigned int)de_getui32le(pos);
+		width = (unsigned int)de_getu32le(pos);
 		width &= 0x0000ffffU;
 		de_dbg(c, "width: %u", width);
 	}
 	pos += 4;
 
 	if(base_style!=0x5) {
-		colorref = (de_uint32)de_getui32le(pos);
+		colorref = (u32)de_getu32le(pos);
 		do_dbg_colorref(c, d, dp, colorref);
 	}
 
@@ -535,10 +535,10 @@ done:
 
 static int handler_CREATEFONTINDIRECT(deark *c, lctx *d, struct decoder_params *dp)
 {
-	de_int64 facename_size;
-	de_int64 n, n2;
-	de_byte b;
-	de_int64 pos = dp->dpos;
+	i64 facename_size;
+	i64 n, n2;
+	u8 b;
+	i64 pos = dp->dpos;
 
 	n = de_geti16le_p(&pos);
 	n2 = de_geti16le_p(&pos);
@@ -564,11 +564,11 @@ static int handler_CREATEFONTINDIRECT(deark *c, lctx *d, struct decoder_params *
 static int handler_FILLREGION(deark *c, lctx *d, struct decoder_params *dp)
 {
 	unsigned int oi;
-	de_int64 pos = dp->dpos;
+	i64 pos = dp->dpos;
 
-	oi = (unsigned int)de_getui16le_p(&pos);
+	oi = (unsigned int)de_getu16le_p(&pos);
 	de_dbg(c, "region object index: %u", oi);
-	oi = (unsigned int)de_getui16le_p(&pos);
+	oi = (unsigned int)de_getu16le_p(&pos);
 	de_dbg(c, "brush object index: %u", oi);
 	return 1;
 }
@@ -648,8 +648,8 @@ static const struct wmf_func_info wmf_func_info_arr[] = {
 
 static void do_read_aldus_header(deark *c, lctx *d)
 {
-	de_int64 left, top, right, bottom;
-	de_int64 units_per_inch;
+	i64 left, top, right, bottom;
+	i64 units_per_inch;
 
 	de_dbg(c, "Aldus Placeable Metafile header at 0");
 	de_dbg_indent(c, 1);
@@ -659,44 +659,44 @@ static void do_read_aldus_header(deark *c, lctx *d)
 	bottom = de_geti16le(12);
 	de_dbg(c, "location: (%d,%d) - (%d,%d)", (int)left, (int)top,
 		(int)right, (int)bottom);
-	units_per_inch = de_getui16le(14);
+	units_per_inch = de_getu16le(14);
 	de_dbg(c, "metafile units per inch: %d", (int)units_per_inch);
 	de_dbg_indent(c, -1);
 }
 
-static int do_read_wmf_header(deark *c, lctx *d, de_int64 pos)
+static int do_read_wmf_header(deark *c, lctx *d, i64 pos)
 {
-	de_int64 hsize_words, maxrecsize_words, filesize_words;
+	i64 hsize_words, maxrecsize_words, filesize_words;
 	int retval = 0;
 
 	de_dbg(c, "WMF header at %d", (int)pos);
 	de_dbg_indent(c, 1);
 
-	d->wmf_file_type = de_getui16le(pos);
+	d->wmf_file_type = de_getu16le(pos);
 	de_dbg(c, "file type: %d", (int)d->wmf_file_type);
 	if(d->wmf_file_type!=1 && d->wmf_file_type!=2) {
 		de_err(c, "Invalid or unsupported WMF file type (%d)", (int)d->wmf_file_type);
 		goto done;
 	}
-	hsize_words = de_getui16le(pos+2);
+	hsize_words = de_getu16le(pos+2);
 	de_dbg(c, "header size: %d bytes", (int)(hsize_words*2));
 	if(hsize_words != 9) {
 		de_err(c, "Incorrect WMF header size (expected 9, is %d)", (int)hsize_words);
 		goto done;
 	}
-	d->wmf_windows_version = de_getui16le(pos+4);
+	d->wmf_windows_version = de_getu16le(pos+4);
 	de_dbg(c, "Windows version: %d.%d", (int)((d->wmf_windows_version&0xff00)>>8),
 		(int)(d->wmf_windows_version&0x00ff));
-	filesize_words = de_getui32le(pos+6);
+	filesize_words = de_getu32le(pos+6);
 	de_dbg(c, "reported file size: %d bytes", (int)(filesize_words*2));
 
-	d->num_objects = (unsigned int)de_getui16le(pos+10);
+	d->num_objects = (unsigned int)de_getu16le(pos+10);
 	de_dbg(c, "number of objects: %u", d->num_objects);
 	if(d->object_table) de_free(c, d->object_table);
 	// d->num_objects is untrusted, but it can only be from 0 to 65535.
 	d->object_table = de_malloc(c, d->num_objects);
 
-	maxrecsize_words = de_getui32le(pos+12);
+	maxrecsize_words = de_getu32le(pos+12);
 	de_dbg(c, "max record size: %d bytes", (int)(maxrecsize_words*2));
 	retval = 1;
 done:
@@ -704,10 +704,10 @@ done:
 	return retval;
 }
 
-static const struct wmf_func_info *find_wmf_func_info(de_uint16 recfunc)
+static const struct wmf_func_info *find_wmf_func_info(u16 recfunc)
 {
 	size_t i;
-	de_byte rectype_wanted = (de_byte)(recfunc&0xff);
+	u8 rectype_wanted = (u8)(recfunc&0xff);
 
 	for(i=0; i<DE_ITEMS_IN_ARRAY(wmf_func_info_arr); i++) {
 		if(wmf_func_info_arr[i].rectype == rectype_wanted) {
@@ -738,21 +738,21 @@ static void on_create_object(deark *c, lctx *d, struct decoder_params *dp)
 
 
 // Returns 0 if EOF record was found.
-static int do_wmf_record(deark *c, lctx *d, de_int64 recnum, de_int64 recpos,
-	de_int64 recsize_bytes)
+static int do_wmf_record(deark *c, lctx *d, i64 recnum, i64 recpos,
+	i64 recsize_bytes)
 {
 	const struct wmf_func_info *fnci;
 	struct decoder_params dp;
 
-	de_memset(&dp, 0, sizeof(struct decoder_params));
+	de_zeromem(&dp, sizeof(struct decoder_params));
 	dp.recpos = recpos;
 	dp.recsize_words = recsize_bytes*2;
 	dp.recsize_bytes = recsize_bytes;
 	dp.dpos = recpos + 6;
 	dp.dlen = recsize_bytes - 6;
 
-	dp.recfunc = (de_uint16)de_getui16le(recpos+4);
-	dp.rectype = (de_byte)(dp.recfunc&0xff);
+	dp.recfunc = (u16)de_getu16le(recpos+4);
+	dp.rectype = (u8)(dp.recfunc&0xff);
 
 	fnci = find_wmf_func_info(dp.recfunc);
 
@@ -773,11 +773,11 @@ static int do_wmf_record(deark *c, lctx *d, de_int64 recnum, de_int64 recpos,
 	return (dp.rectype==0x00)?0:1;
 }
 
-static void do_wmf_record_list(deark *c, lctx *d, de_int64 pos)
+static void do_wmf_record_list(deark *c, lctx *d, i64 pos)
 {
-	de_int64 recpos;
-	de_int64 recsize_words, recsize_bytes;
-	de_int64 count;
+	i64 recpos;
+	i64 recsize_words, recsize_bytes;
+	i64 count;
 
 	de_dbg(c, "record list at %d", (int)pos);
 	de_dbg_indent(c, 1);
@@ -787,7 +787,7 @@ static void do_wmf_record_list(deark *c, lctx *d, de_int64 pos)
 		recpos = pos;
 		if(recpos >= c->infile->len) break; // Unexpected EOF
 
-		recsize_words = de_getui32le(recpos);
+		recsize_words = de_getu32le(recpos);
 		recsize_bytes = recsize_words*2;
 		if(recpos + recsize_bytes > c->infile->len) break; // Unexpected EOF
 		if(recsize_bytes < 6) break; // Invalid size
@@ -806,14 +806,11 @@ static void do_wmf_record_list(deark *c, lctx *d, de_int64 pos)
 static void de_run_wmf(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos = 0;
+	i64 pos = 0;
 
 	d = de_malloc(c, sizeof(lctx));
 
-	if(c->input_encoding==DE_ENCODING_UNKNOWN)
-		d->input_encoding = DE_ENCODING_WINDOWS1252;
-	else
-		d->input_encoding = c->input_encoding;
+	d->input_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_WINDOWS1252);
 
 	if(!dbuf_memcmp(c->infile, 0, "\xd7\xcd\xc6\x9a", 4)) {
 		d->has_aldus_header = 1;
@@ -845,7 +842,7 @@ done:
 
 static int de_identify_wmf(deark *c)
 {
-	de_byte buf[4];
+	u8 buf[4];
 
 	de_read(buf, 0, 4);
 
@@ -853,9 +850,9 @@ static int de_identify_wmf(deark *c)
 		return 100;
 
 	if(de_input_file_has_ext(c, "wmf")) {
-		de_int64 ftype, hsize;
-		ftype = de_getui16le_direct(&buf[0]);
-		hsize = de_getui16le_direct(&buf[2]);
+		i64 ftype, hsize;
+		ftype = de_getu16le_direct(&buf[0]);
+		hsize = de_getu16le_direct(&buf[2]);
 		if(hsize==9 && (ftype==1 || ftype==2)) {
 			return 80;
 		}

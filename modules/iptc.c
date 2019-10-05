@@ -11,36 +11,36 @@ DE_DECLARE_MODULE(de_module_iptc);
 typedef struct localctx_struct {
 	// The coded character set defined in 1:90.
 	// This applied to records 2-6, and sometimes 8.
-	int charset;
+	de_encoding charset;
 } lctx;
 
 struct ds_info;
 
 typedef void (*ds_handler_fn)(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len);
+	i64 pos, i64 len);
 
 struct ds_info {
-	de_byte recnum;
-	de_byte dsnum;
+	u8 recnum;
+	u8 dsnum;
 
 	// 0x1 = A field consisting entirely of text ("graphic characters",
 	//       "alphabetic characters", "numeric characters, "spaces", etc.)
-	de_uint32 flags;
+	u32 flags;
 
 	const char *dsname;
 	ds_handler_fn hfn;
 };
 
 static void handle_text(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len);
+	i64 pos, i64 len);
 static void handle_uint16(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len);
+	i64 pos, i64 len);
 static void handle_1_90(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len);
+	i64 pos, i64 len);
 static void handle_2_120(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len);
+	i64 pos, i64 len);
 static void handle_2_125(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len);
+	i64 pos, i64 len);
 
 static const struct ds_info ds_info_arr[] = {
 	{ 1, 0,   0,      "Model Version", handle_uint16 },
@@ -124,7 +124,7 @@ static const struct ds_info ds_info_arr[] = {
 	{ 9, 10,  0,      "Confirmed ObjectData Size", NULL }
 };
 
-static int get_ds_encoding(deark *c, lctx *d, de_byte recnum)
+static de_encoding get_ds_encoding(deark *c, lctx *d, u8 recnum)
 {
 	if(recnum>=2 && recnum<=6) {
 		return d->charset;
@@ -133,7 +133,7 @@ static int get_ds_encoding(deark *c, lctx *d, de_byte recnum)
 }
 
 static void handle_1_90(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len)
+	i64 pos, i64 len)
 {
 	const char *csname;
 
@@ -155,11 +155,11 @@ static void handle_1_90(deark *c, lctx *d, const struct ds_info *dsi,
 
 // Caption/abstract
 static void handle_2_120(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len)
+	i64 pos, i64 len)
 {
 	de_ucstring *s = NULL;
 	dbuf *outf = NULL;
-	int encoding;
+	de_encoding encoding;
 	const char *fntoken;
 
 	if(c->extract_level<2) {
@@ -167,10 +167,11 @@ static void handle_2_120(deark *c, lctx *d, const struct ds_info *dsi,
 		goto done;
 	}
 
-	// FIXME: There is currently no way to extract IPTC captions to files,
-	// except when reading a raw IPTC file. If IPTC is embedded in some other
-	// file (as it usually is), then the -a option will extract the entire
-	// IPTC data, and we will never get here.
+	// Note that this code for extracting captions while decoding IPTC is not
+	// easily reached, because it requires the -a option, and -a usually causes
+	// IPTC to be extracted instead of decoded.
+	// It can be reached when reading a raw IPTC file, or when using
+	// "-a -opt extractiptc=0".
 
 	fntoken = "caption.txt";
 
@@ -195,14 +196,14 @@ done:
 
 // Rasterized caption
 static void handle_2_125(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len)
+	i64 pos, i64 len)
 {
 	dbuf *unc_pixels = NULL;
 	de_bitmap *img = NULL;
-	de_int64 i, j;
-	de_byte b;
-	de_int64 rowspan;
-	de_int64 width, height;
+	i64 i, j;
+	u8 b;
+	i64 rowspan;
+	i64 width, height;
 
 	// I can't find any examples of this field, so this may not be correct.
 	// The format seems to be well-documented, though the pixels are in an
@@ -227,11 +228,11 @@ static void handle_2_125(deark *c, lctx *d, const struct ds_info *dsi,
 }
 
 // Caller supplies dsi. This function will set its fields.
-static int lookup_ds_info(de_byte recnum, de_byte dsnum, struct ds_info *dsi)
+static int lookup_ds_info(u8 recnum, u8 dsnum, struct ds_info *dsi)
 {
 	size_t i;
 
-	de_memset(dsi, 0, sizeof(struct ds_info));
+	de_zeromem(dsi, sizeof(struct ds_info));
 
 	for(i=0; i<DE_ITEMS_IN_ARRAY(ds_info_arr); i++) {
 		if(ds_info_arr[i].recnum==recnum && ds_info_arr[i].dsnum==dsnum) {
@@ -247,19 +248,19 @@ static int lookup_ds_info(de_byte recnum, de_byte dsnum, struct ds_info *dsi)
 	return 0;
 }
 
-static int read_dflen(deark *c, dbuf *f, de_int64 pos,
-	de_int64 *dflen, de_int64 *bytes_consumed)
+static int read_dflen(deark *c, dbuf *f, i64 pos,
+	i64 *dflen, i64 *bytes_consumed)
 {
-	de_int64 x;
+	i64 x;
 
-	x = dbuf_getui16be(f, pos);
+	x = dbuf_getu16be(f, pos);
 	if(x<32768) { // "Standard DataSet" format
 		*dflen = x;
 		*bytes_consumed = 2;
 	}
 	else { // "Extended DataSet" format
-		de_int64 length_of_length;
-		de_int64 i;
+		i64 length_of_length;
+		i64 i;
 
 		length_of_length = x - 32768;
 		*dflen = 0;
@@ -281,9 +282,9 @@ static int read_dflen(deark *c, dbuf *f, de_int64 pos,
 }
 
 static void handle_text(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len)
+	i64 pos, i64 len)
 {
-	int encoding;
+	de_encoding encoding;
 	de_ucstring *s = NULL;
 
 	s = ucstring_create(c);
@@ -296,23 +297,23 @@ static void handle_text(deark *c, lctx *d, const struct ds_info *dsi,
 }
 
 static void handle_uint16(deark *c, lctx *d, const struct ds_info *dsi,
-	de_int64 pos, de_int64 len)
+	i64 pos, i64 len)
 {
-	de_int64 x;
+	i64 x;
 	if(len!=2) return;
-	x = de_getui16be(pos);
+	x = de_getu16be(pos);
 	de_dbg(c, "%s: %d", dsi->dsname, (int)x);
 }
 
-static int do_dataset(deark *c, lctx *d, de_int64 ds_idx, de_int64 pos1,
-	de_int64 *bytes_consumed)
+static int do_dataset(deark *c, lctx *d, i64 ds_idx, i64 pos1,
+	i64 *bytes_consumed)
 {
-	de_byte b;
-	de_byte recnum, dsnum;
+	u8 b;
+	u8 recnum, dsnum;
 	int retval = 0;
-	de_int64 pos = pos1;
-	de_int64 dflen;
-	de_int64 dflen_bytes_consumed;
+	i64 pos = pos1;
+	i64 dflen;
+	i64 dflen_bytes_consumed;
 	struct ds_info dsi;
 	int ds_known;
 
@@ -345,7 +346,7 @@ static int do_dataset(deark *c, lctx *d, de_int64 ds_idx, de_int64 pos1,
 	if(!read_dflen(c, c->infile, pos, &dflen, &dflen_bytes_consumed)) goto done;
 	pos += dflen_bytes_consumed;
 
-	de_dbg(c, "IPTC dataset %d:%02d (%s) dpos=%" INT64_FMT " dlen=%" INT64_FMT "",
+	de_dbg(c, "IPTC dataset %d:%02d (%s) dpos=%" I64_FMT " dlen=%" I64_FMT "",
 		(int)recnum, (int)dsnum, dsi.dsname, pos, dflen);
 
 	// Decode the value
@@ -375,9 +376,9 @@ done:
 static void de_run_iptc(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	de_int64 pos;
-	de_int64 bytes_consumed;
-	de_int64 ds_count;
+	i64 pos;
+	i64 bytes_consumed;
+	i64 ds_count;
 
 	d = de_malloc(c, sizeof(lctx));
 	d->charset = DE_ENCODING_UNKNOWN;
@@ -397,7 +398,7 @@ static void de_run_iptc(deark *c, de_module_params *mparams)
 
 static int de_identify_iptc(deark *c)
 {
-	de_byte b;
+	u8 b;
 
 	// First byte of each dataset is 0x1c.
 	if(de_getbyte(0)!=0x1c) return 0;
@@ -407,8 +408,8 @@ static int de_identify_iptc(deark *c)
 	if(b<1 || b>15) return 0;
 
 	// This is not meant to imply that .iptc is an official file extension for
-	// IPTC data. It's just that it's used by Deark when extracting IPTC data
-	// to a file.
+	// IPTC data. It's just that it's sometimes used by Deark when extracting
+	// IPTC data to a file.
 	if(!de_input_file_has_ext(c, "iptc")) return 0;
 
 	return 60;

@@ -3115,6 +3115,7 @@ static time_t mz_zip_dos_to_time_t(int dos_time, int dos_date)
   return mktime(&tm);
 }
 
+#if 0
 static void mz_zip_time_to_dos_time(time_t time, mz_uint16 *pDOS_time, mz_uint16 *pDOS_date)
 {
 #ifdef _MSC_VER
@@ -3132,6 +3133,7 @@ static void mz_zip_time_to_dos_time(time_t time, mz_uint16 *pDOS_time, mz_uint16
   *pDOS_time = (mz_uint16)(((tm->tm_hour) << 11) + ((tm->tm_min) << 5) + ((tm->tm_sec) >> 1));
   *pDOS_date = (mz_uint16)(((tm->tm_year + 1900 - 1980) << 9) + ((tm->tm_mon + 1) << 5) + tm->tm_mday);
 }
+#endif
 #endif
 
 #ifndef MINIZ_NO_STDIO
@@ -4174,7 +4176,8 @@ mz_bool mz_zip_writer_init_from_reader(mz_zip_archive *pZip, const char *pFilena
   if (pState->m_pFile)
   {
 #ifdef MINIZ_NO_STDIO
-    pFilename; return MZ_FALSE;
+    (void)pFilename;
+    return MZ_FALSE;
 #else
     // Archive is being read from stdio - try to reopen as writable.
     if (pZip->m_pIO_opaque != pZip)
@@ -4272,14 +4275,14 @@ static mz_bool mz_zip_writer_create_central_dir_header(mz_zip_archive *pZip, mz_
   MZ_WRITE_LE16(pDst + MZ_ZIP_CDH_EXTRA_LEN_OFS, extra_size);
   MZ_WRITE_LE16(pDst + MZ_ZIP_CDH_COMMENT_LEN_OFS, comment_size);
 
-  // Hack for Deark: Set the Unix file attributes to "-rw-r--r--" or "-rwxr-xr-x".
-  // (0x81A4 = 100644 octal)
-  // (0x81ED = 100755 octal)
-  // Note that this will not work if the "file" is a subdirectory.
-  if(dfa && dfa->is_executable)
-	ext_attributes = 0x81ED0000U;
+  // Hack for Deark: Set the Unix (etc.) file attributes to "-rw-r--r--" or
+  // "-rwxr-xr-x", etc.
+  if(dfa && dfa->is_directory)
+    ext_attributes = (0040755U << 16) | 0x10;
+  else if(dfa && dfa->is_executable)
+    ext_attributes = (0100755U << 16);
   else
-	ext_attributes = 0x81a40000U;
+    ext_attributes = (0100644U << 16);
   MZ_WRITE_LE32(pDst + MZ_ZIP_CDH_EXTERNAL_ATTR_OFS, ext_attributes);
 
   MZ_WRITE_LE32(pDst + MZ_ZIP_CDH_LOCAL_HEADER_OFS, local_header_ofs);
@@ -4363,6 +4366,7 @@ mz_bool mz_zip_writer_add_mem_ex(mz_zip_archive *pZip, const char *pArchive_name
   tdefl_compressor *pComp = NULL;
   mz_bool store_data_uncompressed;
   mz_zip_internal_state *pState;
+  mz_uint bit_flags;
 
   if ((int)level_and_flags < 0)
     level_and_flags = MZ_DEFAULT_LEVEL;
@@ -4382,6 +4386,7 @@ mz_bool mz_zip_writer_add_mem_ex(mz_zip_archive *pZip, const char *pArchive_name
   if (!mz_zip_writer_validate_archive_name(pArchive_name))
     return MZ_FALSE;
 
+#if 0
 #ifndef MINIZ_NO_TIME
   {
     time_t cur_time;
@@ -4392,6 +4397,9 @@ mz_bool mz_zip_writer_add_mem_ex(mz_zip_archive *pZip, const char *pArchive_name
     mz_zip_time_to_dos_time(cur_time, &dos_time, &dos_date);
   }
 #endif // #ifndef MINIZ_NO_TIME
+#endif
+  dos_time = (mz_uint16)dfa->modtime_dostime;
+  dos_date = (mz_uint16)dfa->modtime_dosdate;
 
   archive_name_size = strlen(pArchive_name);
   if (archive_name_size > 0xFFFF)
@@ -4500,14 +4508,31 @@ mz_bool mz_zip_writer_add_mem_ex(mz_zip_archive *pZip, const char *pArchive_name
   if ((comp_size > 0xFFFFFFFF) || (cur_archive_file_ofs > 0xFFFFFFFF))
     return MZ_FALSE;
 
-  if (!mz_zip_writer_create_local_dir_header(pZip, local_dir_header, (mz_uint16)archive_name_size, dfa?dfa->extra_data_local_size:0, uncomp_size, comp_size, uncomp_crc32, method, 0, dos_time, dos_date))
+  // Hack for Deark:
+  bit_flags = 0;
+  if(method == MZ_DEFLATED) {
+	  // This is the logic used by Info-Zip
+	  if(level<=2) bit_flags |= 4;
+	  else if(level>=8) bit_flags |= 2;
+  }
+
+  if (!mz_zip_writer_create_local_dir_header(pZip, local_dir_header, (mz_uint16)archive_name_size,
+	  dfa?dfa->extra_data_local_size:0, uncomp_size, comp_size, uncomp_crc32, method, bit_flags,
+	  dos_time, dos_date))
+  {
     return MZ_FALSE;
+  }
 
   if (pZip->m_pWrite(pZip->m_pIO_opaque, local_dir_header_ofs, local_dir_header, sizeof(local_dir_header)) != sizeof(local_dir_header))
     return MZ_FALSE;
 
-  if (!mz_zip_writer_add_to_central_dir(pZip, pArchive_name, (mz_uint16)archive_name_size, dfa?dfa->extra_data_central:NULL, dfa?dfa->extra_data_central_size:0, pComment, comment_size, uncomp_size, comp_size, uncomp_crc32, method, 0, dos_time, dos_date, local_dir_header_ofs, ext_attributes, dfa))
+  if (!mz_zip_writer_add_to_central_dir(pZip, pArchive_name, (mz_uint16)archive_name_size,
+	  dfa?dfa->extra_data_central:NULL, dfa?dfa->extra_data_central_size:0, pComment,
+	  comment_size, uncomp_size, comp_size, uncomp_crc32, method, bit_flags, dos_time, dos_date,
+	  local_dir_header_ofs, ext_attributes, dfa))
+  {
     return MZ_FALSE;
+  }
 
   pZip->m_total_files++;
   pZip->m_archive_size = cur_archive_file_ofs;
