@@ -545,7 +545,7 @@ static void do_mp3_frame(deark *c, mp3ctx *d, i64 pos1, i64 len)
 	de_dbg(c, "original media flag: %u", d->has_padding);
 	d->emphasis = (x&0x00000003U);
 	de_dbg(c, "emphasis: %u", d->emphasis);
-	pos += 4;
+	//pos += 4;
 	d->frame_count++;
 
 done:
@@ -571,8 +571,6 @@ static void de_run_mpegaudio(deark *c, de_module_params *mparams)
 	struct de_id3info id3i;
 
 	d = de_malloc(c, sizeof(mp3ctx));
-	pos = 0;
-	endpos = c->infile->len;
 
 	de_fmtutil_handle_id3(c, c->infile, &id3i, 0);
 	d->has_id3v2 = id3i.has_id3v2;
@@ -606,7 +604,7 @@ static int de_identify_mpegaudio(deark *c)
 	u8 has_id3v2;
 	i64 pos;
 
-	if(!c->detection_data.id3.detection_attempted) {
+	if(!c->detection_data->id3.detection_attempted) {
 		de_err(c, "mpegaudio detection requires id3 module");
 		return 0;
 	}
@@ -627,7 +625,7 @@ static int de_identify_mpegaudio(deark *c)
 	}
 	has_any_ext = has_mp3_ext || has_mp2_ext || has_mp1_ext;
 
-	has_id3v2 = c->detection_data.id3.has_id3v2;
+	has_id3v2 = c->detection_data->id3.has_id3v2;
 
 	if(!has_id3v2 && !has_any_ext) {
 		// TODO: We could try harder to identify MP3.
@@ -635,7 +633,7 @@ static int de_identify_mpegaudio(deark *c)
 	}
 
 	if(has_id3v2) {
-		pos = (i64)c->detection_data.id3.bytes_at_start;
+		pos = (i64)c->detection_data->id3.bytes_at_start;
 	}
 	else {
 		pos = 0;

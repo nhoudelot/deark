@@ -16,6 +16,8 @@ $(OBJDIR)/modules/applesd.o: modules/applesd.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/ar.o: modules/ar.c src/deark-config.h \
  src/deark-private.h src/deark.h
+$(OBJDIR)/modules/arc.o: modules/arc.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/arcfs.o: modules/arcfs.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/asf.o: modules/asf.c src/deark-config.h \
@@ -37,7 +39,7 @@ $(OBJDIR)/modules/bintext.o: modules/bintext.c src/deark-config.h \
 $(OBJDIR)/modules/bmff.o: modules/bmff.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/bmi.o: modules/bmi.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/bmp.o: modules/bmp.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/bpg.o: modules/bpg.c src/deark-config.h \
@@ -48,6 +50,8 @@ $(OBJDIR)/modules/cab.o: modules/cab.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/cardfile.o: modules/cardfile.c src/deark-config.h \
  src/deark-private.h src/deark.h
+$(OBJDIR)/modules/ccx.o: modules/ccx.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/cfb.o: modules/cfb.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/cpio.o: modules/cpio.c src/deark-config.h \
@@ -87,11 +91,11 @@ $(OBJDIR)/modules/grasp.o: modules/grasp.c src/deark-config.h \
 $(OBJDIR)/modules/grob.o: modules/grob.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/gzip.o: modules/gzip.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/hfs.o: modules/hfs.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/hlp.o: modules/hlp.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/iccprofile.o: modules/iccprofile.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/icns.o: modules/icns.c src/deark-config.h \
@@ -121,7 +125,7 @@ $(OBJDIR)/modules/jpeg.o: modules/jpeg.c src/deark-config.h \
 $(OBJDIR)/modules/lha.o: modules/lha.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/macbinary.o: modules/macbinary.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/macpaint.o: modules/macpaint.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/macrsrc.o: modules/macrsrc.c src/deark-config.h \
@@ -137,13 +141,15 @@ $(OBJDIR)/modules/misc.o: modules/misc.c src/deark-config.h \
 $(OBJDIR)/modules/mp3.o: modules/mp3.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/mscompress.o: modules/mscompress.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/msp.o: modules/msp.c src/deark-config.h \
+ src/deark-private.h src/deark.h
+$(OBJDIR)/modules/nie.o: modules/nie.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/nokia.o: modules/nokia.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/officeart.o: modules/officeart.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/ogg.o: modules/ogg.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/ole1.o: modules/ole1.c src/deark-config.h \
@@ -151,6 +157,8 @@ $(OBJDIR)/modules/ole1.o: modules/ole1.c src/deark-config.h \
 $(OBJDIR)/modules/olepropset.o: modules/olepropset.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/os2bmp.o: modules/os2bmp.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
+$(OBJDIR)/modules/packdir.o: modules/packdir.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/palmbitmap.o: modules/palmbitmap.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
@@ -207,7 +215,7 @@ $(OBJDIR)/modules/sauce.o: modules/sauce.c src/deark-config.h \
 $(OBJDIR)/modules/shg.o: modules/shg.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/sis.o: modules/sis.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/spectrum512.o: modules/spectrum512.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/stuffit.o: modules/stuffit.c src/deark-config.h \
@@ -246,11 +254,9 @@ $(OBJDIR)/modules/xface.o: modules/xface.c src/deark-config.h \
 $(OBJDIR)/modules/xfer.o: modules/xfer.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/zip.o: modules/zip.c src/deark-config.h \
- src/deark-private.h src/deark.h src/deark-fmtutil.h \
- modules/../foreign/explode.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/zoo.o: modules/zoo.c src/deark-config.h \
- src/deark-private.h src/deark.h modules/../foreign/unzoo.h \
- modules/../foreign/zoo-lzd.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/src/deark-bitmap.o: src/deark-bitmap.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/src/deark-char.o: src/deark-char.c src/deark-config.h \
@@ -261,16 +267,12 @@ $(OBJDIR)/src/deark-data.o: src/deark-data.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/src/deark-dbuf.o: src/deark-dbuf.c src/deark-config.h \
  src/deark-private.h src/deark.h
-$(OBJDIR)/src/deark-fmtutil.o: src/deark-fmtutil.c src/deark-config.h \
- src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/src/deark-font.o: src/deark-font.c src/deark-config.h \
  src/deark-private.h src/deark.h
-$(OBJDIR)/src/deark-liblzw.o: src/deark-liblzw.c src/deark-config.h \
- src/deark-private.h src/deark.h src/../foreign/liblzw.h
-$(OBJDIR)/src/deark-miniz.o: src/deark-miniz.c src/deark-config.h \
- src/deark-private.h src/deark.h src/../foreign/miniz.h
 $(OBJDIR)/src/deark-modules.o: src/deark-modules.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-user.h src/deark-modules.h
+$(OBJDIR)/src/deark-png.o: src/deark-png.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/src/deark-tar.o: src/deark-tar.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/src/deark-ucstring.o: src/deark-ucstring.c src/deark-config.h \
@@ -282,3 +284,21 @@ $(OBJDIR)/src/deark-user.o: src/deark-user.c src/deark-config.h \
 $(OBJDIR)/src/deark-util.o: src/deark-util.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/src/deark-win.o: src/deark-win.c src/deark-config.h
+$(OBJDIR)/src/deark-zip.o: src/deark-zip.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
+$(OBJDIR)/src/fmtutil-cmpr.o: src/fmtutil-cmpr.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
+$(OBJDIR)/src/fmtutil-lzw.o: src/fmtutil-lzw.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h \
+ src/../foreign/delzw.h
+$(OBJDIR)/src/fmtutil-miniz.o: src/fmtutil-miniz.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h \
+ src/../foreign/miniz.h
+$(OBJDIR)/src/fmtutil-zip.o: src/fmtutil-zip.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h \
+ src/../foreign/ozunreduce.h src/../foreign/unimplode6a.h
+$(OBJDIR)/src/fmtutil-zoo.o: src/fmtutil-zoo.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h \
+ src/../foreign/unzoo-lzh.h
+$(OBJDIR)/src/fmtutil.o: src/fmtutil.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h

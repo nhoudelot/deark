@@ -106,15 +106,21 @@ Deark -- Information about supported formats
   Options
    -opt ole1:extractall - Extract unidentified OLE objects
 
-* CorelDRAW CDR, old "WL" format (module="cdr_wl") (experimental)
-  - Extracts preview image.
-
 * COKE (Atari Falcon) (*.tg1) (module="coke")
 
 * Compface intermediate format (module="compfacei")
   This is an obscure text-based format related to X-Face, used by the Compface
   software.
   - Cannot be autodetected. You must use "-m compfacei".
+
+* Corel CCX (module="corel_ccx")
+  - Decompresses and converts to CMX format.
+
+* CorelDRAW CDR, old "WL" format (module="cdr_wl") (experimental)
+  - Extracts preview image.
+
+* Corel Gallery BMF (module="corel_bmf") (experimental)
+  - Extracts preview image.
 
 * DIB (module="dib")
   - Adds a BMP file header to a raw Windows DIB file.
@@ -188,6 +194,10 @@ Deark -- Information about supported formats
    -opt grob:planes=<n> - Treat image as grayscale. <n> should usually be 2.
    -opt grob:planeorder=l - For grayscale, assume the least-significant
      bitplane comes first.
+
+* Hemera Photo-Object image (module="hpi")
+  - Extracts the color components to a JPEG file, and the alpha component (if
+   present) to a PNG file.
 
 * HP 100LX / HP 200LX .ICN icon format (module="hpicn")
 
@@ -295,6 +305,9 @@ Deark -- Information about supported formats
    -file2 <file.pnm> - Use this "name" file
    -opt namefile=<file.pnm> - Use this "name" file
 
+* NIE/NII/NIA (module="nie") (experimental)
+  The "Naive Image Formats" associated with the Wuffs project.
+
 * NGG (Nokia Group Graphic) (module="ngg")
 
 * NLM (Nokia Logo Manager bitmap) (module="nlm")
@@ -342,6 +355,10 @@ Deark -- Information about supported formats
   Options
    -opt pcx:pal=<0|1> - The predefined palette to use, if there is no palette
      in the file. Default is 0.
+   -opt pcx:resmode=<ignore|dpi|screen|auto> - How to interpret the
+     "resolution" field. "screen" means as the target screen mode's pixel
+     dimensions (assumes 4:3 screen). The default is "auto", which means to
+     guess.
    -file2 <file.p13> - Read the palette from a separate file. Each entry is 3
      bytes (R,G,B); samples range from 0-63.
 
@@ -428,6 +445,8 @@ Deark -- Information about supported formats
 * RSC (GEM resource) (module="rsc") (experimental)
   - Supports both "old" and "new" formats.
   - Extracts icons and bitmaps.
+  Options
+   -opt rsc:fmt=<atari|pc> - Use this byte order. Default is to autodetect.
 
 * SHG and MRB (module="shg")
   Segmented Hypergraphics and Multi-Resolution Bitmap formats are used in
@@ -552,6 +571,9 @@ Deark -- Information about supported formats
 
 === Compression, archive, installer, disk image modules ===
 
+* ARC archive (module="arc")
+  - Limited support.
+
 * ArcFS (module="arcfs")
   Options
    -opt arcfs:appendtype - Append the file type to the filename
@@ -559,14 +581,16 @@ Deark -- Information about supported formats
 * AmBs (AMOS "Banks" aggregate format) (module="abk")
   - Extract AmSp, AmIc, AmBk files.
 
-* AppleDouble Header file (module="appledouble")
-  These files usually have names beginning with "._".
-  - Extract resource fork.
-
 * Apple Partition Map (module="apm") (experimental)
 
-* AppleSingle (module="applesingle")
-  - Extract data and resource forks.
+* AppleSingle/AppleDouble (module="applesd")
+  AppleDouble files often have names beginning with "._".
+  - Extract data fork.
+  - Extract (default for AppleSingle) or decode (default for AppleDouble)
+    resource fork.
+  Options
+   -opt applesd:extractrsrc=<0|1> - Specify whether the resource fork is
+     decoded (0), or extracted (1).
 
 * ar (.a archive/library format) (module="ar") (experimental/incomplete)
   - Supports System V long filenames
@@ -621,7 +645,7 @@ Deark -- Information about supported formats
    -opt cfb:fmt=thumbsdb - Treat the file as a Thumbs.db file.
 
 * Microsoft Installation Compression (module="mscompress")
-  - "KWAJ" variant not supported
+  - "KWAJ" variant is not well supported
 
 * NRG (module="nrg") (experimental)
   Nero CD image format.
@@ -649,6 +673,12 @@ Deark -- Information about supported formats
 * SIS (EPOC/Symbian archive) (module="sis")
   - EPOC release 3/4/5/6
 
+* Spark archive (module="spark")
+  - Limited support.
+  Options
+   -opt spark:appendtype - Append the file type to the filename
+   -opt spark:recurse=0 - Extract subdirectories as Spark files
+
 * Squash (module="squash") (experimental)
   A variant of "compress", used on RISC OS.
 
@@ -663,9 +693,12 @@ Deark -- Information about supported formats
   - Some metadata is parsed, but the disk contents are not extracted or listed.
 
 * ZIP (module="zip")
-  - Supports "stored", "deflate", and "implode" compression.
+  - Supports most compression methods.
   - Extract main ZIP file comment (use -a).
   - Extract comments for individual files (use -a).
+  Options
+   -opt zip:scanmode - Attempt to read the file without using the ZIP "central
+     directory". Not recommended, but allows some damaged ZIP files to be read.
 
 * zlib (module="zlib")
   - Raw zlib files are uncompressed.
@@ -747,9 +780,11 @@ Deark -- Information about supported formats
   Print a hex dump of the file.
   - You must use "-m hexdump".
 
-* HLP (Windows Help) (module="hlp") (experimental)
-  - Extract SHG/MRB graphics
-  - Extract icon (rarely present)
+* HLP (Windows Help) (module="hlp")
+  Options
+   -opt hlp:extracttext - Write the file's text (unformatted) to a file. This
+     feature is experimental and incomplete.
+   -opt hlp:extractstreams - Extract raw files, instead of decoding.
 
 * ICC profile (module="iccprofile")
   - Debug info only.

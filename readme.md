@@ -48,10 +48,14 @@ Command-line options:
    path. Default is "output", except in some cases when using -zip/-tar.
 -k, -k2, -k3
    "Keep" the input filename, and use it as the initial part of the output
-   filename(s).
+   filename(s). Incompatible with -o.
    -k: Use only the base filename.
    -k2: Use the full path, but not as an actual path.
    -k3: Use the full path, as-is.
+-od &lt;directory>
+   The directory in which to write output files. The directory must exist.
+   This affects only files that Deark writes directly, not e.g. the names of
+   ZIP member files when using -zip.
 -n
    Do not overwrite existing output files.
 -file &lt;input-file>
@@ -63,7 +67,7 @@ Command-line options:
    formats.txt file for details.
 -zip
    Write output files to a .zip file, instead of to individual files.
-   If the input format is an "archive" format (e.g. "ar" or "graspgl"), then
+   If the input format is an "archive" format (e.g. "ar" or "zoo"), then
    by default, the filenames in the ZIP archive might not include the usual
    "output.NNN" prefix.
 -tar
@@ -73,6 +77,13 @@ Command-line options:
 -arcfn &lt;filename>
    When using -zip/-tar, use this name for the output file. Default is
    "output.zip" or "output.tar".
+-ka, -ka2, -ka3
+   When uzing -zip/-tar, "keep" the input filename, and use it as the initial
+   part of the archive output filename. A suitable filename extenson like
+   ".zip" will be appended. Incompatible with -arcfn.
+   -ka: Use only the base filename.
+   -ka2: Use the full path, but not as an actual path.
+   -ka3: Use the full path, as-is.
 -extrlist &lt;filename>
    Also create a text file containing a list of the names of the extracted
    files. Format is UTF-8, no BOM, LF terminators. To append to the file
@@ -81,8 +92,7 @@ Command-line options:
    Write the output file(s) to the standard output stream (stdout).
    It is recommended to put -tostdout early on the command line. The
    -msgstostderr option is enabled automatically.
-   If used with -zip: Write the ZIP file to standard output. This option
-   might be inefficient, or have file size limitations.
+   If used with -zip: Write the ZIP file to standard output.
    Otherwise: The "-maxfiles 1" option is enabled automatically. Including the
    -main option is recommended.
 -fromstdin
@@ -193,6 +203,17 @@ Command-line options:
     -opt atari:palbits=&lt;9|12|15>
        For some Atari image formats, the number of significant bits per
        palette color. The default is to autodetect.
+    -opt macrsrc=&lt;raw|as|ad>
+       The preferred way to extract Macintosh resource forks, and data files
+       associated with a non-empty resource fork.
+        raw = Write the raw resource fork to a separate .rsrc file.
+        ad = Put the resource fork in an AppleDouble container (default).
+        as = Put both forks in an AppleSingle container.
+       For input files already in AppleDouble or AppleSingle format, see the
+       formats.txt file for more information.
+-id
+   Stop after the format identification phase. This can be used to show what
+   module Deark will run, without actually running it.
 -h, -?, -help:
    Print the help message.
    Use with -m to get help for a specific module. Use with a filename to get
@@ -235,11 +256,11 @@ Command-line options:
    oem: [Windows only; has no effect on other platforms] Use the "OEM"
      character set. This may be useful when paging the output with "|more".
 -inenc &lt;ascii|utf8|latin1|cp437|windows1250|windows1251|windows1252|
-     macroman>
+     windows1253|windows1254|macroman>
    Supply a hint as to the encoding of the text contained in the input file.
-   This option is incompletely implemented, and will be ignored if the encoding
-   can be reliably determined by other means. Admittedly, Deark does not yet
-   know enough encodings for this option to be really useful.
+   This option is not supported by all formats, and may be ignored if the
+   encoding can be reliably determined by other means. Admittedly, it would be
+   nice if Deark knew more encodings than this.
 -intz &lt;offset>
    Supply a hint as to the time zone used by timestamps contained in the input
    file.
@@ -271,7 +292,18 @@ Command-line options:
    interest of transparency, but it is mainly for developers, and to make it
    possible to do things whose usefulness was not anticipated.
 </pre>
- 
+
+## Exit status ##
+
+Deark sets the exit status to nonzero only if it wasn't able to do its job,
+e.g. due to a read or write failure. A malformed input file usually does not
+cause such an error, and the exit status will be zero even if an error message
+was printed.
+
+However, all fatal errors result in a nonzero exit status, and in extreme cases
+it is possible for the input file to cause a fatal error, due to certain
+resource limits being exceeded.
+
 ## Terms of use ##
 
 Starting with version 1.4.x, Deark is distributed under an MIT-style license.
@@ -306,10 +338,7 @@ See the [technical.md](technical.md) file.
 
 Thanks to Rich Geldreich for the miniz library.
 
-Thanks to Mike Frysinger, and the authors of compress/ncompress, for liblzw.
-
-Thanks to Rahul Dhesi and Martin Schoenert for much of the code used by the ZOO
-format decoder.
+Thanks Martin Schoenert for some of the code used by the ZOO format decoder.
 
 Thanks to James Ashton for much of the code used by the X-Face format decoder.
 
@@ -322,7 +351,7 @@ Thanks to countless others who have documented the supported file formats.
 
 ## Authors ##
 
-Written by Jason Summers, 2014-2019.<br>
-Copyright &copy; 2016-2019 Jason Summers<br>
+Written by Jason Summers, 2014-2020.<br>
+Copyright &copy; 2016-2020 Jason Summers<br>
 [https://entropymine.com/deark/](https://entropymine.com/deark/)<br>
 [https://github.com/jsummers/deark](https://github.com/jsummers/deark)

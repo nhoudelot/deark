@@ -123,6 +123,16 @@ FILE* de_fopen_for_write(deark *c, const char *fn,
 {
 	const char *mode;
 
+	// A simple check to make it harder to accidentally overwrite the input
+	// file. (But it can easily be defeated.)
+	// TODO?: Make this more robust.
+	if(c->input_filename && !de_strcmp(fn, c->input_filename)) {
+		de_err(c, "Refusing to write to %s: Same as input filename", fn);
+		de_fatalerror(c);
+		de_strlcpy(errmsg, "", errmsg_len);
+		return NULL;
+	}
+
 	if(overwrite_mode!=DE_OVERWRITEMODE_STANDARD) {
 		// Check if the file already exists.
 		struct stat stbuf;
@@ -258,23 +268,23 @@ void de_current_time_to_timestamp(struct de_timestamp *ts)
 	de_timestamp_set_subsec(ts, ((double)tv.tv_usec)/1000000.0);
 }
 
-void de_exitprocess(void)
+void de_exitprocess(int s)
 {
-	exit(1);
+	exit(s);
 }
 
-struct de_platform_data *de_platformdata_create(deark *c)
+struct de_platform_data *de_platformdata_create(void)
 {
 	struct de_platform_data *plctx;
 
-	plctx = de_malloc(c, sizeof(struct de_platform_data));
+	plctx = de_malloc(NULL, sizeof(struct de_platform_data));
 	return plctx;
 }
 
-void de_platformdata_destroy(deark *c, struct de_platform_data *plctx)
+void de_platformdata_destroy(struct de_platform_data *plctx)
 {
 	if(!plctx) return;
-	de_free(c, plctx);
+	de_free(NULL, plctx);
 }
 
 #endif // DE_UNIX

@@ -92,6 +92,21 @@ void dbuf_read(dbuf *f, u8 *buf, i64 pos, i64 len)
 
 	c = f->c;
 
+	if(pos < 0) {
+		if((-pos) >= len) {
+			// All requested bytes are before the beginning of the file
+			de_zeromem(buf, (size_t)len);
+			return;
+		}
+		// Some requested bytes are before the beginning of the file.
+		// Zero out the ones that are:
+		de_zeromem(buf, (size_t)(-pos));
+		// And adjust the parameters:
+		buf += (-pos);
+		len -= (-pos);
+		pos = 0;
+	}
+
 	bytes_to_read = len;
 	if(pos >= f->len) {
 		bytes_to_read = 0;
@@ -123,7 +138,7 @@ void dbuf_read(dbuf *f, u8 *buf, i64 pos, i64 len)
 		if(!f->fp) {
 			de_err(c, "Internal: File not open");
 			de_fatalerror(c);
-			return;
+			goto done_read;
 		}
 
 		// For performance reasons, don't call fseek if we're already at the
@@ -154,7 +169,7 @@ void dbuf_read(dbuf *f, u8 *buf, i64 pos, i64 len)
 	default:
 		de_err(c, "Internal: getbytes from this I/O type not implemented");
 		de_fatalerror(c);
-		return;
+		goto done_read;
 	}
 
 done_read:
@@ -756,6 +771,8 @@ void dbuf_copy_at(dbuf *inf, i64 input_offset, i64 input_len,
 // UTF-8 version of ->str. This is mainly useful if the original string was
 // UTF-16. sz_utf8 is not "printable" -- use ucstring_get_printable_sz_n(str) for
 // that.
+// ->sz_strlen will equal strlen(->sz) if DE_CONVFLAG_STOP_AT_NUL is set, or
+// the supplied value of max_bytes_to_(scan|keep) if not.
 // Recognized flags:
 //   - DE_CONVFLAG_STOP_AT_NUL
 //   - DE_CONVFLAG_WANT_UTF8
@@ -770,15 +787,18 @@ struct de_stringreaderdata *dbuf_read_string(dbuf *f, i64 pos,
 	int ret;
 	i64 bytes_avail_to_read;
 	i64 bytes_to_malloc;
-	i64 x_strlen;
+	i64 x_strlen = 0;
 
 	srd = de_malloc(c, sizeof(struct de_stringreaderdata));
 	srd->str = ucstring_create(c);
+	if(max_bytes_to_scan<0) max_bytes_to_scan = 0;
+	if(max_bytes_to_keep<0) max_bytes_to_keep = 0;
 
 	bytes_avail_to_read = max_bytes_to_scan;
 	if(bytes_avail_to_read > f->len-pos) {
 		bytes_avail_to_read = f->len-pos;
 	}
+	if(bytes_avail_to_read<0) bytes_avail_to_read = 0;
 
 	srd->bytes_consumed = bytes_avail_to_read; // default
 
@@ -840,6 +860,7 @@ done:
 		srd->sz_utf8 = de_malloc(c, 1);
 		srd->sz_utf8_strlen = 0;
 	}
+	srd->sz_strlen = (size_t)x_strlen;
 	return srd;
 }
 
@@ -929,6 +950,9 @@ static void finfo_shallow_copy(deark *c, de_finfo *src, de_finfo *dst)
 	dst->mod_time = src->mod_time;
 	dst->image_mod_time = src->image_mod_time;
 	dst->density = src->density;
+	dst->has_hotspot = src->has_hotspot;
+	dst->hotspot_x = src->hotspot_x;
+	dst->hotspot_y = src->hotspot_y;
 }
 
 // Create or open a file for writing, that is *not* one of the usual
@@ -956,8 +980,23 @@ dbuf *dbuf_create_unmanaged_file(deark *c, const char *fname, int overwrite_mode
 	if(!f->fp) {
 		de_err(c, "Failed to write %s: %s", f->name, msgbuf);
 		f->btype = DBUF_TYPE_NULL;
+		c->serious_error_flag = 1;
 	}
 
+	return f;
+}
+
+dbuf *dbuf_create_unmanaged_file_stdout(deark *c, const char *name)
+{
+	dbuf *f;
+
+	f = de_malloc(c, sizeof(dbuf));
+	f->c = c;
+	f->is_managed = 0;
+	f->name = de_strdup(c, name);
+	f->btype = DBUF_TYPE_STDOUT;
+	f->max_len_hard = c->max_output_file_size;
+	f->fp = stdout;
 	return f;
 }
 
@@ -1187,6 +1226,7 @@ dbuf *dbuf_create_output_file(deark *c, const char *ext1, de_finfo *fi,
 		if(!f->fp) {
 			de_err(c, "Failed to write %s: %s", f->name, msgbuf);
 			f->btype = DBUF_TYPE_NULL;
+			c->serious_error_flag = 1;
 		}
 	}
 
@@ -1262,32 +1302,39 @@ void dbuf_write(dbuf *f, const u8 *m, i64 len)
 		do_on_dbuf_size_exceeded(f);
 	}
 
-	if(f->writecallback_fn) {
-		f->writecallback_fn(f, m, len);
+	if(f->writelistener_cb) {
+		// Note that the callback function can be changed at any time, so if we
+		// ever decide to buffer these calls, precautions will be needed.
+		f->writelistener_cb(f, f->userdata_for_writelistener, m, len);
 	}
 
-	if(f->btype==DBUF_TYPE_NULL) {
-		f->len += len;
-		return;
-	}
-	else if(f->btype==DBUF_TYPE_OFILE || f->btype==DBUF_TYPE_STDOUT) {
+	switch(f->btype) {
+	case DBUF_TYPE_OFILE:
+	case DBUF_TYPE_STDOUT:
 		if(!f->fp) return;
 		if(f->c->debug_level>=3) {
-			de_dbg3(f->c, "writing %d bytes to %s", (int)len, f->name);
+			de_dbg3(f->c, "writing %"I64_FMT" bytes to %s", len, f->name);
 		}
 		fwrite(m, 1, (size_t)len, f->fp);
 		f->len += len;
 		return;
-	}
-	else if(f->btype==DBUF_TYPE_MEMBUF) {
+	case DBUF_TYPE_MEMBUF:
 		if(f->c->debug_level>=3 && f->name) {
-			de_dbg3(f->c, "appending %d bytes to membuf %s", (int)len, f->name);
+			de_dbg3(f->c, "appending %"I64_FMT" bytes to membuf %s", len, f->name);
 		}
 		membuf_append(f, m, len);
 		return;
-	}
-	else if(f->btype==DBUF_TYPE_ODBUF) {
+	case DBUF_TYPE_ODBUF:
 		dbuf_write(f->parent_dbuf, m, len);
+		f->len += len;
+		return;
+	case DBUF_TYPE_CUSTOM:
+		if(f->customwrite_fn) {
+			f->customwrite_fn(f, f->userdata_for_customwrite, m, len);
+		}
+		f->len += len;
+		return;
+	case DBUF_TYPE_NULL:
 		f->len += len;
 		return;
 	}
@@ -1353,7 +1400,9 @@ void dbuf_write_at(dbuf *f, i64 pos, const u8 *m, i64 len)
 		}
 	}
 	else if(f->btype==DBUF_TYPE_NULL) {
-		;
+		if(pos+len > f->len) {
+			f->len = pos+len;
+		}
 	}
 	else {
 		de_err(f->c, "internal: Attempt to seek on non-seekable stream");
@@ -1435,6 +1484,26 @@ void dbuf_writeu16be(dbuf *f, i64 n)
 	dbuf_write(f, buf, 2);
 }
 
+void dbuf_writei16le(dbuf *f, i64 n)
+{
+	if(n<0) {
+		dbuf_writeu16le(f, n+65536);
+	}
+	else {
+		dbuf_writeu16le(f, n);
+	}
+}
+
+void dbuf_writei16be(dbuf *f, i64 n)
+{
+	if(n<0) {
+		dbuf_writeu16be(f, n+65536);
+	}
+	else {
+		dbuf_writeu16be(f, n);
+	}
+}
+
 void de_writeu32be_direct(u8 *m, i64 n)
 {
 	m[0] = (u8)((n & 0xff000000)>>24);
@@ -1463,6 +1532,25 @@ void dbuf_writeu32le(dbuf *f, i64 n)
 	u8 buf[4];
 	de_writeu32le_direct(buf, n);
 	dbuf_write(f, buf, 4);
+}
+
+void dbuf_writei32le(dbuf *f, i64 n)
+{
+	if(n<0) {
+		dbuf_writeu32le(f, n+0x100000000LL);
+	}
+	else {
+		dbuf_writeu32le(f, n);
+	}}
+
+void dbuf_writei32be(dbuf *f, i64 n)
+{
+	if(n<0) {
+		dbuf_writeu32be(f, n+0x100000000LL);
+	}
+	else {
+		dbuf_writeu32be(f, n);
+	}
 }
 
 void de_writeu64le_direct(u8 *m, u64 n)
@@ -1509,7 +1597,10 @@ dbuf *dbuf_open_input_file(deark *c, const char *fn)
 	unsigned int returned_flags = 0;
 	char msgbuf[200];
 
-	if(!fn) return NULL;
+	if(!fn) {
+		c->serious_error_flag = 1;
+		return NULL;
+	}
 	f = de_malloc(c, sizeof(dbuf));
 	f->btype = DBUF_TYPE_IFILE;
 	f->c = c;
@@ -1520,6 +1611,7 @@ dbuf *dbuf_open_input_file(deark *c, const char *fn)
 	if(!f->fp) {
 		de_err(c, "Can't read %s: %s", fn, msgbuf);
 		de_free(c, f);
+		c->serious_error_flag = 1;
 		return NULL;
 	}
 
@@ -1564,6 +1656,24 @@ dbuf *dbuf_open_input_subfile(dbuf *parent, i64 offset, i64 size)
 	return f;
 }
 
+dbuf *dbuf_create_custom_dbuf(deark *c, i64 apparent_size, unsigned int flags)
+{
+	dbuf *f;
+
+	f = de_malloc(c, sizeof(dbuf));
+	f->btype = DBUF_TYPE_CUSTOM;
+	f->c = c;
+	f->len = apparent_size;
+	f->max_len_hard = DE_DUMMY_MAX_FILE_SIZE;
+	return f;
+}
+
+void dbuf_set_writelistener(dbuf *f, de_writelistener_cb_type fn, void *userdata)
+{
+	f->userdata_for_writelistener = userdata;
+	f->writelistener_cb = fn;
+}
+
 void dbuf_close(dbuf *f)
 {
 	deark *c;
@@ -1584,7 +1694,9 @@ void dbuf_close(dbuf *f)
 		de_tar_end_member_file(c, f);
 	}
 
-	if(f->btype==DBUF_TYPE_IFILE || f->btype==DBUF_TYPE_OFILE) {
+	switch(f->btype) {
+	case DBUF_TYPE_IFILE:
+	case DBUF_TYPE_OFILE:
 		if(f->name) {
 			de_dbg3(c, "closing file %s", f->name);
 		}
@@ -1598,28 +1710,28 @@ void dbuf_close(dbuf *f)
 		if(f->btype==DBUF_TYPE_OFILE && f->is_managed && c->preserve_file_times) {
 			de_update_file_time(f);
 		}
-	}
-	else if(f->btype==DBUF_TYPE_FIFO) {
+		break;
+	case DBUF_TYPE_FIFO:
 		de_fclose(f->fp);
 		f->fp = NULL;
-	}
-	else if(f->btype==DBUF_TYPE_STDOUT) {
-		if(f->name) {
+		break;
+	case DBUF_TYPE_STDOUT:
+		if(f->name && f->is_managed) {
 			de_dbg3(c, "finished writing %s to stdout", f->name);
 		}
+		else if(!f->is_managed) {
+			de_dbg3(c, "finished writing %s", f->name);
+		}
 		f->fp = NULL;
-	}
-	else if(f->btype==DBUF_TYPE_MEMBUF) {
-	}
-	else if(f->btype==DBUF_TYPE_IDBUF) {
-	}
-	else if(f->btype==DBUF_TYPE_ODBUF) {
-	}
-	else if(f->btype==DBUF_TYPE_STDIN) {
-	}
-	else if(f->btype==DBUF_TYPE_NULL) {
-	}
-	else {
+		break;
+	case DBUF_TYPE_MEMBUF:
+	case DBUF_TYPE_IDBUF:
+	case DBUF_TYPE_ODBUF:
+	case DBUF_TYPE_STDIN:
+	case DBUF_TYPE_CUSTOM:
+	case DBUF_TYPE_NULL:
+		break;
+	default:
 		de_err(c, "Internal: Don't know how to close this type of file (%d)", f->btype);
 	}
 

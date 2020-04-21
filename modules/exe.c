@@ -264,7 +264,7 @@ static const char *get_machine_type_name(unsigned int n)
 		{ 0xaa64, "ARMv8 64-bit" }
 	};
 
-	for(i=0; i<DE_ITEMS_IN_ARRAY(mtn_arr); i++) {
+	for(i=0; i<DE_ARRAYCOUNT(mtn_arr); i++) {
 		if(mtn_arr[i].id == n) {
 			return mtn_arr[i].name;
 		}
@@ -768,7 +768,7 @@ static const struct rsrc_type_info_struct *get_rsrc_type_info(u32 id)
 {
 	size_t i;
 
-	for(i=0; i<DE_ITEMS_IN_ARRAY(rsrc_type_info_arr); i++) {
+	for(i=0; i<DE_ARRAYCOUNT(rsrc_type_info_arr); i++) {
 		if(id == rsrc_type_info_arr[i].id) {
 			return &rsrc_type_info_arr[i];
 		}
@@ -1311,7 +1311,7 @@ static void do_lx_or_le_rsrc_tbl(deark *c, lctx *d)
 static void de_run_exe(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
-	i64 eocdpos = 0;
+	int zip_eocd_found;
 
 	d = de_malloc(c, sizeof(lctx));
 
@@ -1327,9 +1327,19 @@ static void de_run_exe(deark *c, de_module_params *mparams)
 		do_lx_or_le_rsrc_tbl(c, d);
 	}
 
-	if(de_fmtutil_find_zip_eocd(c, c->infile, &eocdpos)) {
+	if(c->detection_data && c->detection_data->zip_eocd_looked_for) {
+		// Note: It isn't necessarily possible to get here - It depends on the details
+		// of how other modules' identify() functions work.
+		zip_eocd_found = (int)c->detection_data->zip_eocd_found;
+	}
+	else {
+		i64 zip_eocd_pos = 0;
+		zip_eocd_found = de_fmtutil_find_zip_eocd(c, c->infile, &zip_eocd_pos);
+	}
+	if(zip_eocd_found) {
 		de_info(c, "Note: This might be a self-extracting ZIP file (try \"-m zip\").");
 	}
+
 	de_free(c, d);
 }
 

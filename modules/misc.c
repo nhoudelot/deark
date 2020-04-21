@@ -44,6 +44,8 @@ DE_DECLARE_MODULE(de_module_cdr_wl);
 DE_DECLARE_MODULE(de_module_compress);
 DE_DECLARE_MODULE(de_module_gws_thn);
 DE_DECLARE_MODULE(de_module_deskmate_pnt);
+DE_DECLARE_MODULE(de_module_corel_bmf);
+DE_DECLARE_MODULE(de_module_hpi);
 
 // **************************************************************************
 // "copy" module
@@ -320,7 +322,6 @@ void de_module_bytefreq(deark *c, struct deark_module_info *mi)
 // zlib module
 //
 // This module is for decompressing zlib-compressed files.
-// It uses the deark-miniz.c utilities, which in turn use miniz.c (miniz.h).
 // **************************************************************************
 
 static void de_run_zlib(deark *c, de_module_params *mparams)
@@ -328,7 +329,7 @@ static void de_run_zlib(deark *c, de_module_params *mparams)
 	dbuf *f = NULL;
 
 	f = dbuf_create_output_file(c, "unc", NULL, 0);
-	de_decompress_deflate(c->infile, 0, c->infile->len, f, 0, NULL, DE_DEFLATEFLAG_ISZLIB);
+	fmtutil_decompress_deflate(c->infile, 0, c->infile->len, f, 0, NULL, DE_DEFLATEFLAG_ISZLIB);
 	dbuf_close(f);
 }
 
@@ -2029,10 +2030,29 @@ void de_module_cdr_wl(deark *c, struct deark_module_info *mi)
 
 static void de_run_compress(deark *c, de_module_params *mparams)
 {
+	struct de_dfilter_results dres;
+	struct de_dfilter_in_params dcmpri;
+	struct de_dfilter_out_params dcmpro;
+	struct delzw_params delzwp;
 	dbuf *f = NULL;
 
 	f = dbuf_create_output_file(c, "bin", NULL, 0);
-	de_decompress_liblzw(c->infile, 0, c->infile->len, f, 0, 0, 0x1, 0);
+
+	de_dfilter_init_objects(c, &dcmpri, &dcmpro, &dres);
+	dcmpri.f = c->infile;
+	dcmpri.pos = 0;
+	dcmpri.len = c->infile->len;
+	dcmpro.f = f;
+	dcmpro.len_known = 0;
+
+	de_zeromem(&delzwp, sizeof(struct delzw_params));
+	delzwp.fmt = DE_LZWFMT_UNIXCOMPRESS;
+	delzwp.flags |= DE_LZWFLAG_HAS3BYTEHEADER;
+
+	de_fmtutil_decompress_lzw(c, &dcmpri, &dcmpro, &dres, &delzwp);
+	if(dres.errcode!=0) {
+		de_err(c, "%s", de_dfilter_get_errmsg(c, &dres));
+	}
 	dbuf_close(f);
 }
 
@@ -2158,6 +2178,7 @@ static void de_run_deskmate_pnt(deark *c, de_module_params *mparams)
 	u32 pal[16];
 
 	pos += 22;
+	de_dbg(c, "image at %"I64_FMT, pos);
 	w = 312;
 	h = 176;
 	rowspan = w/2;
@@ -2187,7 +2208,6 @@ static void de_run_deskmate_pnt(deark *c, de_module_params *mparams)
 		unc_pixels = dbuf_open_input_subfile(c->infile, pos, unc_pixels_size);
 	}
 
-	de_dbg(c, "image at %"I64_FMT, pos);
 	img = de_bitmap_create(c, w, h, 3);
 	de_convert_image_paletted(unc_pixels, 0, 4, rowspan, pal, img, 0);
 	de_bitmap_write_to_file(img, NULL, 0);
@@ -2208,4 +2228,104 @@ void de_module_deskmate_pnt(deark *c, struct deark_module_info *mi)
 	mi->desc = "Tandy DeskMate Paint";
 	mi->run_fn = de_run_deskmate_pnt;
 	mi->identify_fn = de_identify_deskmate_pnt;
+}
+
+
+// **************************************************************************
+// Corel Gallery .BMF
+// **************************************************************************
+
+// Warning: The BMF preview image decoder is based on reverse engineering, may not
+// be correct.
+
+static void de_run_corel_bmf(deark *c, de_module_params *mparams1)
+{
+	de_module_params *mparams2 = NULL;
+	int saved_indent_level;
+	i64 pos;
+	i64 n;
+	i64 seg_size;
+
+	de_dbg_indent_save(c, &saved_indent_level);
+	pos = 65;
+	seg_size = de_getu32le_p(&pos);
+	de_dbg(c, "preview image segment at %"I64_FMT", len=%"I64_FMT, pos, seg_size);
+	de_dbg_indent(c, 1);
+
+	if(pos + seg_size > c->infile->len) {
+		seg_size = c->infile->len - pos;
+	}
+
+	n = de_getu32le(pos);
+	if(n!=40) {
+		de_err(c, "Unsupported Corel BMF version");
+		goto done;
+	}
+
+	mparams2 = de_malloc(c, sizeof(de_module_params));
+	mparams2->in_params.codes = "X";
+	mparams2->in_params.flags = 0x81;
+	de_run_module_by_id_on_slice(c, "dib", mparams2, c->infile, pos, seg_size);
+
+done:
+	de_free(c, mparams2);
+	de_dbg_indent_restore(c, saved_indent_level);
+}
+
+static int de_identify_corel_bmf(deark *c)
+{
+	if(!dbuf_memcmp(c->infile, 0, "@CorelBMF\x0a\x0d", 11)) return 100;
+	return 0;
+}
+
+void de_module_corel_bmf(deark *c, struct deark_module_info *mi)
+{
+	mi->id = "corel_bmf";
+	mi->desc = "Corel Gallery BMF";
+	mi->run_fn = de_run_corel_bmf;
+	mi->identify_fn = de_identify_corel_bmf;
+}
+
+// **************************************************************************
+// Hemera Photo-Object image (.hpi)
+// **************************************************************************
+
+static void de_run_hpi(deark *c, de_module_params *mparams)
+{
+	i64 jpgpos, pngpos;
+	i64 jpglen, pnglen;
+	i64 pos;
+
+	pos = 12;
+	jpgpos = de_getu32le_p(&pos);
+	jpglen = de_getu32le_p(&pos);
+	de_dbg(c, "jpeg: pos=%"I64_FMT", len=%"I64_FMT, jpgpos, jpglen);
+	pngpos = de_getu32le_p(&pos);
+	pnglen = de_getu32le_p(&pos);
+	de_dbg(c, "png: pos=%"I64_FMT", len=%"I64_FMT, pngpos, pnglen);
+
+	if(jpglen>0 && jpgpos+jpglen<=c->infile->len && de_getbyte(jpgpos)==0xff) {
+		const char *ext;
+
+		if(pnglen==0) ext="jpg";
+		else ext="foreground.jpg";
+		dbuf_create_file_from_slice(c->infile, jpgpos, jpglen, ext, NULL, 0);
+	}
+	if(pnglen>0 && pngpos+pnglen<=c->infile->len && de_getbyte(pngpos)==0x89) {
+		dbuf_create_file_from_slice(c->infile, pngpos, pnglen, "mask.png", NULL, 0);
+	}
+}
+
+static int de_identify_hpi(deark *c)
+{
+	if(!dbuf_memcmp(c->infile, 0, "\x89\x48\x50\x49\x0d\x0a\x1a\x0a", 8)) return 100;
+	return 0;
+}
+
+void de_module_hpi(deark *c, struct deark_module_info *mi)
+{
+	mi->id = "hpi";
+	mi->desc = "Hemera Photo-Object image";
+	mi->run_fn = de_run_hpi;
+	mi->identify_fn = de_identify_hpi;
 }

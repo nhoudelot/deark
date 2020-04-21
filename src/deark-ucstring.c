@@ -121,6 +121,12 @@ void ucstring_destroy(de_ucstring *s)
 	}
 }
 
+int ucstring_isempty(const de_ucstring *s)
+{
+	if(!s) return 1;
+	return (s->len == 0);
+}
+
 int ucstring_isnonempty(const de_ucstring *s)
 {
 	return (s && (s->len > 0));
@@ -352,7 +358,7 @@ int de_is_printable_uchar(i32 ch)
 		// TODO: Whitelist more codepoints
 	};
 	size_t i;
-	const size_t num_ranges = DE_ITEMS_IN_ARRAY(ranges);
+	const size_t num_ranges = DE_ARRAYCOUNT(ranges);
 
 	for(i=0; i<num_ranges; i++) {
 		if(ch>=ranges[i].n1 && ch<=ranges[i].n2) return 1;
@@ -495,10 +501,17 @@ void de_strarray_make_path(struct de_strarray *sa, de_ucstring *path, unsigned i
 
 	for(i=0; i<sa->count; i++) {
 		i64 oldlen = path->len;
-		ucstring_append_ucstring(path, sa->ss[i]);
+
+		if(ucstring_isnonempty(sa->ss[i])) {
+			ucstring_append_ucstring(path, sa->ss[i]);
+		}
+		else {
+			ucstring_append_char(path, '_');
+		}
+
 		mp_squash_slashes(path, oldlen);
 		if((i+1 < sa->count) || !(flags & DE_MPFLAG_NOTRAILINGSLASH)) {
-			ucstring_append_sz(path, "/", DE_ENCODING_LATIN1);
+			ucstring_append_char(path, '/');
 		}
 	}
 }

@@ -9,7 +9,7 @@
 #include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_tiff);
 
-#define ITEMS_IN_ARRAY DE_ITEMS_IN_ARRAY
+#define ITEMS_IN_ARRAY DE_ARRAYCOUNT
 #define MAX_IFDS 1000
 
 #define DE_TIFF_MAX_VALUES_TO_PRINT 100
@@ -42,6 +42,7 @@ DE_DECLARE_MODULE(de_module_tiff);
 #define DE_TIFFFMT_MPEXT      8 // "MP Extension" data from MPF format
 #define DE_TIFFFMT_NIKONMN    9 // Nikon MakerNote
 #define DE_TIFFFMT_APPLEMN    10 // Apple iOS MakerNote
+#define DE_TIFFFMT_FUJIFILMMN 11 // FujiFilm MakerNote
 
 #define IFDTYPE_NORMAL       0
 #define IFDTYPE_SUBIFD       1
@@ -52,6 +53,8 @@ DE_DECLARE_MODULE(de_module_tiff);
 #define IFDTYPE_NIKONMN      6 // First IFD of a Nikon MakerNote
 #define IFDTYPE_NIKONPREVIEW 7
 #define IFDTYPE_APPLEMN      8
+#define IFDTYPE_MASKSUBIFD   9
+#define IFDTYPE_FUJIFILMMN   10
 
 struct localctx_struct;
 typedef struct localctx_struct lctx;
@@ -95,6 +98,8 @@ struct tagnuminfo {
 	// 0x0800=tags for Multi-Picture Format (.MPO) extensions
 	// 0x1000=tags for Nikon MakerNote
 	// 0x2000=tags for Apple iOS MakerNote
+	// 0x4000=Panasonic RAW/RW2
+	// 0x8000=FUJIFILM
 	unsigned int flags;
 
 	const char *tagname;
@@ -590,19 +595,28 @@ static int lookup_str_and_append_to_ucstring(const struct int_and_str *items, si
 
 static int valdec_newsubfiletype(deark *c, const struct valdec_params *vp, struct valdec_result *vr)
 {
-	if(vp->n<1) return 0;
+	i64 n = vp->n;
 
-	if(vp->n&0x1) {
+	if(n<1) return 0;
+
+	if(n&0x1) {
 		ucstring_append_flags_item(vr->s, "reduced-res");
+		n -= 0x1;
 	}
-	if(vp->n&0x2) {
+	if(n&0x2) {
 		ucstring_append_flags_item(vr->s, "one-page-of-many");
+		n -= 0x2;
 	}
-	if(vp->n&0x4) {
+	if(n&0x4) {
 		ucstring_append_flags_item(vr->s, "mask");
+		n -= 0x4;
 	}
-	if((vp->n & ~0x7)!=0) {
-		ucstring_append_flags_item(vr->s, "?");
+	if(n&0x10) {
+		ucstring_append_flags_item(vr->s, "MRC-related");
+		n -= 0x10;
+	}
+	if(n!=0) {
+		ucstring_append_flags_itemf(vr->s, "0x%x", (unsigned int)n);
 	}
 
 	return 1;
@@ -1101,6 +1115,7 @@ static void handler_subifd(deark *c, lctx *d, const struct taginfo *tg, const st
 	else if(tg->tagnum==330) ifdtype = IFDTYPE_SUBIFD;
 	else if(tg->tagnum==400) ifdtype = IFDTYPE_GLOBALPARAMS;
 	else if(tg->tagnum==34665) ifdtype = IFDTYPE_EXIF;
+	else if(tg->tagnum==34731) ifdtype = IFDTYPE_MASKSUBIFD;
 	else if(tg->tagnum==34853) ifdtype = IFDTYPE_GPS;
 	else if(tg->tagnum==40965) ifdtype = IFDTYPE_EXIFINTEROP;
 
@@ -1141,10 +1156,15 @@ static void handler_photoshoprsrc(deark *c, lctx *d, const struct taginfo *tg, c
 	de_dbg_indent(c, -1);
 }
 
+enum makernote_type {
+	MAKERNOTE_UNKNOWN = 0,
+	MAKERNOTE_NIKON,
+	MAKERNOTE_APPLE_IOS,
+	MAKERNOTE_FUJIFILM
+};
+
 struct makernote_id_info {
-#define MAKERNOTE_NIKON 1
-#define MAKERNOTE_APPLE_IOS 2
-	int mntype;
+	enum makernote_type mntype;
 	char name[32];
 };
 
@@ -1170,6 +1190,11 @@ static void identify_makernote(deark *c, lctx *d, const struct taginfo *tg, stru
 	else if(!de_memcmp(buf, "Apple iOS\x00\x00\x01\x4d\x4d", 14)) {
 		mni->mntype = MAKERNOTE_APPLE_IOS;
 		de_strlcpy(mni->name, "Apple iOS", sizeof(mni->name));
+		goto done;
+	}
+	else if(!de_memcmp(buf, "FUJIFILM", 8)) {
+		mni->mntype = MAKERNOTE_FUJIFILM;
+		de_strlcpy(mni->name, "FujiFilm", sizeof(mni->name));
 		goto done;
 	}
 
@@ -1214,6 +1239,16 @@ static void do_makernote_apple_ios(deark *c, lctx *d, i64 pos1, i64 len)
 	de_dbg_indent(c, -1);
 }
 
+static void do_makernote_fujifilm(deark *c, lctx *d, i64 pos1, i64 len)
+{
+	if(len<14) return;
+
+	de_dbg(c, "FujiFilm MakerNote tag data at %"I64_FMT", len=%"I64_FMT, pos1, len);
+	de_dbg_indent(c, 1);
+	de_run_module_by_id_on_slice2(c, "tiff", "F", c->infile, pos1, len);
+	de_dbg_indent(c, -1);
+}
+
 static void handler_makernote(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
 {
 	struct makernote_id_info *mni = NULL;
@@ -1230,6 +1265,9 @@ static void handler_makernote(deark *c, lctx *d, const struct taginfo *tg, const
 	}
 	else if(mni->mntype==MAKERNOTE_APPLE_IOS) {
 		do_makernote_apple_ios(c, d, tg->val_offset, tg->total_size);
+	}
+	else if(mni->mntype==MAKERNOTE_FUJIFILM) {
+		do_makernote_fujifilm(c, d, tg->val_offset, tg->total_size);
 	}
 	else {
 		handler_hexdump(c, d, tg, tni);
@@ -1524,6 +1562,12 @@ static void handler_dngprivatedata(deark *c, lctx *d, const struct taginfo *tg, 
 	de_destroy_stringreaderdata(c, srd);
 }
 
+static void handler_panasonicjpg(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni)
+{
+	dbuf_create_file_from_slice(c->infile, tg->val_offset, tg->total_size,
+		"thumb.jpg", NULL, DE_CREATEFLAG_IS_AUX);
+}
+
 static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 254, 0x00, "NewSubfileType", NULL, valdec_newsubfiletype },
 	{ 255, 0x00, "OldSubfileType", NULL, valdec_oldsubfiletype },
@@ -1711,6 +1755,8 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	//{ 34688, 0x0000, "MultiProfiles", NULL, NULL, NULL },
 	//{ 34689, 0x0000, "SharedData", NULL, NULL, NULL },
 	//{ 34690, 0x0000, "T88Options", NULL, NULL, NULL },
+	{ 34730, 0x0000, "Annotation Offsets", NULL, NULL },
+	{ 34731, 0x0008, "Mask SubIFDs", handler_subifd, NULL },
 	{ 34732, 0x0000, "ImageLayer", NULL, NULL },
 	{ 34735, 0x0000, "GeoKeyDirectoryTag", NULL, NULL },
 	{ 34736, 0x0000, "GeoDoubleParamsTag", NULL, NULL },
@@ -2107,7 +2153,70 @@ static const struct tagnuminfo tagnuminfo_arr[] = {
 	{ 0xb, 0x2001, "BurstUUID", NULL, NULL },
 	{ 0xe, 0x2001, "Orientation?", NULL, NULL },
 	{ 0x11, 0x2001, "ContentIdentifier", NULL, NULL },
-	{ 0x15, 0x2001, "ImageUniqueID", NULL, NULL }
+	{ 0x15, 0x2001, "ImageUniqueID", NULL, NULL },
+
+	{ 0x1, 0x4001, "PanasonicRawVersion", NULL, NULL },
+	{ 0x2, 0x4001, "SensorWidth", NULL, NULL },
+	{ 0x3, 0x4001, "SensorHeight", NULL, NULL },
+	{ 0x4, 0x4001, "SensorTopBorder", NULL, NULL },
+	{ 0x5, 0x4001, "SensorLeftBorder", NULL, NULL },
+	{ 0x6, 0x4001, "SensorBottomBorder", NULL, NULL },
+	{ 0x7, 0x4001, "SensorRightBorder", NULL, NULL },
+	{ 0x8, 0x4001, "SamplesPerPixel", NULL, NULL },
+	{ 0x9, 0x4001, "CFAPattern", NULL, NULL },
+	{ 0xa, 0x4001, "BitsPerSample", NULL, NULL },
+	{ 0xb, 0x4001, "Compression", NULL, NULL },
+	{ 0xe, 0x4001, "LinearityLimitRed", NULL, NULL },
+	{ 0xf, 0x4001, "LinearityLimitGreen", NULL, NULL },
+	{ 0x10, 0x4001, "LinearityLimitBlue", NULL, NULL },
+	{ 0x11, 0x4001, "RedBalance", NULL, NULL },
+	{ 0x12, 0x4001, "BlueBalance", NULL, NULL },
+	{ 0x13, 0x4001, "WBInfo", NULL, NULL },
+	{ 0x17, 0x4001, "ISO", NULL, NULL },
+	{ 0x18, 0x4001, "HighISOMultiplierRed", NULL, NULL },
+	{ 0x19, 0x4001, "HighISOMultiplierGreen", NULL, NULL },
+	{ 0x1a, 0x4001, "HighISOMultiplierBlue", NULL, NULL },
+	{ 0x1b, 0x4001, "NoiseReductionParams", NULL, NULL },
+	{ 0x1c, 0x4001, "BlackLevelRed", NULL, NULL },
+	{ 0x1d, 0x4001, "BlackLevelGreen", NULL, NULL },
+	{ 0x1e, 0x4001, "BlackLevelBlue", NULL, NULL },
+	{ 0x24, 0x4001, "WBRedLevel", NULL, NULL },
+	{ 0x25, 0x4001, "WBGreenLevel", NULL, NULL },
+	{ 0x26, 0x4001, "WBBlueLevel", NULL, NULL },
+	{ 0x27, 0x4001, "WBInfo2", NULL, NULL },
+	{ 0x2d, 0x4001, "RawFormat", NULL, NULL },
+	{ 0x2e, 0x4009, "JpgFromRaw", handler_panasonicjpg, NULL },
+	{ 0x2f, 0x4001, "CropTop", NULL, NULL },
+	{ 0x30, 0x4001, "CropLeft", NULL, NULL },
+	{ 0x31, 0x4001, "CropBottom", NULL, NULL },
+	{ 0x32, 0x4001, "CropRight", NULL, NULL },
+
+	{ 0x0000, 0x8001, "Version", NULL, NULL},
+	{ 0x0010, 0x8001, "InternalSerialNumber", NULL, NULL},
+	{ 0x1000, 0x8001, "Quality", NULL, NULL},
+	{ 0x1001, 0x8001, "Sharpness", NULL, NULL},
+	{ 0x1002, 0x8001, "WhiteBalance", NULL, NULL},
+	{ 0x1003, 0x8001, "Saturation", NULL, NULL},
+	{ 0x1010, 0x8001, "FujiFlashMode", NULL, NULL},
+	{ 0x1011, 0x8001, "FlashExposureComp", NULL, NULL},
+	{ 0x1020, 0x8001, "Macro", NULL, NULL},
+	{ 0x1021, 0x8001, "FocusMode", NULL, NULL},
+	{ 0x1022, 0x8001, "AFMode", NULL, NULL},
+	{ 0x1023, 0x8001, "FocusPixel", NULL, NULL},
+	{ 0x1030, 0x8001, "SlowSync", NULL, NULL},
+	{ 0x1031, 0x8001, "PictureMode", NULL, NULL},
+	{ 0x1032, 0x8001, "ExposureCount", NULL, NULL},
+	{ 0x1100, 0x8001, "AutoBracketing", NULL, NULL},
+	{ 0x1101, 0x8001, "SequenceNumber", NULL, NULL},
+	{ 0x1201, 0x8001, "AdvancedFilter", NULL, NULL},
+	{ 0x1210, 0x8001, "ColorMode", NULL, NULL},
+	{ 0x1300, 0x8001, "BlurWarning", NULL, NULL},
+	{ 0x1301, 0x8001, "FocusWarning", NULL, NULL},
+	{ 0x1302, 0x8001, "ExposureWarning", NULL, NULL},
+	{ 0x1400, 0x8001, "DynamicRange", NULL, NULL},
+	{ 0x1422, 0x8001, "ImageStabilization", NULL, NULL},
+	{ 0x4100, 0x8001, "FacesDetected", NULL, NULL},
+	{ 0x4200, 0x8001, "NumFaceElements", NULL, NULL}
 };
 
 static void do_dbg_print_numeric_values(deark *c, lctx *d, const struct taginfo *tg, const struct tagnuminfo *tni,
@@ -2264,7 +2373,7 @@ static const struct tagnuminfo *find_tagnuminfo(int tagnum, int filefmt, int ifd
 {
 	size_t i;
 
-	for(i=0; i<DE_ITEMS_IN_ARRAY(tagnuminfo_arr); i++) {
+	for(i=0; i<DE_ARRAYCOUNT(tagnuminfo_arr); i++) {
 		if(tagnuminfo_arr[i].tagnum!=tagnum) {
 			continue;
 		}
@@ -2293,9 +2402,15 @@ static const struct tagnuminfo *find_tagnuminfo(int tagnum, int filefmt, int ifd
 				continue;
 			}
 		}
+		else if(ifdtype==IFDTYPE_FUJIFILMMN) {
+			// For this IFD, allow only special tags
+			if(!(tagnuminfo_arr[i].flags&0x8000)) {
+				continue;
+			}
+		}
 		else if(tagnuminfo_arr[i].flags&0x01) {
 			// A special tag not allowed above
-			if(filefmt==DE_TIFFFMT_JPEGXR && tagnuminfo_arr[i].flags&0x0400) {
+			if(filefmt==DE_TIFFFMT_JPEGXR && (tagnuminfo_arr[i].flags&0x0400)) {
 				// Allow all JPEG XR tags in normal JPEG XR IFDs.
 				// Maybe we should disallow TIFF tags that are not known to be
 				// allowed in JPEG XR files, but I suspect a lot of random TIFF
@@ -2303,10 +2418,15 @@ static const struct tagnuminfo *find_tagnuminfo(int tagnum, int filefmt, int ifd
 				// any conflicts.
 				;
 			}
-			else if(filefmt==DE_TIFFFMT_MPEXT && tagnuminfo_arr[i].flags&0x0800) {
+			else if(filefmt==DE_TIFFFMT_MPEXT && (tagnuminfo_arr[i].flags&0x0800)) {
 				;
 			}
-			else if(filefmt==DE_TIFFFMT_NIKONMN && tagnuminfo_arr[i].flags&0x1000) {
+			else if(filefmt==DE_TIFFFMT_NIKONMN && (tagnuminfo_arr[i].flags&0x1000)) {
+				;
+			}
+			else if(filefmt==DE_TIFFFMT_PANASONIC && (tagnuminfo_arr[i].flags&0x4000) &&
+				ifdtype==IFDTYPE_NORMAL)
+			{
 				;
 			}
 			else {
@@ -2369,6 +2489,9 @@ static void process_ifd(deark *c, lctx *d, i64 ifd_idx1, i64 ifdpos1, int ifdtyp
 		break;
 	case IFDTYPE_NIKONPREVIEW:
 		name=" (Nikon Preview)";
+		break;
+	case IFDTYPE_MASKSUBIFD:
+		name=" (Mask SubIFD)";
 		break;
 	default:
 		name="";
@@ -2445,13 +2568,6 @@ static void process_ifd(deark *c, lctx *d, i64 ifd_idx1, i64 ifdpos1, int ifdtyp
 		de_dbg_indent(c, 1);
 
 		switch(tg.tagnum) {
-		case 46:
-			if(d->fmt==DE_TIFFFMT_PANASONIC) {
-				// Some Panasonic RAW files have a JPEG file in tag 46.
-				dbuf_create_file_from_slice(c->infile, tg.val_offset, tg.total_size, "thumb.jpg", NULL, DE_CREATEFLAG_IS_AUX);
-			}
-			break;
-
 		case TAG_JPEGINTERCHANGEFORMAT:
 			if(tg.valcount<1) break;
 			read_tag_value_as_int64(c, d, &tg, 0, &jpegoffset);
@@ -2501,6 +2617,11 @@ static void do_tiff(deark *c, lctx *d)
 
 	if(d->fmt==DE_TIFFFMT_APPLEMN) {
 		push_ifd(c, d, 14, IFDTYPE_APPLEMN);
+		need_to_read_header = 0;
+	}
+	else if(d->fmt==DE_TIFFFMT_FUJIFILMMN) {
+		ifdoffs = getfpos(c, d, 8);
+		push_ifd(c, d, ifdoffs, IFDTYPE_FUJIFILMMN);
 		need_to_read_header = 0;
 	}
 
@@ -2594,18 +2715,30 @@ static int de_identify_tiff_internal(deark *c, int *is_le)
 	return fmt;
 }
 
-// Deark TIFF container formats. See de_fmtutil_handle_iptc() for example.
-static void identify_deark_formats(deark *c, lctx *d)
+static void identify_more_formats(deark *c, lctx *d)
 {
 	u8 buf[20];
+
 	de_read(buf, 8, sizeof(buf));
-	if(de_memcmp(buf, "Deark extracted ", 16)) return;
-	if(!de_memcmp(&buf[16], "IPTC", 4)) {
-		d->is_deark_iptc = 1;
+
+	// Deark TIFF container formats. See de_fmtutil_handle_iptc() for example.
+	if(!de_memcmp(buf, "Deark extracted ", 16)) {
+		if(!de_memcmp(&buf[16], "IPTC", 4)) {
+			d->is_deark_iptc = 1;
+			return;
+		}
+		if(!de_memcmp(&buf[16], "8BIM", 4)) {
+			d->is_deark_8bim = 1;
+			return;
+		}
+	}
+
+	if(!de_memcmp(buf, "XEROX DIFF", 10)) {
+		de_dbg(c, "XIFF/XEROX DIFF format detected");
 		return;
 	}
-	if(!de_memcmp(&buf[16], "8BIM", 4)) {
-		d->is_deark_8bim = 1;
+	if(!de_memcmp(buf, " eXtended ", 10)) {
+		de_dbg(c, "XIFF/eXtended format detected");
 	}
 }
 
@@ -2623,6 +2756,11 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 		d->fmt = DE_TIFFFMT_APPLEMN;
 		d->is_le = 0;
 		d->errmsgprefix = "[Apple MakerNote] ";
+	}
+	else if(de_havemodcode(c, mparams, 'F')) {
+		d->fmt = DE_TIFFFMT_FUJIFILMMN;
+		d->is_le = 1;
+		d->errmsgprefix = "[FujiFilm MakerNote] ";
 	}
 	else {
 		d->fmt = de_identify_tiff_internal(c, &d->is_le);
@@ -2643,7 +2781,7 @@ static void de_run_tiff(deark *c, de_module_params *mparams)
 	}
 
 	if(d->fmt==DE_TIFFFMT_TIFF) {
-		identify_deark_formats(c, d);
+		identify_more_formats(c, d);
 	}
 
 	switch(d->fmt) {

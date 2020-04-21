@@ -6,6 +6,7 @@
 
 #include <deark-config.h>
 #include <deark-private.h>
+#include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_gzip);
 
 struct member_data {
@@ -42,9 +43,9 @@ static const char *get_os_name(u8 n)
 	return name;
 }
 
-static void our_writecallback(dbuf *f, const u8 *buf, i64 buf_len)
+static void our_writelistener_cb(dbuf *f, void *userdata, const u8 *buf, i64 buf_len)
 {
-	struct member_data *md = (struct member_data *)f->userdata;
+	struct member_data *md = (struct member_data *)userdata;
 	de_crcobj_addbuf(md->crco, buf, buf_len);
 }
 
@@ -173,17 +174,15 @@ static int do_gzip_read_member(deark *c, lctx *d, i64 pos1, i64 *member_size)
 		de_finfo_destroy(c, fi);
 	}
 
-	d->output_file->writecallback_fn = our_writecallback;
-	d->output_file->userdata = (void*)md;
+	dbuf_set_writelistener(d->output_file, our_writelistener_cb, (void*)md);
 	md->crco = d->crco;
 	de_crcobj_reset(md->crco);
 
-	ret = de_decompress_deflate(c->infile, pos, c->infile->len - pos, d->output_file,
+	ret = fmtutil_decompress_deflate(c->infile, pos, c->infile->len - pos, d->output_file,
 		0, &cmpr_data_len, 0);
 
 	crc_calculated = de_crcobj_getval(md->crco);
-	d->output_file->writecallback_fn = NULL;
-	d->output_file->userdata = NULL;
+	dbuf_set_writelistener(d->output_file, NULL, NULL);
 
 	if(!ret) goto done;
 	pos += cmpr_data_len;

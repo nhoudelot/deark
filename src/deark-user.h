@@ -23,7 +23,7 @@ void de_set_input_timezone(deark *c, i64 tzoffs_seconds);
 void de_set_input_file_slice_start(deark *c, i64 n);
 void de_set_input_file_slice_size(deark *c, i64 n);
 
-void de_run(deark *c);
+int de_run(deark *c);
 
 void de_print_module_list(deark *c);
 
@@ -42,6 +42,7 @@ void de_set_extract_level(deark *c, int x);
 
 void de_set_listmode(deark *c, int x);
 void de_set_want_modhelp(deark *c, int x);
+void de_set_id_mode(deark *c, int x);
 void de_set_first_output_file(deark *c, int x);
 void de_set_max_output_files(deark *c, int n);
 void de_set_max_output_file_size(deark *c, i64 n);
@@ -81,10 +82,11 @@ void de_set_module_init_codes(deark *c, const char *codes);
 // See DE_OUTPUTSTYLE_ defs in deark.h
 void de_set_output_style(deark *c, int x, int subtype);
 
-void de_set_base_output_filename(deark *c, const char *fn,
+void de_set_base_output_filename(deark *c, const char *dirname, const char *fn,
 	unsigned int flags);
 
-void de_set_output_archive_filename(deark *c, const char *fn, unsigned int flags);
+void de_set_output_archive_filename(deark *c, const char *dirname, const char *fn,
+	unsigned int flags);
 
 void de_set_extrlist_filename(deark *c, const char *fn);
 
@@ -92,8 +94,8 @@ void de_set_disable_mods(deark *c, const char *s, int invert);
 void de_set_disable_moddetect(deark *c, const char *s, int invert);
 
 struct de_platform_data;
-struct de_platform_data *de_platformdata_create(deark *c);
-void de_platformdata_destroy(deark *c, struct de_platform_data *plctx);
+struct de_platform_data *de_platformdata_create(void);
+void de_platformdata_destroy(struct de_platform_data *plctx);
 
 #ifdef DE_WINDOWS
 void de_utf8_to_oem(deark *c, const char *src, char *dst, size_t dstlen);

@@ -21,6 +21,11 @@ enum color_method_enum {
 	CM_WINCONSOLE
 };
 
+enum special_command_code_enum {
+	CMD_NONE = 0, CMD_PRINTHELP, CMD_PRINTVERSION, CMD_PRINTLICENSE,
+	CMD_PRINTMODULES
+};
+
 struct cmdctx {
 	deark *c;
 	struct de_platform_data *plctx;
@@ -28,8 +33,7 @@ struct cmdctx {
 	int error_flag;
 	int show_usage_message;
 	int special_command_flag;
-#define CMD_PRINTMODULES 2
-	int special_command_code;
+	enum special_command_code_enum special_command_code;
 	int msgs_to_stderr;
 
 	// Have we set msgs_FILE and have_windows_console, and called _setmode if needed?
@@ -41,8 +45,12 @@ struct cmdctx {
 	int use_fwputs;
 #endif
 
+	const char *output_dirname;
 	const char *base_output_filename;
+	const char *archive_filename;
 	int option_k_level; // Use input filename in output filenames
+	int option_ka_level; // Use input filename in output archive filenames
+	u8 set_MAXFILES;
 
 	int to_stdout;
 	int to_zip;
@@ -67,12 +75,13 @@ static void emit_sz(struct cmdctx *cc, const char *sz)
 	fputs(sz, cc->msgs_FILE);
 }
 
-static void show_version(deark *c, int verbose)
+static void print_version(deark *c, int verbose)
 {
 	char vbuf[80];
 
 	de_printf(c, DE_MSGTYPE_MESSAGE, "Deark version: %s\n",
 		de_get_version_string(vbuf, sizeof(vbuf)));
+	if(!verbose) return;
 	de_printf(c, DE_MSGTYPE_MESSAGE, "platform API: %s\n",
 #ifdef DE_WINDOWS
 		"Windows"
@@ -87,29 +96,31 @@ static void show_version(deark *c, int verbose)
 #endif
 }
 
-static void show_usage_preamble(deark *c) {
+static void print_usage_oneline(deark *c) {
 	de_puts(c, DE_MSGTYPE_MESSAGE, "Usage: deark [options] <input-file> [options]\n");
 }
 
-static void show_usage_error(deark *c)
+static void print_usage_error(deark *c)
 {
-	show_usage_preamble(c);
+	print_usage_oneline(c);
 	de_puts(c, DE_MSGTYPE_MESSAGE, "\"deark -h\" for help.\n");
 }
 
-static void show_help(deark *c)
+static void print_help(deark *c)
 {
-	show_version(c, 0);
+	print_version(c, 0);
 	de_puts(c, DE_MSGTYPE_MESSAGE,
 		"A utility for extracting data from various file formats\n\n");
-	show_usage_preamble(c);
+	print_usage_oneline(c);
 	de_puts(c, DE_MSGTYPE_MESSAGE,
 		"\nCommonly used options:\n"
 		" -l: Instead of extracting, list the files that would be extracted.\n"
 		" -m <module>: Assume input file is this format, instead of autodetecting.\n"
 		" -k: Start output filenames with the input filename.\n"
 		" -o <base-filename>: Start output filenames with this string.\n"
+		" -od <directory>: Write files to this directory.\n"
 		" -zip: Write output files to a .zip file.\n"
+		" -ka: Start the .zip filename with the input filename.\n"
 		" -a: Extract more data than usual.\n"
 		" -main: Extract less data than usual.\n"
 		" -get <n>: Extract only file number <n>.\n"
@@ -117,8 +128,39 @@ static void show_help(deark *c)
 		" -q, -noinfo, -nowarn: Print fewer messages than usual.\n"
 		" -modules: Print the names of all available modules.\n"
 		" -help, -h: Print this message.\n"
+		" -license: Print the credits and terms of use.\n"
 		" -version: Print version information.\n"
 		);
+}
+
+static void print_license(deark *c)
+{
+	de_puts(c, DE_MSGTYPE_MESSAGE, "Deark\n"
+	"Copyright (C) 2016-"DE_COPYRIGHT_YEAR_STRING" Jason Summers\n\n"
+	"Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+	"of this software and associated documentation files (the \"Software\"), to deal\n"
+	"in the Software without restriction, including without limitation the rights\n"
+	"to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+	"copies of the Software, and to permit persons to whom the Software is\n"
+	"furnished to do so, subject to the following conditions:\n\n"
+	"The above copyright notice and this permission notice shall be included in\n"
+	"all copies or substantial portions of the Software.\n\n"
+	"THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+	"IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+	"FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+	"AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+	"LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+	"OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\n"
+	"THE SOFTWARE.\n\n"
+	"----------\n"
+	"The zlib and Deflate encoder and decoder use public domain code originally from\n"
+	"miniz v1.16 beta r1, by Rich Geldreich.\n\n"
+	"The ZIP Implode decoder is derived from public domain code by Mark Adler, from\n"
+	"Info-ZIP UnZip v5.4.\n\n"
+	"The X-Face decoder uses code from Compface, Copyright (c) 1990 James Ashton.\n\n"
+	"The Stuffit Huffman decoder uses code by Allan G. Weber, from Unsit Version 1.\n\n"
+	"The ZOO LZH decoder uses public domain code by Martin Schoenert et al., from\n"
+	"unzoo.c v4.4.\n");
 }
 
 static void print_modules(deark *c)
@@ -300,7 +342,7 @@ static void our_msgfn(deark *c, unsigned int flags, const char *s1)
 static void our_fatalerrorfn(deark *c)
 {
 	de_puts(c, DE_MSGTYPE_MESSAGE, "Exiting\n");
-	de_exitprocess();
+	de_exitprocess(1);
 }
 
 static void set_ext_option(deark *c, struct cmdctx *cc, const char *optionstring)
@@ -346,13 +388,13 @@ enum opt_id_enum {
  DE_OPT_NOINFO, DE_OPT_NOWARN,
  DE_OPT_NOBOM, DE_OPT_NODENS, DE_OPT_ASCIIHTML, DE_OPT_NONAMES,
  DE_OPT_NOOVERWRITE, DE_OPT_MODTIME, DE_OPT_NOMODTIME,
- DE_OPT_Q, DE_OPT_VERSION, DE_OPT_HELP,
+ DE_OPT_Q, DE_OPT_VERSION, DE_OPT_HELP, DE_OPT_LICENSE, DE_OPT_ID,
  DE_OPT_MAINONLY, DE_OPT_AUXONLY, DE_OPT_EXTRACTALL, DE_OPT_ZIP, DE_OPT_TAR,
  DE_OPT_TOSTDOUT, DE_OPT_MSGSTOSTDERR, DE_OPT_FROMSTDIN, DE_OPT_COLOR,
  DE_OPT_ENCODING,
  DE_OPT_EXTOPT, DE_OPT_FILE, DE_OPT_FILE2, DE_OPT_INENC, DE_OPT_INTZ,
- DE_OPT_START, DE_OPT_SIZE, DE_OPT_M, DE_OPT_MODCODES, DE_OPT_O,
- DE_OPT_K, DE_OPT_K2, DE_OPT_K3,
+ DE_OPT_START, DE_OPT_SIZE, DE_OPT_M, DE_OPT_MODCODES, DE_OPT_O, DE_OPT_OD,
+ DE_OPT_K, DE_OPT_K2, DE_OPT_K3, DE_OPT_KA, DE_OPT_KA2, DE_OPT_KA3,
  DE_OPT_ARCFN, DE_OPT_GET, DE_OPT_FIRSTFILE, DE_OPT_MAXFILES,
  DE_OPT_MAXFILESIZE, DE_OPT_MAXTOTALSIZE, DE_OPT_MAXIMGDIM,
  DE_OPT_PRINTMODULES, DE_OPT_DPREFIX, DE_OPT_EXTRLIST,
@@ -399,6 +441,11 @@ struct opt_struct option_array[] = {
 	{ "k",            DE_OPT_K,            0 },
 	{ "k2",           DE_OPT_K2,           0 },
 	{ "k3",           DE_OPT_K3,           0 },
+	{ "ka",           DE_OPT_KA,           0 },
+	{ "ka2",          DE_OPT_KA2,          0 },
+	{ "ka3",          DE_OPT_KA3,          0 },
+	{ "license",      DE_OPT_LICENSE,      0 },
+	{ "id",           DE_OPT_ID,           0 },
 	{ "enc",          DE_OPT_ENCODING,     1 },
 	{ "opt",          DE_OPT_EXTOPT,       1 },
 	{ "file",         DE_OPT_FILE,         1 },
@@ -411,6 +458,7 @@ struct opt_struct option_array[] = {
 	{ "modcodes",     DE_OPT_MODCODES,     1 },
 	{ "o",            DE_OPT_O,            1 },
 	{ "basefn",       DE_OPT_O,            1 }, // Deprecated
+	{ "od",           DE_OPT_OD,           1 },
 	{ "arcfn",        DE_OPT_ARCFN,        1 },
 	{ "get",          DE_OPT_GET,          1 },
 	{ "firstfile",    DE_OPT_FIRSTFILE,    1 },
@@ -472,6 +520,80 @@ static void colormode_opt(struct cmdctx *cc, const char *modestr)
 		cc->error_flag = 1;
 		return;
 	}
+}
+
+static void set_output_basename(struct cmdctx *cc)
+{
+	const char *outputbasefn = cc->base_output_filename; // default, could be NULL
+	const char *outdirname;
+	unsigned int flags = 0;
+
+	if(cc->option_k_level && cc->input_filename) {
+		if(cc->option_k_level==1) {
+			// Use base input filename in output filenames.
+			outputbasefn = cc->input_filename;
+			flags |= 0x1;
+		}
+		else if(cc->option_k_level==2) {
+			// Use full input filename path, but not as an actual path.
+			outputbasefn = cc->input_filename;
+			flags |= 0x2;
+		}
+		else if(cc->option_k_level==3) {
+			// Use full input filename path, as-is.
+			outputbasefn = cc->input_filename;
+		}
+	}
+
+	if(cc->to_zip || cc->to_tar) {
+		// In this case, -od refers to the archive filename, not to the base
+		// filename that we're dealing with here.
+		outdirname = NULL;
+	}
+	else if(cc->to_stdout) {
+		// -od is incompatible with -tostdout
+		outdirname = NULL;
+	}
+	else {
+		outdirname = cc->output_dirname;
+	}
+
+	de_set_base_output_filename(cc->c, outdirname, outputbasefn, flags);
+}
+
+static void set_output_archive_name(struct cmdctx *cc)
+{
+	const char *arcfn = cc->archive_filename; // default, could be NULL
+	unsigned int flags = 0;
+
+	if(!cc->to_zip && !cc->to_tar) return;
+	if(cc->to_stdout) return;
+
+	if(cc->option_ka_level && cc->input_filename)
+	{
+		if(cc->option_ka_level==1) {
+			// Use base input filename in output filenames.
+			arcfn = cc->input_filename;
+			flags |= 0x21;
+		}
+		else if(cc->option_ka_level==2) {
+			// Use full input filename path, but not as an actual path.
+			arcfn = cc->input_filename;
+			flags |= 0x22;
+		}
+		else if(cc->option_ka_level==3) {
+			// Use full input filename path, as-is.
+			arcfn = cc->input_filename;
+			flags |= 0x20;
+		}
+	}
+
+	if(!arcfn) {
+		arcfn = "output";
+		flags |= 0x20;
+	}
+
+	de_set_output_archive_filename(cc->c, cc->output_dirname, arcfn, flags);
 }
 
 static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
@@ -555,17 +677,24 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 				de_set_warnings(c, 0);
 				break;
 			case DE_OPT_VERSION:
-				// TODO: Use ->special_command_code instead of calling show_version() here.
-				show_version(c, 1);
 				cc->special_command_flag = 1;
+				cc->special_command_code = CMD_PRINTVERSION;
 				break;
 			case DE_OPT_PRINTMODULES:
 				cc->special_command_flag = 1;
 				cc->special_command_code = CMD_PRINTMODULES;
 				break;
 			case DE_OPT_HELP:
-				// TODO: Use ->special_command_code instead of help_flag.
+				// At this point, we don't know whether this will be general help,
+				// or module-specific help. So just set a flag for later.
 				help_flag = 1;
+				break;
+			case DE_OPT_LICENSE:
+				cc->special_command_flag = 1;
+				cc->special_command_code = CMD_PRINTLICENSE;
+				break;
+			case DE_OPT_ID:
+				de_set_id_mode(c, 1);
 				break;
 			case DE_OPT_MAINONLY:
 				de_set_extract_policy(c, DE_EXTRACTPOLICY_MAINONLY);
@@ -606,6 +735,15 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 				break;
 			case DE_OPT_K3:
 				cc->option_k_level = 3;
+				break;
+			case DE_OPT_KA:
+				cc->option_ka_level = 1;
+				break;
+			case DE_OPT_KA2:
+				cc->option_ka_level = 2;
+				break;
+			case DE_OPT_KA3:
+				cc->option_ka_level = 3;
 				break;
 			case DE_OPT_ENCODING:
 				set_encoding_option(c, cc, argv[i+1]);
@@ -648,9 +786,12 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 			case DE_OPT_O:
 				cc->base_output_filename = argv[i+1];
 				break;
+			case DE_OPT_OD:
+				cc->output_dirname = argv[i+1];
+				break;
 			case DE_OPT_ARCFN:
 				// Relevant e.g. if the -zip option is used.
-				de_set_output_archive_filename(c, argv[i+1], 0);
+				cc->archive_filename = argv[i+1];
 				break;
 			case DE_OPT_GET:
 				de_set_first_output_file(c, de_atoi(argv[i+1]));
@@ -661,6 +802,7 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 				break;
 			case DE_OPT_MAXFILES:
 				de_set_max_output_files(c, de_atoi(argv[i+1]));
+				cc->set_MAXFILES = 1;
 				break;
 			case DE_OPT_MAXFILESIZE:
 				de_set_max_output_file_size(c, de_atoi64(argv[i+1]));
@@ -719,7 +861,7 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 		}
 		else {
 			cc->special_command_flag = 1;
-			show_help(c);
+			cc->special_command_code = CMD_PRINTHELP;
 		}
 		return;
 	}
@@ -733,51 +875,39 @@ static void parse_cmdline(deark *c, struct cmdctx *cc, int argc, char **argv)
 
 	if(cc->to_stdout) {
 		if(cc->to_zip || cc->to_tar) {
-			de_set_output_archive_filename(c, NULL, 0x1);
+			de_set_output_archive_filename(c, NULL, NULL, 0x10);
 		}
 		else {
 			de_set_output_style(c, DE_OUTPUTSTYLE_STDOUT, 0);
-			de_set_max_output_files(c, 1);
+			if(!cc->set_MAXFILES) {
+				de_set_max_output_files(c, 1);
+			}
 		}
 	}
 
-	if(cc->option_k_level && cc->input_filename) {
-		if(cc->option_k_level==1) {
-			// Use base input filename in output filenames.
-			de_set_base_output_filename(c, cc->input_filename, 0x1);
-		}
-		else if(cc->option_k_level==2) {
-			// Use full input filename path, but not as an actual path.
-			de_set_base_output_filename(c, cc->input_filename, 0x2);
-		}
-		else if(cc->option_k_level==3) {
-			// Use full input filename path, as-is.
-			de_set_base_output_filename(c, cc->input_filename, 0x0);
-		}
-	}
-
-	if(cc->base_output_filename) {
-		de_set_base_output_filename(c, cc->base_output_filename, 0);
-	}
+	set_output_basename(cc);
+	set_output_archive_name(cc);
 }
 
-static void main2(int argc, char **argv)
+static int main2(int argc, char **argv)
 {
 	deark *c = NULL;
 	struct cmdctx *cc = NULL;
+	int ret;
+	int exit_status = 0;
 
+	cc = de_malloc(NULL, sizeof(struct cmdctx));
 	c = de_create();
-	cc = de_malloc(c, sizeof(struct cmdctx));
 	cc->c = c;
 
 	de_set_userdata(c, (void*)cc);
 	de_set_fatalerror_callback(c, our_fatalerrorfn);
 	de_set_messages_callback(c, our_msgfn);
 	de_set_special_messages_callback(c, our_specialmsgfn);
-	cc->plctx = de_platformdata_create(c);
+	cc->plctx = de_platformdata_create();
 
 	if(argc<2) { // Empty command line
-		show_help(c);
+		print_help(c);
 		goto done;
 	}
 
@@ -785,15 +915,26 @@ static void main2(int argc, char **argv)
 
 	if(cc->error_flag) {
 		if(cc->show_usage_message) {
-			show_usage_error(c);
+			print_usage_error(c);
 		}
 		goto done;
 	}
 
 	if(cc->special_command_flag) {
 		switch(cc->special_command_code) {
+		case CMD_PRINTHELP:
+			print_help(c);
+			break;
+		case CMD_PRINTVERSION:
+			print_version(c, 1);
+			break;
+		case CMD_PRINTLICENSE:
+			print_license(c);
+			break;
 		case CMD_PRINTMODULES:
 			print_modules(c);
+			break;
+		default:
 			break;
 		}
 		goto done;
@@ -808,12 +949,18 @@ static void main2(int argc, char **argv)
 	}
 #endif
 
-	de_run(c);
+	ret = de_run(c);
+	if(!ret) {
+		exit_status = 1;
+	}
 
 done:
-	de_platformdata_destroy(c, cc->plctx);
-	de_free(c, cc);
 	de_destroy(c);
+	de_platformdata_destroy(cc->plctx);
+	cc->plctx = NULL;
+	if(cc->error_flag) exit_status = 1;
+	de_free(NULL, cc);
+	return exit_status;
 }
 
 #ifdef DE_WINDOWS
@@ -824,19 +971,19 @@ int wmain(int argc, wchar_t **argvW);
 int wmain(int argc, wchar_t **argvW)
 {
 	char **argv;
+	int exit_status;
 
 	argv = de_convert_args_to_utf8(argc, argvW);
-	main2(argc, argv);
+	exit_status = main2(argc, argv);
 	de_free_utf8_args(argc, argv);
-	return 0;
+	return exit_status;
 }
 
 #else
 
 int main(int argc, char **argv)
 {
-	main2(argc, argv);
-	return 0;
+	return main2(argc, argv);
 }
 
 #endif

@@ -8,6 +8,7 @@
 
 #include <deark-config.h>
 #include <deark-private.h>
+#include <deark-fmtutil.h>
 DE_DECLARE_MODULE(de_module_officeart);
 
 struct officeart_rectype {
@@ -40,7 +41,7 @@ static const char *get_officeart_rectype_name(unsigned int t)
 {
 	size_t k;
 
-	for(k=0; k<DE_ITEMS_IN_ARRAY(officeart_rectype_arr); k++) {
+	for(k=0; k<DE_ARRAYCOUNT(officeart_rectype_arr); k++) {
 		if((unsigned int)officeart_rectype_arr[k].rectype == t) {
 			return officeart_rectype_arr[k].name;
 		}
@@ -194,7 +195,7 @@ static int do_OfficeArtStream_record(deark *c, struct officeartctx *oactx,
 		i64 cmprlen;
 
 		cmprlen = reclen-extra_bytes;
-		de_decompress_deflate(inf, pos, cmprlen, outf, 0, NULL, DE_DEFLATEFLAG_ISZLIB);
+		fmtutil_decompress_deflate(inf, pos, cmprlen, outf, 0, NULL, DE_DEFLATEFLAG_ISZLIB);
 		de_dbg(c, "decompressed %"I64_FMT" to %"I64_FMT" bytes", cmprlen, outf->len);
 	}
 	else {

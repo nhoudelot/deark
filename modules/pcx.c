@@ -12,9 +12,17 @@ DE_DECLARE_MODULE(de_module_dcx);
 
 #define PCX_HDRSIZE 128
 
+enum resmode_type {
+	RESMODE_IGNORE = 0,
+	RESMODE_AUTO,
+	RESMODE_DPI,
+	RESMODE_SCREENDIMENSIONS
+};
+
 typedef struct localctx_struct {
 	u8 version;
 	u8 encoding;
+	enum resmode_type resmode;
 	i64 bits;
 	i64 bits_per_pixel;
 	i64 margin_L, margin_T, margin_R, margin_B;
@@ -34,8 +42,81 @@ typedef struct localctx_struct {
 	int default_pal_set;
 
 	dbuf *unc_pixels;
+	de_finfo *fi;
 	u32 pal[256];
 } lctx;
+
+static void simplify_dens(i64 *pxdens, i64 *pydens, i64 factor)
+{
+	while(*pxdens>factor && *pydens>factor &&
+		(*pxdens%factor==0) && (*pydens%factor==0))
+	{
+		*pxdens /= factor;
+		*pydens /= factor;
+	}
+}
+
+static void set_density_from_screen_res(deark *c, lctx *d, i64 hres, i64 vres)
+{
+	i64 xdens, ydens;
+
+	d->fi->density.code = DE_DENSITY_UNK_UNITS;
+	xdens = hres*3; // Assume 4:3 screen
+	ydens = vres*4;
+
+	simplify_dens(&xdens, &ydens, 2);
+	simplify_dens(&xdens, &ydens, 3);
+	simplify_dens(&xdens, &ydens, 5);
+
+	d->fi->density.xdens = (double)xdens;
+	d->fi->density.ydens = (double)ydens;
+}
+
+// The resolution field is unreliable. It might contain:
+// * Zeroes
+// * The DPI
+// * The pixel dimensions of the target screen mode
+// * The dimensions of the image itself
+// * A corrupted attempt at one of the above things (perhaps copied from an
+//   older version of the image)
+static void do_decode_resolution(deark *c, lctx *d, i64 hres, i64 vres)
+{
+	enum resmode_type resmode = d->resmode;
+
+	if(hres==0 || vres==0) return;
+
+	if(resmode==RESMODE_AUTO) {
+		if((hres==320 && vres==200) ||
+			(hres==640 && vres==480) ||
+			(hres==640 && vres==350) ||
+			(hres==640 && vres==200) ||
+			(hres==800 && vres==600) ||
+			(hres==1024 && vres==768))
+		{
+			if(d->width<=hres && d->height<=hres) {
+				// Looks like screen dimensions, and image fits on the screen
+				resmode = RESMODE_SCREENDIMENSIONS;
+			}
+		}
+		else if(hres==d->width && vres==d->height) {
+			;
+		}
+		else {
+			if(hres==vres && hres>=50 && hres<=600) {
+				resmode = RESMODE_DPI;
+			}
+		}
+	}
+
+	if(resmode==RESMODE_DPI) { // dpi
+		d->fi->density.code = DE_DENSITY_DPI;
+		d->fi->density.xdens = (double)hres;
+		d->fi->density.ydens = (double)vres;
+	}
+	else if(resmode==RESMODE_SCREENDIMENSIONS) {
+		set_density_from_screen_res(c, d, hres, vres);
+	}
+}
 
 static int do_read_header(deark *c, lctx *d)
 {
@@ -74,13 +155,7 @@ static int do_read_header(deark *c, lctx *d)
 	de_dbg(c, "margins: %d, %d, %d, %d", (int)d->margin_L, (int)d->margin_T,
 		(int)d->margin_R, (int)d->margin_B);
 
-	// TODO: We could try to use the resolution field to set the pixel density,
-	// but it's so unreliable that it may be best to ignore it. It might contain:
-	// * The DPI
-	// * The pixel dimensions of the target screen mode
-	// * The dimensions of the image itself
-	// * A corrupted attempt at one of the above things
-	de_dbg(c, "\"resolution\": %d"DE_CHAR_TIMES"%d", (int)hres, (int)vres);
+	de_dbg(c, "resolution: %d"DE_CHAR_TIMES"%d", (int)hres, (int)vres);
 
 	d->width = d->margin_R - d->margin_L +1;
 	d->height = d->margin_B - d->margin_T +1;
@@ -154,6 +229,8 @@ static int do_read_header(deark *c, lctx *d)
 		de_err(c, "Bad bytes/line (%d)", (int)d->rowspan_raw);
 		goto done;
 	}
+
+	do_decode_resolution(c, d, hres, vres);
 
 	retval = 1;
 done:
@@ -396,7 +473,7 @@ static void do_bitmap_1bpp(deark *c, lctx *d)
 	// The paletted algorithm would work here (if we construct a palette),
 	// but this special case is easy and efficient.
 	de_convert_and_write_image_bilevel(d->unc_pixels, 0,
-		d->width, d->height, d->rowspan, 0, NULL, 0);
+		d->width, d->height, d->rowspan, 0, d->fi, 0);
 }
 
 static void do_bitmap_paletted(deark *c, lctx *d)
@@ -422,7 +499,7 @@ static void do_bitmap_paletted(deark *c, lctx *d)
 		}
 	}
 
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, d->fi, 0);
 	de_bitmap_destroy(img);
 }
 
@@ -445,7 +522,7 @@ static void do_bitmap_24bpp(deark *c, lctx *d)
 		}
 	}
 
-	de_bitmap_write_to_file(img, NULL, 0);
+	de_bitmap_write_to_file_finfo(img, d->fi, 0);
 	de_bitmap_destroy(img);
 }
 
@@ -478,6 +555,22 @@ static void de_run_pcx_internal(deark *c, lctx *d, de_module_params *mparams)
 		d->default_pal_set = 1;
 	}
 
+	d->resmode = RESMODE_AUTO;
+	s = de_get_ext_option(c, "pcx:resmode");
+	if(s) {
+		if(!de_strcmp(s, "auto")) {
+			d->resmode = RESMODE_AUTO;
+		}
+		else if(!de_strcmp(s, "dpi")) {
+			d->resmode = RESMODE_DPI;
+		}
+		else if(!de_strcmp(s, "screen")) {
+			d->resmode = RESMODE_SCREENDIMENSIONS;
+		}
+	}
+
+	d->fi = de_finfo_create(c);
+
 	if(!do_read_header(c, d)) {
 		goto done;
 	}
@@ -501,6 +594,9 @@ static void de_run_pcx_internal(deark *c, lctx *d, de_module_params *mparams)
 
 done:
 	dbuf_close(d->unc_pixels);
+	d->unc_pixels = NULL;
+	de_finfo_destroy(c, d->fi);
+	d->fi = NULL;
 }
 
 static void de_run_pcx(deark *c, de_module_params *mparams)
@@ -533,6 +629,8 @@ static void de_help_pcx(deark *c)
 {
 	de_msg(c, "-opt pcx:pal=<0|1> : Code for the predefined palette to use, "
 		"if there is no palette in the file");
+	de_msg(c, "-opt pcx:resmode=<ignore|dpi|screen|auto> : How to interpret the "
+		"\"resolution\" field");
 	de_msg(c, "-file2 <file.p13> : Read the palette from a separate file");
 }
 

@@ -33,133 +33,101 @@ typedef struct localctx_struct {
 	i64 num_pictures;
 } lctx;
 
-// This is very similar to the mscompress SZDD algorithm, but
-// gratuitously different.
-// If expected_output_len is 0, it will be ignored.
-static void do_uncompress_lz77(deark *c,
-	dbuf *inf, i64 pos1, i64 input_len,
-	dbuf *outf, i64 expected_output_len)
+struct rlectx {
+	dbuf *outf;
+	int compressed_run_pending;
+	i64 compressed_run_count;
+	i64 uncompressed_run_bytes_left;
+	i64 nbytes_consumed;
+};
+
+static void  my_shgrle_codec_addbuf(struct de_dfilter_ctx *dfctx,
+	const u8 *buf, i64 buf_len)
 {
-	i64 pos = pos1;
-	u8 *window = NULL;
-	unsigned int wpos;
-	i64 nbytes_read;
+	i64 k;
+	struct rlectx *rctx = (struct rlectx*)dfctx->codec_private;
 
-	window = de_malloc(c, 4096);
-	wpos = 4096 - 16;
-	de_memset(window, 0x20, 4096);
-
-	while(1) {
-		unsigned int control;
-		unsigned int cbit;
-
-		if(pos >= (pos1+input_len)) break; // Out of input data
-
-		control = (unsigned int)dbuf_getbyte(inf, pos++);
-
-		for(cbit=0x01; cbit&0xff; cbit<<=1) {
-			if(!(control & cbit)) { // literal
-				u8 b;
-				b = dbuf_getbyte(inf, pos++);
-				dbuf_writebyte(outf, b);
-				if(expected_output_len>0 && outf->len>=expected_output_len) goto unc_done;
-				window[wpos] = b;
-				wpos++; wpos &= 4095;
-			}
-			else { // match
-				unsigned int matchpos;
-				unsigned int matchlen;
-				matchpos = (unsigned int)dbuf_getu16le(inf, pos);
-				pos+=2;
-				matchlen = ((matchpos>>12) & 0x0f) + 3;
-				matchpos = wpos-(matchpos&4095)-1;
-				matchpos &= 4095;
-				while(matchlen--) {
-					dbuf_writebyte(outf, window[matchpos]);
-					if(expected_output_len>0 && outf->len>=expected_output_len) goto unc_done;
-					window[wpos] = window[matchpos];
-					wpos++; wpos &= 4095;
-					matchpos++; matchpos &= 4095;
-				}
-			}
+	for(k=0; k<buf_len; k++) {
+		if(rctx->uncompressed_run_bytes_left>0) {
+			dbuf_writebyte(rctx->outf, buf[k]);
+			rctx->uncompressed_run_bytes_left--;
+			rctx->nbytes_consumed++;
+			continue;
 		}
+
+		if(rctx->compressed_run_pending) {
+			dbuf_write_run(rctx->outf, buf[k], rctx->compressed_run_count);
+			rctx->compressed_run_pending = 0;
+			rctx->nbytes_consumed += 2;
+			continue;
+		}
+
+		if(buf[k] & 0x80) { // beginning of uncompressed run
+			rctx->uncompressed_run_bytes_left = (i64)(buf[k] & 0x7f);
+			rctx->nbytes_consumed++;
+			continue;
+		}
+
+		rctx->compressed_run_count = (i64)buf[k];
+		rctx->compressed_run_pending = 1;
 	}
-
-unc_done:
-	nbytes_read = pos-pos1;
-	de_dbg(c, "decompressed %d bytes to %d bytes",
-		(int)nbytes_read, (int)outf->len);
-
-	if(expected_output_len>0 && outf->len!=expected_output_len) {
-		de_warn(c, "Expected %d output bytes, got %d",
-			(int)expected_output_len, (int)outf->len);
-	}
-
-	de_free(c, window);
 }
 
-// "compressed unsigned short" - a variable-length integer format
-static i64 get_cus(dbuf *f, i64 *pos)
+static void my_shgrle_codec_finish(struct de_dfilter_ctx *dfctx)
 {
-	i64 x1, x2;
-	x1 = (i64)dbuf_getbyte(f, *pos);
-	*pos += 1;
-	if(x1%2 == 0) {
-		// If it's even, divide by two.
-		return x1>>1;
-	}
-	// If it's odd, divide by two, and add 128 times the value of
-	// the next byte.
-	x2 = (i64)dbuf_getbyte(f, *pos);
-	*pos += 1;
-	return (x1>>1) | (x2<<7);
+	struct rlectx *rctx = (struct rlectx*)dfctx->codec_private;
+
+	dfctx->dres->bytes_consumed_valid = 1;
+	dfctx->dres->bytes_consumed = rctx->nbytes_consumed;
 }
 
-// "compressed unsigned long" - a variable-length integer format
-static i64 get_cul(dbuf *f, i64 *pos)
+static void my_shgrle_codec_destroy(struct de_dfilter_ctx *dfctx)
 {
-	i64 x1, x2;
-	x1 = dbuf_getu16le(f, *pos);
-	*pos += 2;
-	if(x1%2 == 0) {
-		// If it's even, divide by two.
-		return x1>>1;
-	}
-	// If it's odd, divide by two, and add 32768 times the value of
-	// the next two bytes.
-	x2 = dbuf_getu16le(f, *pos);
-	*pos += 2;
-	return (x1>>1) | (x2<<15);
+	struct rlectx *rctx = (struct rlectx*)dfctx->codec_private;
+
+	de_free(dfctx->c, rctx);
 }
 
-static void do_uncompress_rle(deark *c, lctx *d,
-	dbuf *inf, i64 pos1, i64 len,
-	dbuf *unc_pixels)
+static void dfilter_shgrle_codec(struct de_dfilter_ctx *dfctx, void *codec_private_params)
 {
-	i64 pos;
-	i64 endpos;
-	u8 b;
-	i64 count;
+	struct rlectx *rctx = NULL;
 
-	endpos = pos1 + len;
-	pos = pos1;
-	while(pos<endpos) {
-		b = dbuf_getbyte(inf, pos);
-		pos++;
-		if(b&0x80) {
-			// uncompressed run
-			count = (i64)(b&0x7f);
-			dbuf_copy(inf, pos, count, unc_pixels);
-			pos += count;
-		}
-		else {
-			// compressed run
-			count = (i64)b;
-			b = dbuf_getbyte(inf, pos);
-			pos++;
-			dbuf_write_run(unc_pixels, b, count);
-		}
-	}
+	rctx = de_malloc(dfctx->c, sizeof(struct rlectx));
+	rctx->outf = dfctx->dcmpro->f;
+
+	dfctx->codec_private = (void*)rctx;
+	dfctx->codec_finish_fn = my_shgrle_codec_finish;
+	dfctx->codec_destroy_fn = my_shgrle_codec_destroy;
+	dfctx->codec_addbuf_fn = my_shgrle_codec_addbuf;
+}
+
+// RunLength
+static void do_decompress_type_1(deark *c, lctx *d,
+	struct de_dfilter_in_params *dcmpri, struct de_dfilter_out_params *dcmpro,
+	struct de_dfilter_results *dres)
+{
+	de_dbg(c, "doing RLE decompression");
+	de_dfilter_decompress_oneshot(c, dfilter_shgrle_codec, NULL,
+		dcmpri, dcmpro, dres);
+}
+
+// LZ77
+static void do_decompress_type_2(deark *c, lctx *d,
+	struct de_dfilter_in_params *dcmpri, struct de_dfilter_out_params *dcmpro,
+	struct de_dfilter_results *dres)
+{
+	de_dbg(c, "doing LZ77 decompression");
+	fmtutil_decompress_hlp_lz77(c, dcmpri, dcmpro, dres);
+}
+
+// LZ77 + RLE
+static void do_decompress_type_3(deark *c, lctx *d,
+	struct de_dfilter_in_params *dcmpri, struct de_dfilter_out_params *dcmpro,
+	struct de_dfilter_results *dres)
+{
+	de_dbg(c, "doing LZ77+RLE decompression");
+	de_dfilter_decompress_two_layer(c, dfilter_hlp_lz77_codec, NULL,
+		dfilter_shgrle_codec, NULL, dcmpri, dcmpro, dres);
 }
 
 static int do_uncompress_picture_data(deark *c, lctx *d,
@@ -167,50 +135,51 @@ static int do_uncompress_picture_data(deark *c, lctx *d,
 	i64 compressed_offset, i64 compressed_size,
 	dbuf *pixels_final, i64 final_image_size)
 {
-	dbuf *pixels_tmp = NULL;
 	int retval = 0;
+	struct de_dfilter_in_params dcmpri;
+	struct de_dfilter_out_params dcmpro;
+	struct de_dfilter_results dres;
 
 	if(pctx->packing_method>3) {
 		de_err(c, "Unsupported compression type: %d", (int)pctx->packing_method);
 		goto done;
 	}
 
-	pixels_tmp = dbuf_create_membuf(c, 0, 0);
+	de_dfilter_init_objects(c, &dcmpri, &dcmpro, &dres);
+	dcmpri.f = c->infile;
+	dcmpri.pos = compressed_offset;
+	dcmpri.len = compressed_size;
+	dcmpro.f = pixels_final;
+	dcmpro.len_known = 1;
+	dcmpro.expected_len = final_image_size;
 
-	// Copy the pixels to a membuf, then run zero or more decompression
-	// algorithms on them using a temporary membuf.
-	// This is not very efficient, but it keeps the code simple.
-	dbuf_copy(c->infile, compressed_offset, compressed_size, pixels_final);
-
-	if(pctx->packing_method==2 || pctx->packing_method==3) {
-		de_dbg(c, "doing LZ77 decompression");
-		dbuf_copy(pixels_final, 0, pixels_final->len, pixels_tmp);
-		dbuf_truncate(pixels_final, 0);
-
-		// If packing_method==2, then this is the last decompression algorithm,
-		// so we know how many output bytes to expect.
-		do_uncompress_lz77(c, pixels_tmp, 0, pixels_tmp->len,
-			pixels_final, pctx->packing_method==2 ? final_image_size : 0);
-		dbuf_truncate(pixels_tmp, 0);
+	switch(pctx->packing_method) {
+	case 1:
+		do_decompress_type_1(c, d, &dcmpri, &dcmpro, &dres);
+		break;
+	case 2:
+		do_decompress_type_2(c, d, &dcmpri, &dcmpro, &dres);
+		break;
+	case 3:
+		do_decompress_type_3(c, d, &dcmpri, &dcmpro, &dres);
+		break;
+	default: // 0, uncompressed
+		fmtutil_decompress_uncompressed(c, &dcmpri, &dcmpro, &dres, 0);
 	}
 
-	if(pctx->packing_method==1 || pctx->packing_method==3) {
-		de_dbg(c, "doing RLE decompression");
-		dbuf_copy(pixels_final, 0, pixels_final->len, pixels_tmp);
-		dbuf_truncate(pixels_final, 0);
-		do_uncompress_rle(c, d, pixels_tmp, 0, pixels_tmp->len, pixels_final);
-		dbuf_truncate(pixels_tmp, 0);
+	if(dres.errcode) {
+		de_err(c, "%s", de_dfilter_get_errmsg(c, &dres));
+		goto done;
+	}
 
-		if(pixels_final->len < final_image_size) {
-			de_warn(c, "Expected %d bytes after decompression, only got %d",
-				(int)final_image_size, (int)pixels_final->len);
-		}
+	if(pixels_final->len < final_image_size) {
+		de_warn(c, "Expected %"I64_FMT" bytes after decompression, only got %"I64_FMT,
+			final_image_size, pixels_final->len);
 	}
 
 	retval = 1;
 
 done:
-	dbuf_close(pixels_tmp);
 	return retval;
 }
 
@@ -307,24 +276,24 @@ static int do_dib_ddb(deark *c, lctx *d, struct picture_ctx *pctx, i64 pos1)
 
 	pos = pos1 + 2;
 
-	pctx->xdpi = get_cul(c->infile, &pos);
-	pctx->ydpi = get_cul(c->infile, &pos);
+	pctx->xdpi = fmtutil_hlp_get_cul_p(c->infile, &pos);
+	pctx->ydpi = fmtutil_hlp_get_cul_p(c->infile, &pos);
 	de_dbg(c, "dpi: %d"DE_CHAR_TIMES"%d", (int)pctx->xdpi, (int)pctx->ydpi);
 	if(pctx->xdpi<10 || pctx->ydpi<10 || pctx->xdpi>30000 || pctx->ydpi>30000) {
 		pctx->xdpi = 0;
 		pctx->ydpi = 0;
 	}
 
-	pctx->planes = get_cus(c->infile, &pos);
+	pctx->planes = fmtutil_hlp_get_cus_p(c->infile, &pos);
 	de_dbg(c, "planes: %d", (int)pctx->planes);
-	pctx->bitcount = get_cus(c->infile, &pos);
+	pctx->bitcount = fmtutil_hlp_get_cus_p(c->infile, &pos);
 	de_dbg(c, "bitcount: %d", (int)pctx->bitcount);
-	pctx->width = get_cul(c->infile, &pos);
-	pctx->height = get_cul(c->infile, &pos);
+	pctx->width = fmtutil_hlp_get_cul_p(c->infile, &pos);
+	pctx->height = fmtutil_hlp_get_cul_p(c->infile, &pos);
 	de_dbg_dimensions(c, pctx->width, pctx->height);
 
-	pctx->colors_used = get_cul(c->infile, &pos);
-	pctx->colors_important = get_cul(c->infile, &pos);
+	pctx->colors_used = fmtutil_hlp_get_cul_p(c->infile, &pos);
+	pctx->colors_important = fmtutil_hlp_get_cul_p(c->infile, &pos);
 	de_dbg(c, "colors used=%d, important=%d", (int)pctx->colors_used,
 		(int)pctx->colors_important);
 	if(pctx->colors_important==1) {
@@ -332,8 +301,8 @@ static int do_dib_ddb(deark *c, lctx *d, struct picture_ctx *pctx, i64 pos1)
 		pctx->colors_important = 0;
 	}
 
-	compressed_size = get_cul(c->infile, &pos);
-	hotspot_size = get_cul(c->infile, &pos);
+	compressed_size = fmtutil_hlp_get_cul_p(c->infile, &pos);
+	hotspot_size = fmtutil_hlp_get_cul_p(c->infile, &pos);
 	compressed_offset_rel = de_getu32le_p(&pos);
 	compressed_offset_abs = pos1 + compressed_offset_rel;
 	hotspot_offset_rel = de_getu32le_p(&pos);
@@ -446,16 +415,16 @@ static int do_wmf(deark *c, lctx *d, struct picture_ctx *pctx, i64 pos1)
 
 	pos = pos1 + 2;
 
-	mapping_mode = get_cus(c->infile, &pos);
+	mapping_mode = fmtutil_hlp_get_cus_p(c->infile, &pos);
 	width = de_getu16le(pos);
 	pos+=2;
 	height = de_getu16le(pos);
 	pos+=2;
 	de_dbg(c, "mapping mode: %d, nominal dimensions: %d"DE_CHAR_TIMES"%d",
 		(int)mapping_mode, (int)width, (int)height);
-	decompressed_size = get_cul(c->infile, &pos);
-	compressed_size = get_cul(c->infile, &pos);
-	hotspot_size = get_cul(c->infile, &pos);
+	decompressed_size = fmtutil_hlp_get_cul_p(c->infile, &pos);
+	compressed_size = fmtutil_hlp_get_cul_p(c->infile, &pos);
+	hotspot_size = fmtutil_hlp_get_cul_p(c->infile, &pos);
 	compressed_offset = de_getu32le(pos);
 	pos+=4;
 	compressed_offset += pos1;

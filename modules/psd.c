@@ -564,7 +564,7 @@ static int lookup_rsrc(u32 sig_id, u16 n, struct rsrc_info *ri_dst)
 		return 0;
 	}
 
-	for(i=0; i<(i64)DE_ITEMS_IN_ARRAY(rsrc_info_arr); i++) {
+	for(i=0; i<(i64)DE_ARRAYCOUNT(rsrc_info_arr); i++) {
 		if(rsrc_info_arr[i].id == n) {
 			*ri_dst = rsrc_info_arr[i]; // struct copy
 			if(!ri_dst->idname) ri_dst->idname = "?";
@@ -2488,7 +2488,6 @@ static int do_pattern(deark *c, lctx *d, zztype *zz, i64 pattern_idx)
 	do_pattern_internal(c, d, &datazz);
 
 	zz->pos += de_pad_to_4(pat_dlen);
-	retval = 1;
 
 	de_dbg_indent(c, -1);
 
@@ -3687,7 +3686,7 @@ static void do_bitmap_packbits(deark *c, lctx *d, zztype *zz, const struct image
 	}
 
 	unc_pixels = dbuf_create_membuf(c, 1024, 0);
-	de_fmtutil_uncompress_packbits(c->infile, zz->pos, cmpr_data_size, unc_pixels, NULL);
+	de_fmtutil_decompress_packbits(c->infile, zz->pos, cmpr_data_size, unc_pixels, NULL);
 	zz->pos += cmpr_data_size;
 	de_dbg_indent(c, 1);
 	de_dbg(c, "decompressed %"I64_FMT" bytes to %"I64_FMT"", cmpr_data_size, unc_pixels->len);

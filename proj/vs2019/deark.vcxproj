@@ -176,6 +176,7 @@
     <ClCompile Include="..\..\modules\apple2-dsk.c" />
     <ClCompile Include="..\..\modules\applesd.c" />
     <ClCompile Include="..\..\modules\ar.c" />
+    <ClCompile Include="..\..\modules\arc.c" />
     <ClCompile Include="..\..\modules\arcfs.c" />
     <ClCompile Include="..\..\modules\asf.c" />
     <ClCompile Include="..\..\modules\atari-dsk.c" />
@@ -192,6 +193,7 @@
     <ClCompile Include="..\..\modules\bsave.c" />
     <ClCompile Include="..\..\modules\cab.c" />
     <ClCompile Include="..\..\modules\cardfile.c" />
+    <ClCompile Include="..\..\modules\ccx.c" />
     <ClCompile Include="..\..\modules\cfb.c" />
     <ClCompile Include="..\..\modules\cpio.c" />
     <ClCompile Include="..\..\modules\d64.c" />
@@ -238,12 +240,14 @@
     <ClCompile Include="..\..\modules\mp3.c" />
     <ClCompile Include="..\..\modules\mscompress.c" />
     <ClCompile Include="..\..\modules\msp.c" />
+    <ClCompile Include="..\..\modules\nie.c" />
     <ClCompile Include="..\..\modules\nokia.c" />
     <ClCompile Include="..\..\modules\officeart.c" />
     <ClCompile Include="..\..\modules\ogg.c" />
     <ClCompile Include="..\..\modules\ole1.c" />
     <ClCompile Include="..\..\modules\olepropset.c" />
     <ClCompile Include="..\..\modules\os2bmp.c" />
+    <ClCompile Include="..\..\modules\packdir.c" />
     <ClCompile Include="..\..\modules\palmbitmap.c" />
     <ClCompile Include="..\..\modules\palmpdb.c" />
     <ClCompile Include="..\..\modules\pcf.c" />
@@ -297,10 +301,15 @@
     <ClCompile Include="..\..\src\deark-cmd.c" />
     <ClCompile Include="..\..\src\deark-data.c" />
     <ClCompile Include="..\..\src\deark-dbuf.c" />
-    <ClCompile Include="..\..\src\deark-fmtutil.c" />
+    <ClCompile Include="..\..\src\deark-png.c" />
+    <ClCompile Include="..\..\src\deark-zip.c" />
+    <ClCompile Include="..\..\src\fmtutil-cmpr.c" />
+    <ClCompile Include="..\..\src\fmtutil-lzw.c" />
+    <ClCompile Include="..\..\src\fmtutil-miniz.c" />
+    <ClCompile Include="..\..\src\fmtutil-zip.c" />
+    <ClCompile Include="..\..\src\fmtutil-zoo.c" />
+    <ClCompile Include="..\..\src\fmtutil.c" />
     <ClCompile Include="..\..\src\deark-font.c" />
-    <ClCompile Include="..\..\src\deark-liblzw.c" />
-    <ClCompile Include="..\..\src\deark-miniz.c" />
     <ClCompile Include="..\..\src\deark-modules.c" />
     <ClCompile Include="..\..\src\deark-tar.c" />
     <ClCompile Include="..\..\src\deark-ucstring.c" />
@@ -315,13 +324,13 @@
     <ClCompile Include="..\..\src\deark-win.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\foreign\explode.h" />
-    <ClInclude Include="..\..\foreign\liblzw.h" />
+    <ClInclude Include="..\..\foreign\delzw.h" />
+    <ClInclude Include="..\..\foreign\ozunreduce.h" />
+    <ClInclude Include="..\..\foreign\unimplode6a.h" />
     <ClInclude Include="..\..\foreign\miniz.h" />
     <ClInclude Include="..\..\foreign\uncompface.h" />
     <ClInclude Include="..\..\foreign\unsit.h" />
-    <ClInclude Include="..\..\foreign\unzoo.h" />
-    <ClInclude Include="..\..\foreign\zoo-lzd.h" />
+    <ClInclude Include="..\..\foreign\unzoo-lzh.h" />
     <ClInclude Include="..\..\src\deark-config.h" />
     <ClInclude Include="..\..\src\deark-fmtutil.h" />
     <ClInclude Include="..\..\src\deark-modules.h" />

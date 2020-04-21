@@ -17,14 +17,9 @@
 #include <inttypes.h>
 #endif
 
-#ifdef __GNUC__
-#define de_gnuc_attribute __attribute__
-#else
-#define de_gnuc_attribute(x)
-#endif
-
-#define DE_VERSION_NUMBER 0x01050200U
+#define DE_VERSION_NUMBER 0x01050400U
 #define DE_VERSION_SUFFIX ""
+#define DE_COPYRIGHT_YEAR_STRING "2020"
 
 #ifdef DE_WINDOWS
 
@@ -56,6 +51,9 @@
 
 #endif
 
+// "uint" is short for "unsigned int". It will not be redefined.
+#define uint unsigned int
+
 #define DE_CHAR_TIMES "\xc3\x97"
 #define DE_CHAR_RIGHTARROW "\xe2\x86\x92"
 #define DE_CHAR_LEQ "\xe2\x89\xa4"
@@ -66,7 +64,7 @@ typedef struct deark_struct deark;
 
 char *de_get_version_string(char *buf, size_t bufsize);
 unsigned int de_get_version_int(void);
-void de_exitprocess(void);
+void de_exitprocess(int s);
 
 void *de_malloc(deark *c, i64 n);
 void *de_mallocarray(deark *c, i64 nmemb, size_t membsize);

@@ -641,7 +641,7 @@ void de_fatalerror(deark *c)
 	if(c && c->fatalerrorfn) {
 		c->fatalerrorfn(c);
 	}
-	de_exitprocess();
+	de_exitprocess(1);
 }
 
 // TODO: Make de_malloc use de_mallocarray internally, instead of vice versa.
@@ -757,13 +757,23 @@ struct deark_module_info *de_get_module_by_id(deark *c, const char *module_id)
 	return &c->module_info[idx];
 }
 
-int de_run_module(deark *c, struct deark_module_info *mi, de_module_params *mparams, int moddisp)
+int de_run_module(deark *c, struct deark_module_info *mi, de_module_params *mparams,
+	enum de_moddisp_enum moddisp)
 {
-	int old_moddisp;
+	enum de_moddisp_enum old_moddisp;
+	struct de_detection_data_struct *old_detection_data;
+
 	if(!mi) return 0;
 	if(!mi->run_fn) return 0;
+
 	old_moddisp = c->module_disposition;
 	c->module_disposition = moddisp;
+
+	old_detection_data = c->detection_data;
+	if(c->module_nesting_level > 0) {
+		c->detection_data = NULL;
+	}
+
 	if(c->module_nesting_level>0 && c->debug_level>=3) {
 		de_dbg3(c, "[using %s module]", mi->id);
 	}
@@ -771,6 +781,7 @@ int de_run_module(deark *c, struct deark_module_info *mi, de_module_params *mpar
 	mi->run_fn(c, mparams);
 	c->module_nesting_level--;
 	c->module_disposition = old_moddisp;
+	c->detection_data = old_detection_data;
 	return 1;
 }
 
@@ -1226,6 +1237,11 @@ void de_dos_datetime_to_timestamp(struct de_timestamp *ts,
 {
 	i64 yr, mo, da, hr, mi, se;
 
+	if(ddate==0) {
+		de_zeromem(ts, sizeof(struct de_timestamp));
+		ts->is_valid = 0;
+		return;
+	}
 	yr = 1980+((ddate&0xfe00)>>9);
 	mo = (ddate&0x01e0)>>5;
 	da = (ddate&0x001f);
@@ -1289,8 +1305,7 @@ i64 de_timestamp_to_FILETIME(const struct de_timestamp *ts)
 
 // [Adapted from Eric Raymond's public domain my_timegm().]
 // Convert a time (as individual fields) to a de_timestamp.
-// Since de_timestamp currently uses time_t format internally,
-// this is basically a UTC version of mktime().
+// This is basically a UTC version of mktime().
 // yr = full year
 // mo = month: 1=Jan, ... 12=Dec
 // da = day of month: 1=1, ... 31=31
@@ -1722,6 +1737,47 @@ struct de_crcobj {
 	u16 *table16;
 };
 
+#define DE_CRC32_INIT 0
+
+// crc32_calc() is based on public domain code by Jon Mayo, downloaded
+// from <http://orangetide.com/code/crc.c>.
+// It includes minor changes for Deark. I disclaim any copyright on these
+// minor changes. -JS
+// Note: I have found several other seemingly-independent implementations
+// of the same algorithm, such as the one by Karl Malbrain, used in miniz.
+// I don't know its origin.
+static u32 crc32_calc(const u8 *ptr, size_t cnt, u32 crc)
+{
+	static const u32 crc32_tab[16] = {
+		0x00000000U, 0x1db71064U, 0x3b6e20c8U, 0x26d930acU,
+		0x76dc4190U, 0x6b6b51f4U, 0x4db26158U, 0x5005713cU,
+		0xedb88320U, 0xf00f9344U, 0xd6d6a3e8U, 0xcb61b38cU,
+		0x9b64c2b0U, 0x86d3d2d4U, 0xa00ae278U, 0xbdbdf21cU
+	};
+
+	if(cnt==0) return crc;
+	crc = ~crc;
+	while(cnt--) {
+		crc = (crc >> 4) ^ crc32_tab[(crc & 0xf) ^ (*ptr & 0xf)];
+		crc = (crc >> 4) ^ crc32_tab[(crc & 0xf) ^ (*ptr++ >> 4)];
+	}
+	return ~crc;
+}
+
+// For a one-shot CRC calculations, or the first part of a multi-part
+// calculation.
+// buf can be NULL (in which case buf_len should be 0, but is ignored)
+static u32 de_crc32(const void *buf, i64 buf_len)
+{
+	if(!buf) return DE_CRC32_INIT;
+	return (u32)crc32_calc((const u8*)buf, (size_t)buf_len, DE_CRC32_INIT);
+}
+
+static u32 de_crc32_continue(u32 prev_crc, const void *buf, i64 buf_len)
+{
+	return (u32)crc32_calc((const u8*)buf, (size_t)buf_len, prev_crc);
+}
+
 // This is the CRC-16 algorithm used in MacBinary.
 // It is in the x^16 + x^12 + x^5 + 1 family.
 // CRC-16-CCITT is probably the best name for it, though I'm not completely
@@ -1856,6 +1912,12 @@ static int addslice_cbfn(struct de_bufferedreadctx *brctx, const u8 *buf,
 
 void de_crcobj_addslice(struct de_crcobj *crco, dbuf *f, i64 pos, i64 len)
 {
+	// Minor optimization for the case where the data is all in memory
+	if(f->btype==DBUF_TYPE_MEMBUF && (pos>=0) && (pos+len<=f->len)) {
+		de_crcobj_addbuf(crco, &f->membuf_buf[pos], len);
+		return;
+	}
+
 	dbuf_buffered_read(f, pos, len, addslice_cbfn, (void*)crco);
 }
 

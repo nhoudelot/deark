@@ -242,7 +242,6 @@ static void do_emfplus_object_image(deark *c, lctx *d, i64 pos1, i64 len)
 
 	ver = de_getu32le(pos);
 	datatype = de_getu32le(pos+4);
-	name = "?";
 
 	switch(datatype) { // ImageDataType
 	case 0: name="Unknown"; break;
@@ -413,7 +412,7 @@ static void do_one_emfplus_record(deark *c, lctx *d, i64 pos, i64 len,
 	payload_pos = pos+12;
 
 	// Find the name, etc. of this record type
-	for(k=0; k<DE_ITEMS_IN_ARRAY(emfplus_rec_info_arr); k++) {
+	for(k=0; k<DE_ARRAYCOUNT(emfplus_rec_info_arr); k++) {
 		if(emfplus_rec_info_arr[k].rectype == rectype) {
 			epinfo = &emfplus_rec_info_arr[k];
 			break;
@@ -1054,7 +1053,7 @@ static const struct emf_func_info *find_emf_func_info(u32 rectype)
 {
 	size_t i;
 
-	for(i=0; i<DE_ITEMS_IN_ARRAY(emf_func_info_arr); i++) {
+	for(i=0; i<DE_ARRAYCOUNT(emf_func_info_arr); i++) {
 		if(emf_func_info_arr[i].rectype == rectype) {
 			return &emf_func_info_arr[i];
 		}

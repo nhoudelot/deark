@@ -27,6 +27,8 @@ enum de_encoding_enum {
 	DE_ENCODING_WINDOWS1250,
 	DE_ENCODING_WINDOWS1251,
 	DE_ENCODING_WINDOWS1252,
+	DE_ENCODING_WINDOWS1253,
+	DE_ENCODING_WINDOWS1254,
 	DE_ENCODING_CP437_G,
 	DE_ENCODING_CP437_C,
 	DE_ENCODING_MACROMAN,
@@ -46,7 +48,7 @@ typedef enum de_encoding_enum de_encoding;
 #define DE_CODEPOINT_BYTE00  0x10000000 // More "invalid" codepoints
 #define DE_CODEPOINT_BYTEFF  0x100000ff
 
-#define DE_ITEMS_IN_ARRAY(x) (sizeof(x)/sizeof(x[0]))
+#define DE_ARRAYCOUNT(x) (sizeof(x)/sizeof((x)[0]))
 
 struct de_ucstring_struct;
 typedef struct de_ucstring_struct de_ucstring;
@@ -81,6 +83,7 @@ struct deark_module_info {
 #define DE_MODFLAG_SHAREDDETECTION 0x10 // Module modifies deark::detection_data
 #define DE_MODFLAG_DISABLEDETECT 0x100 // Ignore results of autodetection
 	u32 flags;
+	u32 unique_id; // or 0. Rarely used.
 #define DE_MAX_MODULE_ALIASES 2
 	const char *id_alias[DE_MAX_MODULE_ALIASES];
 };
@@ -111,7 +114,9 @@ struct de_timestamp {
 	i64 ts_FILETIME; // the timestamp, in Windows FILETIME format
 };
 
-typedef void (*de_writecallback_fn)(dbuf *f, const u8 *buf, i64 buf_len);
+typedef void (*de_writelistener_cb_type)(dbuf *f, void *userdata, const u8 *buf, i64 buf_len);
+typedef void (*de_dbufcustomread_type)(dbuf *f, void *userdata, u8 *buf, i64 pos, i64 len);
+typedef void (*de_dbufcustomwrite_type)(dbuf *f, void *userdata, const u8 *buf, i64 buf_len);
 
 // dbuf is our generalized I/O object. Used for many purposes.
 struct dbuf_struct {
@@ -124,6 +129,7 @@ struct dbuf_struct {
 #define DBUF_TYPE_STDIN   6
 #define DBUF_TYPE_FIFO    7
 #define DBUF_TYPE_ODBUF   8 // nested dbuf, for output
+#define DBUF_TYPE_CUSTOM  9
 	int btype;
 	u8 is_managed;
 
@@ -148,8 +154,12 @@ struct dbuf_struct {
 	i64 membuf_alloc;
 	u8 *membuf_buf;
 
-	void *userdata;
-	de_writecallback_fn writecallback_fn;
+	void *userdata_for_writelistener;
+	de_writelistener_cb_type writelistener_cb;
+	void *userdata_for_customread;
+	de_dbufcustomread_type customread_fn; // used for DBUF_TYPE_CUSTOM
+	void *userdata_for_customwrite;
+	de_dbufcustomwrite_type customwrite_fn; // used for DBUF_TYPE_CUSTOM
 
 #define DE_CACHE_POLICY_NONE    0
 #define DE_CACHE_POLICY_ENABLED 1
@@ -186,6 +196,7 @@ struct de_finfo_struct {
 	u8 is_root_dir; // Is this definitely the unnamed root (".") dir?
 	u8 detect_root_dot_dir; // Directories named "." are special.
 	u8 orig_name_was_dot; // Internal use
+	u8 has_hotspot;
 
 #define DE_MODEFLAG_NONEXE 0x01 // Make the output file non-executable.
 #define DE_MODEFLAG_EXE    0x02 // Make the output file executable.
@@ -195,6 +206,7 @@ struct de_finfo_struct {
 	struct de_timestamp image_mod_time; // Mod time of an image (for PNG tIME chunk)
 	struct de_density_info density;
 	de_ucstring *name_other; // Modules can use this field as needed.
+	int hotspot_x, hotspot_y; // Measured from upper-left pixel (after handling 'flipped')
 };
 
 struct deark_bitmap_struct {
@@ -225,10 +237,17 @@ struct de_ID3_detection_data {
 	u32 bytes_at_start;
 };
 
+// This struct is a crude way for data to be shared by the various format
+// identification functions. It generally should not be used outside of them --
+// but it can be, provided it's only used as a cache.
 struct de_detection_data_struct {
+	int best_confidence_so_far;
 	u8 has_utf8_bom;
 	u8 is_macbinary;
 	u8 SAUCE_detection_attempted;
+	u8 zip_eocd_looked_for;
+	u8 zip_eocd_found;
+	i64 zip_eocd_pos; // valid if zip_eocd_found
 	struct de_SAUCE_detection_data sauce;
 	struct de_ID3_detection_data id3;
 };
@@ -268,6 +287,13 @@ struct deark_ext_option {
 
 typedef void (*de_module_register_fn_type)(deark *c);
 
+enum de_moddisp_enum {
+	DE_MODDISP_NONE = 0,    // No active module, or unknown
+	DE_MODDISP_AUTODETECT,  // Format was autodetected
+	DE_MODDISP_EXPLICIT,    // User used -m to select the module
+	DE_MODDISP_INTERNAL     // Another module is using this module
+};
+
 struct deark_struct {
 	int debug_level;
 	void *userdata;
@@ -289,12 +315,10 @@ struct deark_struct {
 	// top-level file.
 	int format_declared;
 
-#define DE_MODDISP_NONE       0 // No active module, or unknown
-#define DE_MODDISP_AUTODETECT 1 // Format was autodetected
-#define DE_MODDISP_EXPLICIT   2 // User used -m to select the module
-#define DE_MODDISP_INTERNAL   3 // Another module is using this module
-	int module_disposition; // Why are we using this module?
+	enum de_moddisp_enum module_disposition; // Why are we using this module?
 
+	// Always valid during identify(); can be NULL during run().
+	struct de_detection_data_struct *detection_data;
 	////////////////////////////////////////////////////
 
 	int file_count; // The number of extractable files encountered so far.
@@ -305,6 +329,7 @@ struct deark_struct {
 
 	i64 total_output_size;
 	int error_count;
+	u8 serious_error_flag;
 
 	const char *input_filename;
 	const char *input_format_req; // Format requested
@@ -332,20 +357,23 @@ struct deark_struct {
 	int show_infomessages;
 	int show_warnings;
 	int dbg_indent_amount;
-	int write_bom;
-	int write_density;
-	int ascii_html;
-	int keep_dir_entries;
-	int filenames_from_file;
+	u8 write_bom;
+	u8 write_density;
+	u8 ascii_html;
+	u8 keep_dir_entries;
+	u8 filenames_from_file;
+	u8 macformat_known;
+	u8 macformat;
 	int overwrite_mode;
 	u8 preserve_file_times;
 	u8 preserve_file_times_archives;
 	u8 preserve_file_times_images;
-	int reproducible_output;
+	u8 reproducible_output;
 	struct de_timestamp reproducible_timestamp;
 	int can_decode_fltpt;
 	int host_is_le;
-	int modhelp_req;
+	u8 identify_only;
+	u8 modhelp_req;
 	de_encoding input_encoding;
 	i64 input_tz_offs_seconds;
 
@@ -354,6 +382,8 @@ struct deark_struct {
 	de_fatalerrorfn_type fatalerrorfn;
 	const char *dprefix;
 
+	u8 tmpflag1;
+	u8 tmpflag2;
 	u8 pngcprlevel_valid;
 	unsigned int pngcmprlevel;
 	void *zip_data;
@@ -379,16 +409,13 @@ struct deark_struct {
 #define DE_MAX_EXT_OPTIONS 16
 	int num_ext_options;
 	struct deark_ext_option ext_option[DE_MAX_EXT_OPTIONS];
-
-	// This struct is for data that can be shared by the various format
-	// identification functions. It should not be used outside of them.
-	struct de_detection_data_struct detection_data;
 };
 
 void de_fatalerror(deark *c);
 
 deark *de_create_internal(void);
-int de_run_module(deark *c, struct deark_module_info *mi, de_module_params *mparams, int moddisp);
+int de_run_module(deark *c, struct deark_module_info *mi, de_module_params *mparams,
+	enum de_moddisp_enum moddisp);
 int de_run_module_by_id(deark *c, const char *id, de_module_params *mparams);
 void de_run_module_by_id_on_slice(deark *c, const char *id, de_module_params *mparams,
 	dbuf *f, i64 pos, i64 len);
@@ -492,26 +519,11 @@ void de_tar_close_file(deark *c);
 
 ///////////////////////////////////////////
 
-#define DE_DEFLATEFLAG_ISZLIB 0x1
-#define DE_DEFLATEFLAG_USEMAXUNCMPRSIZE 0x2
-int de_decompress_deflate(dbuf *inf, i64 inputstart, i64 inputsize, dbuf *outf,
-	i64 maxuncmprsize, i64 *bytes_consumed, unsigned int flags);
-
 int de_zip_create_file(deark *c);
 void de_zip_add_file_to_archive(deark *c, dbuf *f);
 void de_zip_close_file(deark *c);
 
 int de_write_png(deark *c, de_bitmap *img, dbuf *f);
-
-// Deprecated. Use de_crcobj_* instead.
-u32 de_crc32(const void *buf, i64 buf_len);
-u32 de_crc32_continue(u32 prev_crc, const void *buf, i64 buf_len);
-
-///////////////////////////////////////////
-
-int de_decompress_liblzw(dbuf *inf1, i64 pos1, i64 len,
-	dbuf *outf, unsigned int has_maxlen, i64 max_out_len,
-	unsigned int dflags, u8 lzwmode);
 
 ///////////////////////////////////////////
 
@@ -616,11 +628,11 @@ void dbuf_read_to_ucstring_n(dbuf *f, i64 pos, i64 len, i64 max_len,
 dbuf *dbuf_create_output_file(deark *c, const char *ext, de_finfo *fi, unsigned int createflags);
 
 dbuf *dbuf_create_unmanaged_file(deark *c, const char *fname, int overwrite_mode, unsigned int flags);
-
+dbuf *dbuf_create_unmanaged_file_stdout(deark *c, const char *name);
 dbuf *dbuf_open_input_file(deark *c, const char *fn);
 dbuf *dbuf_open_input_stdin(deark *c);
-
 dbuf *dbuf_open_input_subfile(dbuf *parent, i64 offset, i64 size);
+dbuf *dbuf_create_custom_dbuf(deark *c, i64 apparent_size, unsigned int flags);
 
 // Flag:
 //  0x1: Set the maximum size to the 'initialsize'
@@ -628,6 +640,8 @@ dbuf *dbuf_create_membuf(deark *c, i64 initialsize, unsigned int flags);
 
 // If f is NULL, this is a no-op.
 void dbuf_close(dbuf *f);
+
+void dbuf_set_writelistener(dbuf *f, de_writelistener_cb_type fn, void *userdata);
 
 void dbuf_write(dbuf *f, const u8 *m, i64 len);
 void dbuf_write_at(dbuf *f, i64 pos, const u8 *m, i64 len);
@@ -644,8 +658,12 @@ void dbuf_writebyte(dbuf *f, u8 n);
 void dbuf_writebyte_at(dbuf *f, i64 pos, u8 n);
 void dbuf_writeu16le(dbuf *f, i64 n);
 void dbuf_writeu16be(dbuf *f, i64 n);
+void dbuf_writei16le(dbuf *f, i64 n);
+void dbuf_writei16be(dbuf *f, i64 n);
 void dbuf_writeu32le(dbuf *f, i64 n);
 void dbuf_writeu32be(dbuf *f, i64 n);
+void dbuf_writei32le(dbuf *f, i64 n);
+void dbuf_writei32be(dbuf *f, i64 n);
 void dbuf_writeu64le(dbuf *f, u64 n);
 
 void dbuf_puts(dbuf *f, const char *sz);
@@ -663,6 +681,7 @@ struct de_stringreaderdata {
    i64 bytes_consumed;
 
    char *sz; // Stores some or all of the bytes read. Always NUL terminated.
+   size_t sz_strlen;
    de_ucstring *str; // Unicode version of ->sz
    char *sz_utf8; // UTF-8 version of ->str (+ NUL terminator) (optional)
    size_t sz_utf8_strlen;
@@ -915,6 +934,7 @@ void ucstring_append_char(de_ucstring *s, i32 ch);
 void ucstring_append_ucstring(de_ucstring *s1, const de_ucstring *s2);
 void ucstring_printf(de_ucstring *s, de_encoding encoding, const char *fmt, ...)
   de_gnuc_attribute ((format (printf, 3, 4)));
+int ucstring_isempty(const de_ucstring *s);
 int ucstring_isnonempty(const de_ucstring *s);
 
 // Convert and append an encoded array of bytes to the string.
@@ -1071,15 +1091,13 @@ struct de_char_screen {
 	struct de_char_cell **cell_rows; // Array of [height] row pointers
 };
 
-struct de_char_comment {
-	de_ucstring *s;
-};
-
 struct de_char_context {
 	u8 prefer_image_output;
 	u8 prefer_9col_mode;
 	u8 no_density;
 	u8 suppress_custom_font_warning;
+	u8 outfmt_known;
+	int outfmt;
 	i64 nscreens;
 	struct de_char_screen **screens; // Array of [nscreens] screens
 	u32 pal[16];
@@ -1088,12 +1106,14 @@ struct de_char_context {
 	de_ucstring *artist;
 	de_ucstring *organization;
 	struct de_timestamp creation_date;
-	i64 num_comments;
-	struct de_char_comment *comments; // Array of [num_comments] comments
+	de_ucstring *comment; // NULL if there is no comment
 };
 
 void de_char_output_to_file(deark *c, struct de_char_context *charctx);
-
+struct de_char_context *de_create_charctx(deark *c, unsigned int flags);
+void de_char_decide_output_format(deark *c, struct de_char_context *charctx);
+void de_destroy_charctx(deark *c, struct de_char_context *charctx);
+void de_free_charctx_screens(deark *c, struct de_char_context *charctx);
 void de_free_charctx(deark *c, struct de_char_context *charctx);
 
 ///////////////////////////////////////////

@@ -17,6 +17,9 @@
       <UniqueIdentifier>{a9e4bdc3-910a-46cc-a692-cb576c2bfd36}</UniqueIdentifier>
       <Extensions>c</Extensions>
     </Filter>
+    <Filter Include="Foreign Code">
+      <UniqueIdentifier>{5bcb6fc7-e9a5-41ff-832a-55920c3ff319}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\deark-bitmap.c">
@@ -34,16 +37,7 @@
     <ClCompile Include="..\..\src\deark-dbuf.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\src\deark-fmtutil.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\src\deark-font.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\src\deark-liblzw.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\src\deark-miniz.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\deark-modules.c">
@@ -442,6 +436,42 @@
     <ClCompile Include="..\..\modules\afcp.c">
       <Filter>Modules</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\modules\arc.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\fmtutil.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\fmtutil-cmpr.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\deark-png.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\deark-zip.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\fmtutil-miniz.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\fmtutil-zoo.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\modules\packdir.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\fmtutil-zip.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\modules\ccx.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\fmtutil-lzw.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\modules\nie.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\src\deark-config.h">
@@ -462,26 +492,26 @@
     <ClInclude Include="..\..\src\deark.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\foreign\explode.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\foreign\liblzw.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\foreign\miniz.h">
-      <Filter>Header Files</Filter>
+      <Filter>Foreign Code</Filter>
     </ClInclude>
     <ClInclude Include="..\..\foreign\uncompface.h">
-      <Filter>Header Files</Filter>
+      <Filter>Foreign Code</Filter>
     </ClInclude>
     <ClInclude Include="..\..\foreign\unsit.h">
-      <Filter>Header Files</Filter>
+      <Filter>Foreign Code</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\foreign\unzoo.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\..\foreign\unimplode6a.h">
+      <Filter>Foreign Code</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\foreign\zoo-lzd.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\..\foreign\ozunreduce.h">
+      <Filter>Foreign Code</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\foreign\unzoo-lzh.h">
+      <Filter>Foreign Code</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\foreign\delzw.h">
+      <Filter>Foreign Code</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

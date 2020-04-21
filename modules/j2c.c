@@ -291,7 +291,7 @@ static void handler_cod(deark *c, lctx *d, struct page_ctx *pg,
 	de_dbg(c, "progression order: %d", (int)b);
 	n = de_getu16be_p(&pos);
 	de_dbg(c, "number of layers: %d", (int)n);
-	b = de_getbyte_p(&pos);
+	(void)de_getbyte_p(&pos);
 
 	if(pos < pos1+len) {
 		// TODO
@@ -372,7 +372,7 @@ static int get_marker_info(deark *c, lctx *d, struct page_ctx *pg, u8 seg_type,
 	mi->seg_type = seg_type;
 
 	// First, try to find the segment type in the static marker info.
-	for(k=0; k<(i64)DE_ITEMS_IN_ARRAY(marker_info1_arr); k++) {
+	for(k=0; k<(i64)DE_ARRAYCOUNT(marker_info1_arr); k++) {
 		const struct marker_info1 *mi1 = &marker_info1_arr[k];
 
 		if(mi1->seg_type == seg_type) {

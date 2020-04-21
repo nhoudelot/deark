@@ -2,18 +2,21 @@
 // Copyright (C) 2018 Jason Summers
 // See the file COPYING for terms of use.
 
-// AppleDouble, etc.
+// AppleSingle and AppleDouble
 
 #include <deark-config.h>
 #include <deark-private.h>
 #include <deark-fmtutil.h>
-DE_DECLARE_MODULE(de_module_applesingle);
-DE_DECLARE_MODULE(de_module_appledouble);
+DE_DECLARE_MODULE(de_module_applesd);
 
 typedef struct localctx_struct {
 	u32 version;
-	struct de_timestamp modtime;
-	de_ucstring *real_name;
+	int is_appledouble;
+	int input_encoding;
+	int extract_rsrc;
+	struct de_advfile *advf;
+	i64 rsrc_fork_pos;
+	i64 data_fork_pos;
 } lctx;
 
 struct entry_id_struct;
@@ -34,32 +37,68 @@ struct entry_id_struct {
 	handler_fn_type hfn;
 };
 
-// len = the total number of bytes available
-static void read_pascal_string(deark *c, lctx *d, de_ucstring *s, i64 pos, i64 len)
+// I'm about 60% sure that the standard elements that are presumably strings
+// were intended to be raw ASCII-like characters. Too bad they didn't mention
+// that in the spec. It's common to find files that contain "Pascal" strings,
+// where the first byte is the length of the (rest of the) string.
+// It's also common for string elements (whether Pascal or not) to have extra
+// NUL bytes at the end of them, for no apparent reason.
+static int is_pascal_string(deark *c, lctx *d, struct entry_struct *e, u8 firstbyte)
 {
-	i64 slen;
+	if(e->length<1) return 0;
 
-	if(len<1) goto done;
-	slen = (i64)de_getbyte(pos);
-	if(slen<1 || slen > (len-1)) goto done;
-	dbuf_read_to_ucstring(c->infile, pos+1, slen, s, 0, DE_ENCODING_MACROMAN);
-done:
-	;
+	// Assume this field won't be larger than any Pascal string could need.
+	if(e->length > 256) return 0;
+
+	if(1+(i64)firstbyte > e->length) return 0; // A Pascal string wouldn't fit.
+
+	// This could be wrong, if a non-Pascal string starts with a nonprintable char.
+	if(firstbyte<32) return 1;
+
+	// At this point, we could do more heuristics, such as testing whether the
+	// non-NUL bytes stop exactly where they should for a Pascal string.
+	// But perfection is impossible.
+	// For now, just assume it's not a Pascal string. Worst case, the decoded
+	// string will have a garbage character prepended.
+	// TODO: Maybe add a user option.
+	return 0;
 }
 
 static void handler_string(deark *c, lctx *d, struct entry_struct *e)
 {
-	de_ucstring *s = NULL;
+	struct de_stringreaderdata *srd = NULL;
+	u8 firstbyte;
 
-	s = ucstring_create(c);
-	read_pascal_string(c, d, s, e->offset, e->length);
-	de_dbg(c, "%s: \"%s\"", e->eid->name, ucstring_getpsz_d(s));
+	if(e->length<1) goto done;
 
-	if(e->id==3 && !d->real_name && s->len>0) { // id 3 = real name
-		d->real_name = ucstring_clone(s);
+	firstbyte = de_getbyte(e->offset);
+
+	if(firstbyte==0x00) {
+		de_dbg(c, "string is apparently empty");
+		goto done;
+	}
+	else if(is_pascal_string(c, d, e, firstbyte)) {
+		i64 slen = (i64)firstbyte;
+
+		de_dbg(c, "guessing this is a Pascal string, len: %u", (unsigned int)slen);
+		srd = dbuf_read_string(c->infile, e->offset+1, slen, slen, 0, d->input_encoding);
+	}
+	else {
+		srd = dbuf_read_string(c->infile, e->offset, e->length, 1024,
+			DE_CONVFLAG_STOP_AT_NUL, d->input_encoding);
 	}
 
-	ucstring_destroy(s);
+	de_dbg(c, "%s: \"%s\"", e->eid->name, ucstring_getpsz_d(srd->str));
+
+	if(e->id==3 && srd->str->len>0) { // id 3 = real name
+		ucstring_empty(d->advf->filename);
+		ucstring_append_ucstring(d->advf->filename, srd->str);
+		d->advf->original_filename_flag = 1;
+		de_advfile_set_orig_filename(d->advf, srd->sz, srd->sz_strlen);
+	}
+
+done:
+	de_destroy_stringreaderdata(c, srd);
 }
 
 static void do_one_date(deark *c, lctx *d, i64 pos, const char *name,
@@ -78,7 +117,7 @@ static void do_one_date(deark *c, lctx *d, i64 pos, const char *name,
 		// that and the Unix time epoch.
 		de_unix_time_to_timestamp(dt + ((365*30 + 7)*86400), &ts, 0x1);
 		if(is_modtime) {
-			d->modtime = ts; // struct copy
+			d->advf->mainfork.fi->mod_time = ts;
 		}
 		de_timestamp_to_string(&ts, timestamp_buf, sizeof(timestamp_buf), 0);
 	}
@@ -100,12 +139,24 @@ static void do_finder_orig(deark *c, lctx *d, struct entry_struct *e)
 	struct de_fourcc filetype;
 	struct de_fourcc creator;
 
+	// TODO: This entry has a different format if this is an AppleDouble file
+	// whose companion data "file" is a directory. But I don't know the proper
+	// way to tell if that is the case.
+
 	dbuf_read_fourcc(c->infile, pos, &filetype, 4, 0x0);
 	de_dbg(c, "filetype: '%s'", filetype.id_dbgstr);
+	de_memcpy(d->advf->typecode, filetype.bytes, 4);
+	d->advf->has_typecode = 1;
 	pos += 4;
 	dbuf_read_fourcc(c->infile, pos, &creator, 4, 0x0);
 	de_dbg(c, "creator: '%s'", creator.id_dbgstr);
+	de_memcpy(d->advf->creatorcode, creator.bytes, 4);
+	d->advf->has_creatorcode = 1;
 	pos += 4;
+
+	d->advf->finderflags = (u16)dbuf_getu16be_p(c->infile, &pos);
+	d->advf->has_finderflags = 1;
+	de_dbg(c, "flags: 0x%04x", (unsigned int)d->advf->finderflags);
 }
 
 static void do_xattr_entry(deark *c, lctx *d, struct de_stringreaderdata *name,
@@ -223,54 +274,49 @@ static void handler_finder(deark *c, lctx *d, struct entry_struct *e)
 
 static void handler_data(deark *c, lctx *d, struct entry_struct *e)
 {
-	de_finfo *fi = NULL;
-
-	fi = de_finfo_create(c);
-	if(d->modtime.is_valid) {
-		fi->mod_time = d->modtime; // struct copy
+	if(d->is_appledouble) {
+		de_warn(c, "AppleDouble header files should not have a data fork.");
 	}
 
-	if(d->real_name) {
-		de_finfo_set_name_from_ucstring(c, fi, d->real_name, 0);
-		fi->original_filename_flag = 1;
-	}
-	else {
-		de_finfo_set_name_from_sz(c, fi, "data", 0, DE_ENCODING_LATIN1);
-	}
-
-	dbuf_create_file_from_slice(c->infile, e->offset, e->length,
-		NULL, fi, 0x0);
-
-	de_finfo_destroy(c, fi);
+	d->advf->mainfork.fork_exists = 1;
+	d->data_fork_pos = e->offset;
+	d->advf->mainfork.fork_len = e->length;
 }
 
-static void handler_rsrc(deark *c, lctx *d, struct entry_struct *e)
+static void do_extract_rsrc(deark *c, lctx *d, struct entry_struct *e)
 {
 	de_finfo *fi = NULL;
 	de_ucstring *fname = NULL;
 
 	if(e->length<1) goto done;
 
-	fi = de_finfo_create(c);
-	if(d->modtime.is_valid) {
-		fi->mod_time = d->modtime; // struct copy
-	}
-
-	if(d->real_name) {
-		fname = ucstring_clone(d->real_name);
-		ucstring_append_sz(fname, ".rsrc", DE_ENCODING_LATIN1);
-		de_finfo_set_name_from_ucstring(c, fi, fname, 0);
-	}
-	else {
-		de_finfo_set_name_from_sz(c, fi, "rsrc", 0, DE_ENCODING_LATIN1);
-	}
-
-	dbuf_create_file_from_slice(c->infile, e->offset, e->length,
-		NULL, fi, 0x0);
+	d->advf->rsrcfork.fork_exists = 1;
+	d->rsrc_fork_pos = e->offset;
+	d->advf->rsrcfork.fork_len = e->length;
 
 done:
 	de_finfo_destroy(c, fi);
 	ucstring_destroy(fname);
+}
+
+static void do_decode_rsrc(deark *c, lctx *d, struct entry_struct *e)
+{
+	if(e->length<1) return;
+	de_dbg(c, "decoding as resource format");
+	de_dbg_indent(c, 1);
+	de_run_module_by_id_on_slice2(c, "macrsrc", NULL, c->infile,
+		e->offset, e->length);
+	de_dbg_indent(c, -1);
+}
+
+static void handler_rsrc(deark *c, lctx *d, struct entry_struct *e)
+{
+	if(d->extract_rsrc) {
+		do_extract_rsrc(c, d, e);
+	}
+	else {
+		do_decode_rsrc(c, d, e);
+	}
 }
 
 static const struct entry_id_struct entry_id_arr[] = {
@@ -285,7 +331,7 @@ static const struct entry_id_struct entry_id_arr[] = {
 	{10, "Macintosh file info", NULL},
 	{11, "ProDOS file info", NULL},
 	{12, "MS-DOS file info", NULL},
-	{13, "short name", NULL},
+	{13, "short name", handler_string},
 	{14, "AFP file info", NULL},
 	{15, "directory ID", NULL}
 };
@@ -294,7 +340,7 @@ static const struct entry_id_struct *find_entry_id_info(unsigned int id)
 {
 	size_t k;
 
-	for(k=0; k<DE_ITEMS_IN_ARRAY(entry_id_arr); k++) {
+	for(k=0; k<DE_ARRAYCOUNT(entry_id_arr); k++) {
 		if(entry_id_arr[k].id==id) return &entry_id_arr[k];
 	}
 	return NULL;
@@ -332,94 +378,118 @@ done:
 	;
 }
 
+static int my_advfile_cbfn(deark *c, struct de_advfile *advf,
+	struct de_advfile_cbparams *afp)
+{
+	lctx *d = (lctx*)advf->userdata;
+
+	if(afp->whattodo == DE_ADVFILE_WRITEMAIN) {
+		dbuf_copy(c->infile, d->data_fork_pos, advf->mainfork.fork_len, afp->outf);
+	}
+	else if(afp->whattodo == DE_ADVFILE_WRITERSRC) {
+		dbuf_copy(c->infile, d->rsrc_fork_pos, advf->rsrcfork.fork_len, afp->outf);
+	}
+	return 1;
+}
+
 static void de_run_sd_internal(deark *c, lctx *d)
 {
 	i64 pos = 0;
 	i64 nentries;
 	i64 k;
-	int pass;
 	i64 entry_descriptors_pos;
-	int *entry_pass = NULL;
+
+	if(d->is_appledouble) {
+		de_declare_fmt(c, "AppleDouble header file");
+	}
+	else {
+		de_declare_fmt(c, "AppleSingle");
+	}
+
+	d->input_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_MACROMAN);
+
+	d->advf = de_advfile_create(c);
+	d->advf->userdata = (void*)d;
+	d->advf->writefork_cbfn = my_advfile_cbfn;
+	ucstring_append_sz(d->advf->filename, "bin", DE_ENCODING_LATIN1);
 
 	pos += 4; // signature
 	d->version = (u32)de_getu32be_p(&pos);
 	de_dbg(c, "version: 0x%08x", (unsigned int)d->version);
-	pos += 16; // filler
+
+	// For v1, this field is "Home file system" (TODO: Decode this.)
+	// For v2, it is unused.
+	pos += 16;
 
 	nentries = de_getu16be_p(&pos);
 	de_dbg(c, "number of entries: %d", (int)nentries);
 
 	entry_descriptors_pos = pos;
 
-	entry_pass = de_mallocarray(c, nentries, sizeof(int));
 	for(k=0; k<nentries; k++) {
-		unsigned int e_id;
-		// Make sure we read the metadata before we extract the files.
-		e_id = (unsigned int)de_getu32be(entry_descriptors_pos+12*k);
-		if(e_id==1 || e_id==2) entry_pass[k] = 2;
-		else entry_pass[k] = 1;
+		if(pos+12>c->infile->len) break;
+		de_dbg(c, "entry[%u]", (unsigned int)k);
+		de_dbg_indent(c, 1);
+		do_sd_entry(c, d, (unsigned int)k, entry_descriptors_pos+12*k);
+		de_dbg_indent(c, -1);
 	}
 
-	for(pass=1; pass<=2; pass++) {
-		for(k=0; k<nentries; k++) {
-			if(entry_pass[k]==pass) {
-				if(pos+12>c->infile->len) break;
-				de_dbg(c, "entry[%u]", (unsigned int)k);
-				de_dbg_indent(c, 1);
-				do_sd_entry(c, d, (unsigned int)k, entry_descriptors_pos+12*k);
-				de_dbg_indent(c, -1);
-			}
-		}
+	// There's no good reason to ever "convert" to AppleSingle. (We don't
+	// have a way to combine forks that start out in separate files.)
+	d->advf->no_applesingle = 1;
+
+	if(!d->advf->mainfork.fork_exists || !d->advf->rsrcfork.fork_exists) {
+		// If either fork does not exist, don't do anything fancy.
+		// (If both exist, we allow conversion to AppleDouble.)
+		d->advf->no_appledouble = 1;
 	}
 
-	de_free(c, entry_pass);
-	de_free(c, d->real_name);
+	de_advfile_run(d->advf);
+
+	de_advfile_destroy(d->advf);
 }
 
-static void de_run_appledouble(deark *c, de_module_params *mparams)
+static void de_run_applesd(deark *c, de_module_params *mparams)
 {
 	lctx *d = NULL;
 
 	d = de_malloc(c, sizeof(lctx));
+	if(de_getbyte(3)==0x00)
+		d->is_appledouble = 0;
+	else
+		d->is_appledouble = 1;
+	// AppleDouble default = decode resource fork
+	// AppleSingle default = extract resource fork
+	d->extract_rsrc = de_get_ext_option_bool(c, "applesd:extractrsrc", d->is_appledouble?0:1);
 	de_run_sd_internal(c, d);
 	de_free(c, d);
 }
 
-static int de_identify_appledouble(deark *c)
+static int de_identify_applesd(deark *c)
 {
-	if(!dbuf_memcmp(c->infile, 0, "\x00\x05\x16\x07", 4))
-		return 100;
+	i64 n;
+
+	n = de_getu32be(0);
+	if(n==0x00051607) return 100; // AppleDouble
+	if(n==0x00051600) return 100; // AppleSingle
 	return 0;
 }
 
-void de_module_appledouble(deark *c, struct deark_module_info *mi)
+static void de_help_applesd(deark *c)
 {
-	mi->id = "appledouble";
-	mi->desc = "AppleDouble Header file";
-	mi->run_fn = de_run_appledouble;
-	mi->identify_fn = de_identify_appledouble;
+	de_msg(c, "-opt applesd:extractrsrc=<0|1> : Decode (0) or extract (1) the "
+		"resource fork");
+	de_msg(c, "-opt macrsrc:extractraw : Extract all resources to files (if "
+		"decoding the resource fork)");
 }
 
-static void de_run_applesingle(deark *c, de_module_params *mparams)
+void de_module_applesd(deark *c, struct deark_module_info *mi)
 {
-	lctx *d = NULL;
-
-	d = de_malloc(c, sizeof(lctx));
-	de_run_sd_internal(c, d);
-	de_free(c, d);
-}
-
-static int de_identify_applesingle(deark *c)
-{
-	if(!dbuf_memcmp(c->infile, 0, "\x00\x05\x16\x00", 4))
-		return 100;
-	return 0;
-}
-
-void de_module_applesingle(deark *c, struct deark_module_info *mi)
-{
-	mi->id = "applesingle";
-	mi->desc = "AppleSingle";
-	mi->run_fn = de_run_applesingle;
-	mi->identify_fn = de_identify_applesingle;
+	mi->id = "applesd";
+	mi->id_alias[0] = "applesingle";
+	mi->id_alias[1] = "appledouble";
+	mi->desc = "AppleSingle/AppleDouble";
+	mi->run_fn = de_run_applesd;
+	mi->identify_fn = de_identify_applesd;
+	mi->help_fn = de_help_applesd;
 }

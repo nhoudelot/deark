@@ -42,12 +42,13 @@ EXE_EXT:=.exe
 else
 EXE_EXT:=
 endif
-DEARK_EXE:=deark$(EXE_EXT)
+DEARK_EXE_BASENAME:=deark$(EXE_EXT)
+DEARK_EXE:=$(DEARK_EXE_BASENAME)
 
 DEPS_MK:=deps.mk
 
 ifneq ($(OBJDIR),obj)
-DEARK_EXE:=$(OBJDIR)/$(DEARK_EXE)
+DEARK_EXE:=$(OBJDIR)/$(DEARK_EXE_BASENAME)
 DEPS_MK:=$(OBJDIR)/$(DEPS_MK)
 endif
 
@@ -67,23 +68,24 @@ include $(DEPS_MK)
 
 endif
 
-.PHONY: all clean dep
+.PHONY: all clean dep install
 
 OFILES_MODS_AB:=$(addprefix $(OBJDIR)/modules/,abk.o alphabmp.o amigaicon.o \
  ansiart.o ar.o asf.o atari-dsk.o atari-img.o autocad.o awbm.o basic-c64.o \
- arcfs.o apm.o afcp.o \
+ arcfs.o apm.o afcp.o arc.o \
  bmff.o apple2-dsk.o applesd.o binhex.o bintext.o bmi.o bmp.o bpg.o bsave.o)
 OFILES_MODS_CH:=$(addprefix $(OBJDIR)/modules/,cab.o cardfile.o cfb.o \
  cpio.o d64.o drhalo.o ebml.o emf.o epocimage.o eps.o exe.o \
  flif.o fnt.o gemfont.o gemmeta.o gemras.o gif.o grasp.o grob.o gzip.o \
- hfs.o hlp.o dsstore.o flac.o)
+ hfs.o hlp.o dsstore.o flac.o ccx.o)
 OFILES_MODS_IO:=$(addprefix $(OBJDIR)/modules/,misc.o iccprofile.o icns.o \
  id3.o ico.o iff.o ilbm.o insetpix.o iptc.o jbf.o jovianvi.o jpeg.o lha.o \
  j2c.o ogg.o olepropset.o iso9660.o macbinary.o macrsrc.o \
  macpaint.o makichan.o mbk.o mp3.o mscompress.o msp.o nokia.o os2bmp.o ole1.o \
- officeart.o megapaint.o)
+ officeart.o megapaint.o nie.o)
 OFILES_MODS_PQ:=$(addprefix $(OBJDIR)/modules/,psd.o palmbitmap.o palmpdb.o \
  pcpaint.o pcx.o pff2.o pict.o pkfont.o png.o pnm.o portfolio.o printptnr.o \
+ packdir.o \
  printshop.o psf.o psionapp.o psionpic.o pcf.o plist.o qtif.o)
 OFILES_MODS_RZ:=$(addprefix $(OBJDIR)/modules/,riff.o rosprite.o rpm.o \
  rsc.o shg.o spectrum512.o sunras.o t64.o tar.o tga.o tiff.o tim.o \
@@ -92,10 +94,11 @@ OFILES_MODS_RZ:=$(addprefix $(OBJDIR)/modules/,riff.o rosprite.o rpm.o \
 OFILES_MODS:=$(OFILES_MODS_AB) $(OFILES_MODS_CH) $(OFILES_MODS_IO) \
  $(OFILES_MODS_PQ) $(OFILES_MODS_RZ)
 
-OFILES_DEARK1:=$(addprefix $(OBJDIR)/src/,deark-miniz.o deark-util.o \
- deark-data.o deark-tar.o \
+OFILES_DEARK1:=$(addprefix $(OBJDIR)/src/,fmtutil-miniz.o deark-util.o \
+ deark-data.o deark-zip.o deark-tar.o deark-png.o \
  deark-dbuf.o deark-bitmap.o deark-char.o deark-font.o deark-ucstring.o \
- deark-fmtutil.o deark-liblzw.o deark-user.o deark-unix.o deark-win.o)
+ fmtutil.o fmtutil-cmpr.o fmtutil-zip.o fmtutil-zoo.o \
+ fmtutil-lzw.o deark-user.o deark-unix.o deark-win.o)
 OFILES_DEARK2:=$(addprefix $(OBJDIR)/src/,deark-modules.o)
 OFILES_ALL:=$(OFILES_DEARK1) $(OFILES_DEARK2) $(OFILES_MODS) $(OBJDIR)/src/deark-cmd.o $(DEARK_RC_O)
 

@@ -81,6 +81,12 @@ static void get_fmt(deark *c, struct fmtinfo_struct *fmti)
 		return;
 	}
 
+	if(!de_memcmp(b, "\x7f" "ELF", 4)) {
+		fmti->confidence = 40;
+		fmti->descr = "an ELF binary";
+		return;
+	}
+
 	if(!de_memcmp(b, "\xff" "WPC", 4)) {
 		fmti->confidence = 40;
 		fmti->descr = "a WordPerfect document";
@@ -133,6 +139,15 @@ static void get_fmt(deark *c, struct fmtinfo_struct *fmti)
 		return;
 	}
 
+	if(!de_memcmp(b, "CPT", 3) &&
+		(b[3]>='7' && b[3]<='9') &&
+		!de_memcmp(&b[4], "FILE", 4))
+	{
+		fmti->confidence = 91;
+		fmti->descr = "a Corel Photo-Paint image";
+		return;
+	}
+
 	// We're not trying to detect every HTML file, but we want to make sure
 	// we can detect the ones we generate.
 	if(!de_memcmp(b, "<!DOCTYPE html", 14) ||
@@ -172,5 +187,6 @@ void de_module_unsupported(deark *c, struct deark_module_info *mi)
 	mi->desc = "Identify some unsupported formats";
 	mi->run_fn = de_run_unsupported;
 	mi->identify_fn = de_identify_unsupported;
-	mi->flags |= DE_MODFLAG_HIDDEN;
+	mi->flags |= DE_MODFLAG_HIDDEN | DE_MODFLAG_NOEXTRACT;
+	mi->unique_id = 1;
 }

@@ -22,6 +22,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
 // Windows-specific contextual data, mainly for console settings.
 struct de_platform_data {
 	HANDLE msgs_HANDLE;
@@ -235,6 +239,16 @@ FILE* de_fopen_for_write(deark *c, const char *fn,
 	WCHAR *fnW = NULL;
 	FILE *f_ret = NULL;
 
+	// A simple check to make it harder to accidentally overwrite the input
+	// file. (But it can easily be defeated.)
+	// TODO?: Make this more robust.
+	if(c->input_filename && !de_strcasecmp(fn, c->input_filename)) {
+		de_err(c, "Refusing to write to %s: Same as input filename", fn);
+		de_fatalerror(c);
+		de_strlcpy(errmsg, "", errmsg_len);
+		goto done;
+	}
+
 	modeW = (flags&0x1) ? L"ab" : L"wb";
 	fnW = de_utf8_to_utf16_strdup(c, fn);
 
@@ -332,18 +346,18 @@ void de_free_utf8_args(int argc, char **argv)
 	de_free(NULL, argv);
 }
 
-struct de_platform_data *de_platformdata_create(deark *c)
+struct de_platform_data *de_platformdata_create(void)
 {
 	struct de_platform_data *plctx;
 
-	plctx = de_malloc(c, sizeof(struct de_platform_data));
+	plctx = de_malloc(NULL, sizeof(struct de_platform_data));
 	return plctx;
 }
 
-void de_platformdata_destroy(deark *c, struct de_platform_data *plctx)
+void de_platformdata_destroy(struct de_platform_data *plctx)
 {
 	if(!plctx) return;
-	de_free(c, plctx);
+	de_free(NULL, plctx);
 }
 
 // Set the plctx->msgs_HANDLE field, for later use.
@@ -453,9 +467,9 @@ void de_current_time_to_timestamp(struct de_timestamp *ts)
 	de_FILETIME_to_timestamp(ft, ts, 0x1);
 }
 
-void de_exitprocess(void)
+void de_exitprocess(int s)
 {
-	exit(1);
+	exit(s);
 }
 
 #endif // DE_WINDOWS
