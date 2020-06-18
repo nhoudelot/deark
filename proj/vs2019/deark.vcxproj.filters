@@ -472,6 +472,21 @@
     <ClCompile Include="..\..\modules\nie.c">
       <Filter>Modules</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\fmtutil-advfile.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\modules\fli.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\modules\amiga-dsk.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\modules\fat.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\modules\crush.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\src\deark-config.h">
@@ -512,6 +527,9 @@
     </ClInclude>
     <ClInclude Include="..\..\foreign\delzw.h">
       <Filter>Foreign Code</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\deark-version.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

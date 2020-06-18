@@ -10,6 +10,8 @@
 #include "../foreign/unsit.h"
 DE_DECLARE_MODULE(de_module_stuffit);
 
+#define MAX_NESTING_LEVEL 32
+
 struct cmpr_meth_info;
 
 struct fork_data {
@@ -238,12 +240,13 @@ static int do_member_header(deark *c, lctx *d, struct member_data *md, i64 pos1)
 	de_mac_time_to_timestamp(n, &md->create_time);
 	de_timestamp_to_string(&md->create_time, timestamp_buf, sizeof(timestamp_buf), 0);
 	de_dbg(c, "create time: %"I64_FMT" (%s)", n, timestamp_buf);
+	md->advf->mainfork.fi->timestamp[DE_TIMESTAMPIDX_CREATE] = md->create_time;
 
 	n = de_getu32be_p(&pos);
 	de_mac_time_to_timestamp(n, &md->mod_time);
 	de_timestamp_to_string(&md->mod_time, timestamp_buf, sizeof(timestamp_buf), 0);
 	de_dbg(c, "mod time: %"I64_FMT" (%s)", n, timestamp_buf);
-	md->advf->mainfork.fi->mod_time = md->mod_time;
+	md->advf->mainfork.fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = md->mod_time;
 
 	md->rfork.unc_len = de_getu32be_p(&pos);
 	md->dfork.unc_len = de_getu32be_p(&pos);
@@ -394,7 +397,7 @@ static void do_extract_folder(deark *c, lctx *d, struct member_data *md)
 	fi->is_directory = 1;
 	de_finfo_set_name_from_ucstring(c, fi, md->full_fname, DE_SNFLAG_FULLPATH);
 	fi->original_filename_flag = 1;
-	fi->mod_time = md->mod_time;
+	fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = md->mod_time;
 	outf = dbuf_create_output_file(c, NULL, fi, 0x0);
 done:
 	dbuf_close(outf);
@@ -481,6 +484,11 @@ static int do_member(deark *c, lctx *d, i64 pos1, i64 *bytes_consumed)
 	de_advfile_set_orig_filename(md->advf, md->fname->sz, md->fname->sz_strlen);
 
 	if(md->is_folder) {
+		if(d->subdir_level >= MAX_NESTING_LEVEL) {
+			de_err(c, "Directories nested too deeply");
+			retval = 0;
+			goto done;
+		}
 		d->subdir_level++;
 		de_strarray_push(d->curpath, md->fname->str);
 		do_extract_folder(c, d, md);
@@ -606,7 +614,7 @@ static void de_run_stuffit(deark *c, de_module_params *mparams)
 	if(!do_master_header(c, d, pos)) goto done;
 	pos += 22;
 
-	d->curpath = de_strarray_create(c);
+	d->curpath = de_strarray_create(c, MAX_NESTING_LEVEL+10);
 	d->crco_rfork = de_crcobj_create(c, DE_CRCOBJ_CRC16_ARC);
 	d->crco_dfork = de_crcobj_create(c, DE_CRCOBJ_CRC16_ARC);
 

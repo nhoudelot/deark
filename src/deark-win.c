@@ -12,15 +12,15 @@
 
 #include <windows.h>
 
+#include <sys/stat.h>
+#include <sys/types.h>
+
 // This file is overloaded, in that it contains functions intended to only
 // be used internally, as well as functions intended only for the
 // command-line utility. That's why we need both deark-user.h and
 // deark-private.h.
 #include "deark-private.h"
 #include "deark-user.h"
-
-#include <sys/stat.h>
-#include <sys/types.h>
 
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
@@ -282,26 +282,21 @@ int de_fclose(FILE *fp)
 	return fclose(fp);
 }
 
-void de_update_file_perms(dbuf *f)
-{
-	// Not implemented on Windows.
-}
-
-void de_update_file_time(dbuf *f)
+static void update_file_time(dbuf *f)
 {
 	WCHAR *fnW = NULL;
 	HANDLE fh = INVALID_HANDLE_VALUE;
 	i64 ft;
-	FILETIME crtime, actime, wrtime;
+	FILETIME wrtime;
 	deark *c;
 
 	if(f->btype!=DBUF_TYPE_OFILE) return;
 	if(!f->fi_copy) return;
-	if(!f->fi_copy->mod_time.is_valid) return;
+	if(!f->fi_copy->timestamp[DE_TIMESTAMPIDX_MODIFY].is_valid) return;
 	if(!f->name) return;
 	c = f->c;
 
-	ft = de_timestamp_to_FILETIME(&f->fi_copy->mod_time);
+	ft = de_timestamp_to_FILETIME(&f->fi_copy->timestamp[DE_TIMESTAMPIDX_MODIFY]);
 	if(ft==0) goto done;
 	fnW = de_utf8_to_utf16_strdup(c, f->name);
 	fh = CreateFileW(fnW, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, NULL,
@@ -310,15 +305,22 @@ void de_update_file_time(dbuf *f)
 
 	wrtime.dwHighDateTime = (DWORD)(((u64)ft)>>32);
 	wrtime.dwLowDateTime = (DWORD)(((u64)ft)&0xffffffffULL);
-	actime = wrtime;
-	crtime = wrtime;
-	SetFileTime(fh, &crtime, &actime, &wrtime);
+	SetFileTime(fh, NULL, NULL, &wrtime);
 
 done:
 	if(fh != INVALID_HANDLE_VALUE) {
 		CloseHandle(fh);
 	}
 	de_free(c, fnW);
+}
+
+void de_update_file_attribs(dbuf *f, u8 preserve_file_times)
+{
+	// [Updating file permissions not implemented on Windows.]
+
+	if(preserve_file_times) {
+		update_file_time(f);
+	}
 }
 
 char **de_convert_args_to_utf8(int argc, wchar_t **argvW)
@@ -377,6 +379,24 @@ void de_winconsole_init_handle(struct de_platform_data *plctx, int n)
 int de_winconsole_is_console(struct de_platform_data *plctx)
 {
 	return plctx->msgs_HANDLE_is_console;
+}
+
+void de_winconsole_set_UTF8_CP(struct de_platform_data *plctx)
+{
+	// I hate to do this, but it's the least bad fix I've found for some issues
+	// that have cropped up in the wake of Cygwin+Mintty using Windows 10's
+	// ConPTY features (as of Cygwin 3.1.0 - Dec. 2019).
+
+	// Note that, somewhat ironically, we only change the console code page if
+	// the output is *not* going directly to a console.
+
+	// Unfortunately, rude as it is not to do so, we can't restore the original
+	// code page settings when we're done. If we restore the code page, we have
+	// do it after all of the output has reached the console. But if our output
+	// is being piped through a pager, some of it likely won't reach the console
+	// until after our program ends.
+	SetConsoleCP(65001);
+	SetConsoleOutputCP(65001);
 }
 
 // Save current attribs to plctx.

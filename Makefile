@@ -45,10 +45,12 @@ endif
 DEARK_EXE_BASENAME:=deark$(EXE_EXT)
 DEARK_EXE:=$(DEARK_EXE_BASENAME)
 
+DEARK_MAN:=deark.1
 DEPS_MK:=deps.mk
 
 ifneq ($(OBJDIR),obj)
 DEARK_EXE:=$(OBJDIR)/$(DEARK_EXE_BASENAME)
+DEARK_MAN:=$(OBJDIR)/$(DEARK_MAN)
 DEPS_MK:=$(OBJDIR)/$(DEPS_MK)
 endif
 
@@ -72,12 +74,12 @@ endif
 
 OFILES_MODS_AB:=$(addprefix $(OBJDIR)/modules/,abk.o alphabmp.o amigaicon.o \
  ansiart.o ar.o asf.o atari-dsk.o atari-img.o autocad.o awbm.o basic-c64.o \
- arcfs.o apm.o afcp.o arc.o \
+ arcfs.o apm.o afcp.o arc.o amiga-dsk.o \
  bmff.o apple2-dsk.o applesd.o binhex.o bintext.o bmi.o bmp.o bpg.o bsave.o)
 OFILES_MODS_CH:=$(addprefix $(OBJDIR)/modules/,cab.o cardfile.o cfb.o \
  cpio.o d64.o drhalo.o ebml.o emf.o epocimage.o eps.o exe.o \
  flif.o fnt.o gemfont.o gemmeta.o gemras.o gif.o grasp.o grob.o gzip.o \
- hfs.o hlp.o dsstore.o flac.o ccx.o)
+ hfs.o hlp.o dsstore.o fli.o fat.o flac.o ccx.o crush.o)
 OFILES_MODS_IO:=$(addprefix $(OBJDIR)/modules/,misc.o iccprofile.o icns.o \
  id3.o ico.o iff.o ilbm.o insetpix.o iptc.o jbf.o jovianvi.o jpeg.o lha.o \
  j2c.o ogg.o olepropset.o iso9660.o macbinary.o macrsrc.o \
@@ -97,7 +99,7 @@ OFILES_MODS:=$(OFILES_MODS_AB) $(OFILES_MODS_CH) $(OFILES_MODS_IO) \
 OFILES_DEARK1:=$(addprefix $(OBJDIR)/src/,fmtutil-miniz.o deark-util.o \
  deark-data.o deark-zip.o deark-tar.o deark-png.o \
  deark-dbuf.o deark-bitmap.o deark-char.o deark-font.o deark-ucstring.o \
- fmtutil.o fmtutil-cmpr.o fmtutil-zip.o fmtutil-zoo.o \
+ fmtutil.o fmtutil-cmpr.o fmtutil-advfile.o fmtutil-zip.o fmtutil-zoo.o \
  fmtutil-lzw.o deark-user.o deark-unix.o deark-win.o)
 OFILES_DEARK2:=$(addprefix $(OBJDIR)/src/,deark-modules.o)
 OFILES_ALL:=$(OFILES_DEARK1) $(OFILES_DEARK2) $(OFILES_MODS) $(OBJDIR)/src/deark-cmd.o $(DEARK_RC_O)
@@ -149,8 +151,16 @@ install: $(DEARK_EXE)
 	-@$(RM_F) $(DESTDIR)$(bindir)/$(DEARK_EXE)
 	$(INSTALL_PROGRAM) $(DEARK_EXE) $(DESTDIR)$(bindir)
 
+# Quick & dirty man page generation. (experimental/temporary)
+.PHONY: man install-man
+man: $(DEARK_MAN)
+$(DEARK_MAN): $(DEARK_EXE)
+	help2man -n "extract data from various file formats" -o $@ -N $(DEARK_EXE)
+install-man: $(DEARK_MAN)
+	install $(DEARK_MAN) /usr/share/man/man1
+
 clean:
-	rm -f $(OBJDIR)/src/*.[oad] $(OBJDIR)/modules/*.[oad] $(DEARK_EXE)
+	rm -f $(OBJDIR)/src/*.[oad] $(OBJDIR)/modules/*.[oad] $(DEARK_MAN) $(DEARK_EXE)
 
 ifeq ($(MAKECMDGOALS),dep)
 

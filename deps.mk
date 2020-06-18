@@ -4,6 +4,8 @@ $(OBJDIR)/modules/afcp.o: modules/afcp.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/alphabmp.o: modules/alphabmp.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
+$(OBJDIR)/modules/amiga-dsk.o: modules/amiga-dsk.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/amigaicon.o: modules/amigaicon.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/ansiart.o: modules/ansiart.c src/deark-config.h \
@@ -56,6 +58,8 @@ $(OBJDIR)/modules/cfb.o: modules/cfb.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/cpio.o: modules/cpio.c src/deark-config.h \
  src/deark-private.h src/deark.h
+$(OBJDIR)/modules/crush.o: modules/crush.c src/deark-config.h \
+ src/deark-private.h src/deark.h
 $(OBJDIR)/modules/d64.o: modules/d64.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/drhalo.o: modules/drhalo.c src/deark-config.h \
@@ -72,8 +76,12 @@ $(OBJDIR)/modules/eps.o: modules/eps.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/exe.o: modules/exe.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
+$(OBJDIR)/modules/fat.o: modules/fat.c src/deark-config.h \
+ src/deark-private.h src/deark.h
 $(OBJDIR)/modules/flac.o: modules/flac.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
+$(OBJDIR)/modules/fli.o: modules/fli.c src/deark-config.h \
+ src/deark-private.h src/deark.h
 $(OBJDIR)/modules/flif.o: modules/flif.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/modules/fnt.o: modules/fnt.c src/deark-config.h \
@@ -123,7 +131,7 @@ $(OBJDIR)/modules/jovianvi.o: modules/jovianvi.c src/deark-config.h \
 $(OBJDIR)/modules/jpeg.o: modules/jpeg.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/lha.o: modules/lha.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/macbinary.o: modules/macbinary.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/modules/macpaint.o: modules/macpaint.c src/deark-config.h \
@@ -262,7 +270,7 @@ $(OBJDIR)/src/deark-bitmap.o: src/deark-bitmap.c src/deark-config.h \
 $(OBJDIR)/src/deark-char.o: src/deark-char.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/src/deark-cmd.o: src/deark-cmd.c src/deark-config.h \
- src/deark-user.h src/deark.h
+ src/deark-user.h src/deark.h src/deark-version.h
 $(OBJDIR)/src/deark-data.o: src/deark-data.c src/deark-config.h \
  src/deark-private.h src/deark.h
 $(OBJDIR)/src/deark-dbuf.o: src/deark-dbuf.c src/deark-config.h \
@@ -282,9 +290,11 @@ $(OBJDIR)/src/deark-unix.o: src/deark-unix.c src/deark-config.h \
 $(OBJDIR)/src/deark-user.o: src/deark-user.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-user.h
 $(OBJDIR)/src/deark-util.o: src/deark-util.c src/deark-config.h \
- src/deark-private.h src/deark.h
+ src/deark-private.h src/deark.h src/deark-version.h
 $(OBJDIR)/src/deark-win.o: src/deark-win.c src/deark-config.h
 $(OBJDIR)/src/deark-zip.o: src/deark-zip.c src/deark-config.h \
+ src/deark-private.h src/deark.h src/deark-fmtutil.h
+$(OBJDIR)/src/fmtutil-advfile.o: src/fmtutil-advfile.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h
 $(OBJDIR)/src/fmtutil-cmpr.o: src/fmtutil-cmpr.c src/deark-config.h \
  src/deark-private.h src/deark.h src/deark-fmtutil.h

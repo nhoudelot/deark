@@ -157,6 +157,7 @@
       <PrecompiledHeader />
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -170,6 +171,7 @@
     <ClCompile Include="..\..\modules\abk.c" />
     <ClCompile Include="..\..\modules\afcp.c" />
     <ClCompile Include="..\..\modules\alphabmp.c" />
+    <ClCompile Include="..\..\modules\amiga-dsk.c" />
     <ClCompile Include="..\..\modules\amigaicon.c" />
     <ClCompile Include="..\..\modules\ansiart.c" />
     <ClCompile Include="..\..\modules\apm.c" />
@@ -196,6 +198,7 @@
     <ClCompile Include="..\..\modules\ccx.c" />
     <ClCompile Include="..\..\modules\cfb.c" />
     <ClCompile Include="..\..\modules\cpio.c" />
+    <ClCompile Include="..\..\modules\crush.c" />
     <ClCompile Include="..\..\modules\d64.c" />
     <ClCompile Include="..\..\modules\drhalo.c" />
     <ClCompile Include="..\..\modules\dsstore.c" />
@@ -204,7 +207,9 @@
     <ClCompile Include="..\..\modules\epocimage.c" />
     <ClCompile Include="..\..\modules\eps.c" />
     <ClCompile Include="..\..\modules\exe.c" />
+    <ClCompile Include="..\..\modules\fat.c" />
     <ClCompile Include="..\..\modules\flac.c" />
+    <ClCompile Include="..\..\modules\fli.c" />
     <ClCompile Include="..\..\modules\flif.c" />
     <ClCompile Include="..\..\modules\fnt.c" />
     <ClCompile Include="..\..\modules\gemfont.c" />
@@ -303,6 +308,7 @@
     <ClCompile Include="..\..\src\deark-dbuf.c" />
     <ClCompile Include="..\..\src\deark-png.c" />
     <ClCompile Include="..\..\src\deark-zip.c" />
+    <ClCompile Include="..\..\src\fmtutil-advfile.c" />
     <ClCompile Include="..\..\src\fmtutil-cmpr.c" />
     <ClCompile Include="..\..\src\fmtutil-lzw.c" />
     <ClCompile Include="..\..\src\fmtutil-miniz.c" />
@@ -336,6 +342,7 @@
     <ClInclude Include="..\..\src\deark-modules.h" />
     <ClInclude Include="..\..\src\deark-private.h" />
     <ClInclude Include="..\..\src\deark-user.h" />
+    <ClInclude Include="..\..\src\deark-version.h" />
     <ClInclude Include="..\..\src\deark.h" />
   </ItemGroup>
   <ItemGroup>

@@ -915,21 +915,21 @@ void de_fmtutil_atari_help_palbits(deark *c)
 #define CODE_TEXT  0x54455854U
 #define CODE_RIFF  0x52494646U
 
-static void do_iff_text_chunk(deark *c, dbuf *f, i64 dpos, i64 dlen,
+static void do_iff_text_chunk(deark *c, struct de_iffctx *ictx, i64 dpos, i64 dlen,
 	const char *name)
 {
 	de_ucstring *s = NULL;
 
 	if(dlen<1) return;
 	s = ucstring_create(c);
-	dbuf_read_to_ucstring_n(f,
+	dbuf_read_to_ucstring_n(ictx->f,
 		dpos, dlen, DE_DBG_MAX_STRLEN,
-		s, DE_CONVFLAG_STOP_AT_NUL, DE_ENCODING_ASCII);
+		s, DE_CONVFLAG_STOP_AT_NUL, ictx->input_encoding);
 	de_dbg(c, "%s: \"%s\"", name, ucstring_getpsz(s));
 	ucstring_destroy(s);
 }
 
-static void do_iff_anno(deark *c, dbuf *f, i64 pos, i64 len)
+static void do_iff_anno(deark *c, struct de_iffctx *ictx, i64 pos, i64 len)
 {
 	i64 foundpos;
 
@@ -937,17 +937,17 @@ static void do_iff_anno(deark *c, dbuf *f, i64 pos, i64 len)
 
 	// Some ANNO chunks seem to be padded with one or more NUL bytes. Probably
 	// best not to save them.
-	if(dbuf_search_byte(f, 0x00, pos, len, &foundpos)) {
+	if(dbuf_search_byte(ictx->f, 0x00, pos, len, &foundpos)) {
 		len = foundpos - pos;
 	}
 	if(len<1) return;
 	if(c->extract_level>=2) {
-		dbuf_create_file_from_slice(f, pos, len, "anno.txt", NULL, DE_CREATEFLAG_IS_AUX);
+		dbuf_create_file_from_slice(ictx->f, pos, len, "anno.txt", NULL, DE_CREATEFLAG_IS_AUX);
 	}
 	else {
 		de_ucstring *s = NULL;
 		s = ucstring_create(c);
-		dbuf_read_to_ucstring_n(f, pos, len, DE_DBG_MAX_STRLEN, s, 0, DE_ENCODING_ASCII);
+		dbuf_read_to_ucstring_n(ictx->f, pos, len, DE_DBG_MAX_STRLEN, s, 0, ictx->input_encoding);
 		de_dbg(c, "annotation: \"%s\"", ucstring_getpsz(s));
 		ucstring_destroy(s);
 	}
@@ -968,36 +968,38 @@ void de_fmtutil_default_iff_chunk_identify(deark *c, struct de_iffctx *ictx)
 	}
 }
 
-// TODO: This function used to be exported, but it's probably no longer
-// needed for that. It should be refactored to at least have a
-// "struct de_iffctx *ictx" param.
-//
 // Note that some of these chunks are *not* defined in the generic IFF
 // specification.
 // They might be defined in the 8SVX specification. They seem to have
 // become unofficial standard chunks.
-static void de_fmtutil_handle_standard_iff_chunk(deark *c, dbuf *f, i64 dpos, i64 dlen,
-	u32 chunktype)
+static int de_fmtutil_default_iff_chunk_handler(deark *c, struct de_iffctx *ictx)
 {
+	i64 dpos = ictx->chunkctx->dpos;
+	i64 dlen = ictx->chunkctx->dlen;
+	u32 chunktype = ictx->chunkctx->chunk4cc.id;
+
 	switch(chunktype) {
 		// Note that chunks appearing here should also be listed below,
 		// in de_fmtutil_is_standard_iff_chunk().
 	case CODE__c_:
-		do_iff_text_chunk(c, f, dpos, dlen, "copyright");
+		do_iff_text_chunk(c, ictx, dpos, dlen, "copyright");
 		break;
 	case CODE_ANNO:
-		do_iff_anno(c, f, dpos, dlen);
+		do_iff_anno(c, ictx, dpos, dlen);
 		break;
 	case CODE_AUTH:
-		do_iff_text_chunk(c, f, dpos, dlen, "author");
+		do_iff_text_chunk(c, ictx, dpos, dlen, "author");
 		break;
 	case CODE_NAME:
-		do_iff_text_chunk(c, f, dpos, dlen, "name");
+		do_iff_text_chunk(c, ictx, dpos, dlen, "name");
 		break;
 	case CODE_TEXT:
-		do_iff_text_chunk(c, f, dpos, dlen, "text");
+		do_iff_text_chunk(c, ictx, dpos, dlen, "text");
 		break;
 	}
+
+	// Note we do not set ictx->handled. The caller is responsible for that.
+	return 1;
 }
 
 // ictx can be NULL
@@ -1013,15 +1015,6 @@ int de_fmtutil_is_standard_iff_chunk(deark *c, struct de_iffctx *ictx,
 		return 1;
 	}
 	return 0;
-}
-
-static int de_fmtutil_default_iff_chunk_handler(deark *c, struct de_iffctx *ictx)
-{
-	de_fmtutil_handle_standard_iff_chunk(c, ictx->f,
-		ictx->chunkctx->dpos, ictx->chunkctx->dlen,
-		ictx->chunkctx->chunk4cc.id);
-	// Note we do not set ictx->handled. The caller is responsible for that.
-	return 1;
 }
 
 static void fourcc_clear(struct de_fourcc *fourcc)
@@ -1224,6 +1217,15 @@ static int do_iff_chunk_sequence(deark *c, struct de_iffctx *ictx,
 		ictx->curr_container_fmt4cc = saved_container_fmt4cc;
 		ictx->curr_container_contentstype4cc = saved_container_contentstype4cc;
 
+		if(ictx->handle_nonchunk_data_fn) {
+			i64 skip_len = 0;
+			ret = ictx->handle_nonchunk_data_fn(c, ictx, pos, &skip_len);
+			if(ret && skip_len>0) {
+				pos += de_pad_to_n(skip_len, ictx->alignment);
+				continue;
+			}
+		}
+
 		ret = do_iff_chunk(c, ictx, pos, endpos-pos, level, &chunk_len);
 		if(!ret) return 0;
 		pos += chunk_len;
@@ -1250,6 +1252,10 @@ void de_fmtutil_read_iff_format(deark *c, struct de_iffctx *ictx,
 	}
 	if(ictx->sizeof_len==0) {
 		ictx->sizeof_len = 4;
+	}
+
+	if(ictx->input_encoding==DE_ENCODING_UNKNOWN) {
+		ictx->input_encoding = DE_ENCODING_ASCII;
 	}
 
 	do_iff_chunk_sequence(c, ictx, pos, len, 0);
@@ -1461,389 +1467,6 @@ void de_fmtutil_handle_id3(deark *c, dbuf *f, struct de_id3info *id3i,
 		de_run_module_by_id_on_slice(c, "id3", &id3v1mparams, f, id3v1pos, 128);
 		de_dbg_indent(c, -1);
 		id3i->main_end = id3v1pos;
-	}
-}
-
-// advfile is a uniform way to handle multi-fork files (e.g. classic Mac files
-// with a resource fork), and files with platform-specific metadata that we
-// might want to do something special with (e.g. Mac type/creator codes).
-// It is essentially a wrapper around dbuf/finfo.
-
-// de_advfile_create creates a new object.
-// Then, before calling de_advfile_run, caller must:
-//  - Set advf->filename if possible, e.g. using ucstring_append_*().
-//  - Set advf->original_filename_flag, if appropriate. Note that this annotates the
-//    ->filename field, and is not related to de_advfile_set_orig_filename().
-//  - Set advf->snflags, if needed.
-//  - Set advf->createflags, if needed (unlikely to be).
-//  - Set advf->mainfork.fork_exists, if there is a main fork.
-//  - Set advf->mainfork.fork_len, if there is a main fork. advfile cannot be
-//    used if the fork lengths are not known in advance.
-//  - Set advf->rsrcfork.fork_exists, if there is an rsrc fork.
-//  - Set advf->rsrcfork.fork_len, if there is an rsrc fork.
-//  - Set advf->mainfork.mod_time, if known, even if there is no main fork. Mac
-//    files do not use advf->rsrcfork.mod_time.
-//  - If appropriate, set other fields potentially advf->mainfork.fi and/or
-//    advf->rsrcfork.fi, such as ->is_directory. But verify that they work
-//    as expected.
-struct de_advfile *de_advfile_create(deark *c)
-{
-	struct de_advfile *advf = NULL;
-
-	advf = de_malloc(c, sizeof(struct de_advfile));
-	advf->c = c;
-	advf->filename = ucstring_create(c);
-	advf->mainfork.fi = de_finfo_create(c);
-	advf->rsrcfork.fi = de_finfo_create(c);
-	return advf;
-}
-
-void de_advfile_destroy(struct de_advfile *advf)
-{
-	deark *c;
-
-	if(!advf) return;
-	c = advf->c;
-	ucstring_destroy(advf->filename);
-	de_finfo_destroy(c, advf->mainfork.fi);
-	de_finfo_destroy(c, advf->rsrcfork.fi);
-	de_free(c, advf->orig_filename);
-	de_free(c, advf);
-}
-
-// Set the original untranslated filename, as an array of bytes of indeterminate
-// encoding (most likely MacRoman).
-// We can't necessarily decode this filename correctly, but we can copy it
-// unchanged to AppleSingle/AppleDouble's "Real Name" field.
-void de_advfile_set_orig_filename(struct de_advfile *advf, const char *fn, size_t fnlen)
-{
-	deark *c = advf->c;
-
-	if(advf->orig_filename) {
-		de_free(c, advf->orig_filename);
-		advf->orig_filename = NULL;
-	}
-
-	if(fnlen<1) return;
-	advf->orig_filename_len = fnlen;
-	if(advf->orig_filename_len>1024)
-		advf->orig_filename_len = 1024;
-	advf->orig_filename = de_malloc(c, advf->orig_filename_len);
-	de_memcpy(advf->orig_filename, fn, advf->orig_filename_len);
-
-	if(advf->orig_filename[0]<32) {
-		// This is to ensure that our applesd module won't incorrectly guess that
-		// this is a Pascal string.
-		advf->orig_filename[0] = '_';
-	}
-}
-
-static void setup_rsrc_finfo(struct de_advfile *advf)
-{
-	deark *c = advf->c;
-	de_ucstring *fname_rsrc = NULL;
-
-	fname_rsrc = ucstring_create(c);
-	ucstring_append_ucstring(fname_rsrc, advf->filename);
-	if(fname_rsrc->len<1) {
-		ucstring_append_sz(fname_rsrc, "_", DE_ENCODING_LATIN1);
-	}
-	ucstring_append_sz(fname_rsrc, ".rsrc", DE_ENCODING_LATIN1);
-	de_finfo_set_name_from_ucstring(c, advf->rsrcfork.fi, fname_rsrc, advf->snflags);
-	advf->rsrcfork.fi->original_filename_flag = advf->original_filename_flag;
-
-	ucstring_destroy(fname_rsrc);
-}
-
-// If is_appledouble is set, do not write the resource fork (it will be handled
-// in another way), and *always* write a main fork (even if we have to write a
-// 0-length file). Our theory is that it's never appropriate to write an
-// AppleDouble header file by itself -- it should always have a companion data
-// file.
-static void de_advfile_run_rawfiles(deark *c, struct de_advfile *advf, int is_appledouble)
-{
-	struct de_advfile_cbparams *afp_main = NULL;
-	struct de_advfile_cbparams *afp_rsrc = NULL;
-
-	if(advf->mainfork.fork_exists || is_appledouble) {
-		if(!advf->mainfork.fork_exists) {
-			advf->mainfork.fork_len = 0;
-		}
-		afp_main = de_malloc(c, sizeof(struct de_advfile_cbparams));
-		afp_main->whattodo = DE_ADVFILE_WRITEMAIN;
-		de_finfo_set_name_from_ucstring(c, advf->mainfork.fi, advf->filename, advf->snflags);
-		advf->mainfork.fi->original_filename_flag = advf->original_filename_flag;
-		afp_main->outf = dbuf_create_output_file(c, NULL, advf->mainfork.fi, advf->createflags);
-		dbuf_set_writelistener(afp_main->outf, advf->mainfork.writelistener_cb,
-			advf->mainfork.userdata_for_writelistener);
-		if(advf->writefork_cbfn && advf->mainfork.fork_len>0) {
-			advf->writefork_cbfn(c, advf, afp_main);
-		}
-		dbuf_close(afp_main->outf);
-		afp_main->outf = NULL;
-	}
-	if(!is_appledouble && advf->rsrcfork.fork_exists && advf->rsrcfork.fork_len>0) {
-		afp_rsrc = de_malloc(c, sizeof(struct de_advfile_cbparams));
-		setup_rsrc_finfo(advf);
-		afp_rsrc->whattodo = DE_ADVFILE_WRITERSRC;
-		// Note: It is intentional to use mainfork in the next line.
-		advf->rsrcfork.fi->mod_time = advf->mainfork.fi->mod_time;
-		afp_rsrc->outf = dbuf_create_output_file(c, NULL, advf->rsrcfork.fi, advf->createflags);
-		dbuf_set_writelistener(afp_rsrc->outf, advf->rsrcfork.writelistener_cb,
-			advf->rsrcfork.userdata_for_writelistener);
-		if(advf->writefork_cbfn) {
-			advf->writefork_cbfn(c, advf, afp_rsrc);
-		}
-		dbuf_close(afp_rsrc->outf);
-		afp_rsrc->outf = NULL;
-	}
-
-	de_free(c, afp_main);
-	de_free(c, afp_rsrc);
-}
-
-struct applesd_entry {
-	unsigned int id;
-	i64 offset;
-	i64 len;
-};
-
-#define SDID_DATAFORK 1
-#define SDID_RESOURCEFORK 2
-#define SDID_REALNAME 3
-#define SDID_COMMENT 4
-#define SDID_FILEDATES 8
-#define SDID_FINDERINFO 9
-
-#define INVALID_APPLESD_DATE ((i64)(-0x80000000LL))
-
-static i64 timestamp_to_applesd_date(deark *c, struct de_timestamp *ts)
-{
-	i64 t;
-
-	if(!ts->is_valid) return INVALID_APPLESD_DATE;
-	t = de_timestamp_to_unix_time(ts);
-	t -= (365*30 + 7)*86400;
-	if(t>0x7fffffffLL || t<-0x7fffffffLL) return INVALID_APPLESD_DATE;
-	return t;
-}
-
-// If is_appledouble is set, do not write the data fork (it will be handled
-// in another way).
-static void de_advfile_run_applesd(deark *c, struct de_advfile *advf, int is_appledouble)
-{
-	de_ucstring *fname = NULL;
-	struct de_advfile_cbparams *afp_main = NULL;
-	struct de_advfile_cbparams *afp_rsrc = NULL;
-	dbuf *outf = NULL;
-	i64 cur_data_pos;
-	size_t num_entries = 0;
-	size_t k;
-	char commentstr[80];
-	size_t comment_strlen;
-	struct applesd_entry entry_info[16];
-
-	fname = ucstring_create(c);
-	ucstring_append_ucstring(fname, advf->filename);
-	if(fname->len<1) {
-		ucstring_append_sz(fname, "_", DE_ENCODING_LATIN1);
-	}
-	if(is_appledouble) {
-		// TODO: Consider using "._" prefix when writing to ZIP/tar
-		ucstring_append_sz(fname, ".adf", DE_ENCODING_LATIN1);
-	}
-	else {
-		ucstring_append_sz(fname, ".as", DE_ENCODING_LATIN1);
-	}
-	de_finfo_set_name_from_ucstring(c, advf->mainfork.fi, fname, advf->snflags);
-	advf->mainfork.fi->original_filename_flag = advf->original_filename_flag;
-	outf = dbuf_create_output_file(c, NULL, advf->mainfork.fi, advf->createflags);
-
-	if(is_appledouble) { // signature
-		dbuf_writeu32be(outf, 0x00051607U);
-	}
-	else {
-		dbuf_writeu32be(outf, 0x00051600U);
-	}
-	dbuf_writeu32be(outf, 0x00020000U); // version
-	dbuf_write_zeroes(outf, 16); // filler
-
-	// Decide what entries we will write, and in what order, and their data length.
-
-	de_snprintf(commentstr, sizeof(commentstr), "Apple%s container generated by Deark",
-		is_appledouble?"Double":"Single");
-	comment_strlen = de_strlen(commentstr);
-
-	if(advf->orig_filename) {
-		entry_info[num_entries].id = SDID_REALNAME;
-		entry_info[num_entries].len = (i64)advf->orig_filename_len;
-		num_entries++;
-	}
-
-	entry_info[num_entries].id = SDID_COMMENT;
-	entry_info[num_entries].len = (i64)comment_strlen;
-	num_entries++;
-
-	if(advf->mainfork.fi->mod_time.is_valid) {
-		entry_info[num_entries].id = SDID_FILEDATES;
-		entry_info[num_entries].len = 16;
-		num_entries++;
-	}
-	if((advf->has_typecode || advf->has_creatorcode || advf->has_finderflags) &&
-		!advf->mainfork.fi->is_directory)
-	{
-		entry_info[num_entries].id = SDID_FINDERINFO;
-		entry_info[num_entries].len = 32;
-		num_entries++;
-	}
-	if(advf->rsrcfork.fork_exists) {
-		entry_info[num_entries].id = SDID_RESOURCEFORK;
-		entry_info[num_entries].len = advf->rsrcfork.fork_len;
-		num_entries++;
-	};
-	if(advf->mainfork.fork_exists && !is_appledouble) {
-		entry_info[num_entries].id = SDID_DATAFORK;
-		entry_info[num_entries].len = advf->mainfork.fork_len;
-		num_entries++;
-	};
-
-	dbuf_writeu16be(outf, (i64)num_entries);
-
-	// Figure out where the each data element will be written.
-	cur_data_pos = 26 + 12*(i64)num_entries;
-	for(k=0; k<num_entries; k++) {
-		entry_info[k].offset = cur_data_pos;
-		cur_data_pos += entry_info[k].len;
-	};
-
-	// Write the element table
-	for(k=0; k<num_entries; k++) {
-		dbuf_writeu32be(outf, (i64)entry_info[k].id);
-		if(entry_info[k].offset>0xffffffffLL || entry_info[k].len>0xffffffffLL) {
-			de_err(c, "File too large to write to AppleSingle/AppleDouble format");
-			goto done;
-		}
-		dbuf_writeu32be(outf, entry_info[k].offset);
-		dbuf_writeu32be(outf, entry_info[k].len);
-	}
-
-	// Write the elements' data
-	for(k=0; k<num_entries; k++) {
-		switch(entry_info[k].id) {
-		case SDID_DATAFORK:
-			afp_main = de_malloc(c, sizeof(struct de_advfile_cbparams));
-			afp_main->whattodo = DE_ADVFILE_WRITEMAIN;
-			dbuf_set_writelistener(outf, advf->mainfork.writelistener_cb,
-				advf->mainfork.userdata_for_writelistener);
-			afp_main->outf = outf;
-			if(advf->writefork_cbfn && advf->mainfork.fork_len>0) {
-				advf->writefork_cbfn(c, advf, afp_main);
-			}
-			dbuf_set_writelistener(outf, NULL, NULL);
-			break;
-
-		case SDID_RESOURCEFORK:
-			afp_rsrc = de_malloc(c, sizeof(struct de_advfile_cbparams));
-			afp_rsrc->whattodo = DE_ADVFILE_WRITERSRC;
-			dbuf_set_writelistener(outf, advf->rsrcfork.writelistener_cb,
-				advf->rsrcfork.userdata_for_writelistener);
-			afp_rsrc->outf = outf;
-			if(advf->writefork_cbfn && advf->rsrcfork.fork_len>0) {
-				advf->writefork_cbfn(c, advf, afp_rsrc);
-			}
-			dbuf_set_writelistener(outf, NULL, NULL);
-			break;
-
-		case SDID_REALNAME:
-			// If you think this code might be wrong, first review the comments
-			// in applesd.c regarding Pascal strings.
-			dbuf_write(outf, advf->orig_filename, (i64)advf->orig_filename_len);
-			break;
-
-		case SDID_COMMENT:
-			dbuf_write(outf, (const u8*)commentstr, (i64)comment_strlen);
-			break;
-
-		case SDID_FILEDATES:
-			// We could try to maintain dates other than the modification date, but
-			// Deark doesn't generally care about them.
-			dbuf_writei32be(outf, INVALID_APPLESD_DATE); // creation
-			dbuf_writei32be(outf, timestamp_to_applesd_date(c, &advf->mainfork.fi->mod_time));
-			dbuf_writei32be(outf, INVALID_APPLESD_DATE); // backup
-			dbuf_writei32be(outf, INVALID_APPLESD_DATE); // access
-			break;
-
-		case SDID_FINDERINFO:
-			if(advf->has_typecode)
-				dbuf_write(outf, advf->typecode, 4);
-			else
-				dbuf_write_zeroes(outf, 4);
-			if(advf->has_creatorcode)
-				dbuf_write(outf, advf->creatorcode, 4);
-			else
-				dbuf_write_zeroes(outf, 4);
-			dbuf_writeu16be(outf, advf->has_finderflags?((i64)advf->finderflags):0);
-			dbuf_write_zeroes(outf, 6 + 16);
-			break;
-		}
-
-		// In case something went wrong, try to make sure we're at the expected
-		// file position.
-		// Note: This might not compensate for all failures, as dbuf_truncate
-		// might not be fully implemented for this output type.
-		dbuf_truncate(outf, entry_info[k].offset + entry_info[k].len);
-	}
-
-done:
-	dbuf_close(outf);
-	de_free(c, afp_main);
-	de_free(c, afp_rsrc);
-	ucstring_destroy(fname);
-}
-
-void de_advfile_run(struct de_advfile *advf)
-{
-	deark *c = advf->c;
-	int is_mac_file;
-	int fmt;
-
-	is_mac_file = (advf->rsrcfork.fork_exists && advf->rsrcfork.fork_len>0);
-
-	if(is_mac_file && !c->macformat_known) {
-		const char *mfmt;
-
-		c->macformat_known = 1;
-		c->macformat = 2; // default=AppleDouble
-
-		// [I know there is a module named "macrsrc", so this could lead to confusion,
-		// but I can't think of a better name.]
-		mfmt = de_get_ext_option(c, "macrsrc");
-		if(mfmt) {
-			if(!de_strcmp(mfmt, "raw")) {
-				c->macformat = 0; // Raw resource file
-			}
-			else if(!de_strcmp(mfmt, "as")) {
-				c->macformat = 1; // AppleSingle
-			}
-			else if(!de_strcmp(mfmt, "ad")) {
-				c->macformat = 2; // AppleDouble
-			}
-		}
-	}
-
-	fmt = c->macformat; // Default to the default Mac format.
-	if(fmt==1 && advf->no_applesingle) fmt = 2;
-	if(fmt==2 && advf->no_appledouble) fmt = 0;
-
-	if(is_mac_file && fmt==1) { // AppleSingle
-		de_advfile_run_applesd(c, advf, 0);
-	}
-	else if(is_mac_file && fmt==2) { // AppleDouble
-		de_advfile_run_rawfiles(c, advf, 1); // For the data/main fork
-		de_advfile_run_applesd(c, advf, 1); // For the rsrc fork
-	}
-	else {
-		de_advfile_run_rawfiles(c, advf, 0);
 	}
 }
 

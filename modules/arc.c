@@ -54,7 +54,8 @@ struct member_data {
 struct localctx_struct {
 	int fmt;
 	const char *fmtname;
-	int input_encoding;
+	de_ext_encoding input_encoding_for_filenames;
+	de_ext_encoding input_encoding_for_comments;
 	int append_type;
 	int recurse_subdirs;
 	u8 prescan_found_eoa;
@@ -169,7 +170,7 @@ static const struct cmpr_meth_info *get_cmpr_meth_info(lctx *d, u8 cmpr_meth)
 
 static void read_one_pk_comment(deark *c, lctx *d, i64 pos, de_ucstring *s)
 {
-	dbuf_read_to_ucstring(c->infile, pos, 32, s, 0, d->input_encoding);
+	dbuf_read_to_ucstring(c->infile, pos, 32, s, 0, d->input_encoding_for_comments);
 	ucstring_strip_trailing_spaces(s);
 }
 
@@ -188,8 +189,7 @@ static void do_pk_comments(deark *c, lctx *d)
 	i64 comments_descr_pos;
 	int has_file_comments = 0;
 	int has_archive_comment = 0;
-	i64 file_comments_pos;
-	i64 num_file_comments;
+	i64 file_comments_pos = 0;
 	de_ucstring *archive_comment = NULL;
 	u8 dscr[4];
 
@@ -239,6 +239,7 @@ static void do_pk_comments(deark *c, lctx *d)
 	}
 
 	if(has_file_comments) {
+		i64 num_file_comments;
 		i64 i;
 
 		num_file_comments = (sig_pos - file_comments_pos)/32;
@@ -305,7 +306,7 @@ static int do_pak_ext_record(deark *c, lctx *d, i64 pos1, i64 *pbytes_consumed)
 		if(filenum==0) { // archive comment
 			archive_comment = ucstring_create(c);
 			dbuf_read_to_ucstring_n(c->infile, pos, dlen, 16384, archive_comment,
-				0, d->input_encoding);
+				0, d->input_encoding_for_comments);
 			de_dbg(c, "archive comment: \"%s\"", ucstring_getpsz_d(archive_comment));
 		}
 		else { // file comment
@@ -316,7 +317,7 @@ static int do_pak_ext_record(deark *c, lctx *d, i64 pos1, i64 *pbytes_consumed)
 			}
 			if(ucstring_isnonempty(pmd->comment)) goto done;
 			dbuf_read_to_ucstring_n(c->infile, pos, dlen, 2048, pmd->comment,
-				0, d->input_encoding);
+				0, d->input_encoding_for_comments);
 		}
 	}
 	else if(rectype==2) {
@@ -326,7 +327,7 @@ static int do_pak_ext_record(deark *c, lctx *d, i64 pos1, i64 *pbytes_consumed)
 		}
 		if(ucstring_isnonempty(pmd->path)) goto done;
 		dbuf_read_to_ucstring_n(c->infile, pos, dlen, 512, pmd->path,
-			0, d->input_encoding);
+			0, d->input_encoding_for_comments);
 	}
 
 done:
@@ -526,7 +527,8 @@ static void do_info_record_string(deark *c, lctx *d, i64 pos, i64 len, const cha
 	de_ucstring *s = NULL;
 
 	s = ucstring_create(c);
-	dbuf_read_to_ucstring_n(c->infile, pos, len, 2048, s, DE_CONVFLAG_STOP_AT_NUL, d->input_encoding);
+	dbuf_read_to_ucstring_n(c->infile, pos, len, 2048, s, DE_CONVFLAG_STOP_AT_NUL,
+		d->input_encoding_for_comments);
 	de_dbg(c, "%s: \"%s\"", name, ucstring_getpsz_d(s));
 	ucstring_destroy(s);
 }
@@ -659,7 +661,7 @@ static int do_member(deark *c, lctx *d, i64 pos1, i64 nbytes_avail,
 
 	md->fn = ucstring_create(c);
 	dbuf_read_to_ucstring(c->infile, pos, 13, md->fn, DE_CONVFLAG_STOP_AT_NUL,
-		d->input_encoding);
+		d->input_encoding_for_filenames);
 	de_dbg(c, "filename: \"%s\"", ucstring_getpsz_d(md->fn));
 	pos += 13;
 
@@ -721,10 +723,10 @@ static int do_member(deark *c, lctx *d, i64 pos1, i64 nbytes_avail,
 	fi->original_filename_flag = 1;
 
 	if(md->rfa.mod_time.is_valid) {
-		fi->mod_time = md->rfa.mod_time;
+		fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = md->rfa.mod_time;
 	}
 	else if(md->arc_timestamp.is_valid) {
-		fi->mod_time = md->arc_timestamp;
+		fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = md->arc_timestamp;
 	}
 
 	if(md->is_dir) {
@@ -883,7 +885,7 @@ static void do_run_arc_spark_internal(deark *c, lctx *d)
 
 	de_declare_fmt(c, d->fmtname);
 
-	d->curpath = de_strarray_create(c);
+	d->curpath = de_strarray_create(c, MAX_NESTING_LEVEL+10);
 	d->crco = de_crcobj_create(c, DE_CRCOBJ_CRC16_ARC);
 
 	do_prescan_file(c, d, pos);
@@ -913,7 +915,9 @@ static void de_run_spark(deark *c, de_module_params *mparams)
 	d = de_malloc(c, sizeof(lctx));
 	d->fmt = FMT_SPARK;
 	d->fmtname = "Spark";
-	d->input_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_RISCOS);
+	d->input_encoding_for_filenames = de_get_input_encoding(c, NULL, DE_ENCODING_RISCOS);
+	d->input_encoding_for_comments = DE_EXTENC_MAKE(d->input_encoding_for_filenames,
+		DE_ENCSUBTYPE_HYBRID);
 	d->recurse_subdirs = de_get_ext_option_bool(c, "spark:recurse", 1);
 	d->append_type = de_get_ext_option_bool(c, "spark:appendtype", 0);
 
@@ -980,7 +984,9 @@ static void de_run_arc(deark *c, de_module_params *mparams)
 	// TODO: Make 'recurse' configurable. Would require us to make the embedded
 	// archives end with the correct marker.
 	d->recurse_subdirs = 1;
-	d->input_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_CP437_G);
+	d->input_encoding_for_filenames = de_get_input_encoding(c, NULL, DE_ENCODING_CP437);
+	d->input_encoding_for_comments = DE_EXTENC_MAKE(d->input_encoding_for_filenames,
+		DE_ENCSUBTYPE_HYBRID);
 
 	do_run_arc_spark_internal(c, d);
 	destroy_lctx(c, d);

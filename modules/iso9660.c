@@ -23,6 +23,8 @@ DE_DECLARE_MODULE(de_module_nrg);
 #define CODE_TF 0x5446U
 #define CODE_ZF 0x5a46U
 
+#define MAX_NESTING_LEVEL 32
+
 struct dir_record {
 	u8 file_flags;
 	u8 is_dir;
@@ -61,10 +63,12 @@ struct vol_record {
 };
 
 typedef struct localctx_struct {
+	int user_req_encoding;
 	int rr_encoding;
 	u8 names_to_lowercase;
 	u8 vol_desc_sector_forced;
 	u8 dirsize_hack;
+	u8 blocksize_warned;
 	i64 vol_desc_sector_to_use;
 	i64 secsize;
 	i64 primary_vol_desc_count;
@@ -105,14 +109,19 @@ static i64 getu32bbo_p(dbuf *f, i64 *ppos)
 	return val;
 }
 
-// If vol is not NULL, use its encoding. Else ASCII.
+// If vol is not NULL, use its encoding if it has one. Else ASCII.
 static void read_iso_string(deark *c, lctx *d, struct vol_record *vol,
 	i64 pos, i64 len, de_ucstring *s)
 {
 	de_encoding encoding;
 
 	ucstring_empty(s);
-	encoding = vol ? vol->encoding : DE_ENCODING_ASCII;
+	if(vol && (vol->encoding!=DE_ENCODING_UNKNOWN)) {
+		encoding = vol->encoding;
+	}
+	else {
+		encoding = DE_ENCODING_ASCII;
+	}
 	if(encoding==DE_ENCODING_UTF16BE) {
 		if(len%2) {
 			len--;
@@ -292,15 +301,15 @@ static void do_extract_file(deark *c, lctx *d, struct dir_record *dr)
 	}
 
 	if(dr->riscos_timestamp.is_valid) {
-		fi->mod_time = dr->riscos_timestamp;
+		fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = dr->riscos_timestamp;
 	}
 	else if(dr->rr_modtime.is_valid) {
-		fi->mod_time = dr->rr_modtime;
+		fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = dr->rr_modtime;
 	}
 	else if(dr->recording_time.is_valid) {
 		// Apparently, the "recording time" (whatever that is) is
 		// sometimes used as the mod time.
-		fi->mod_time = dr->recording_time;
+		fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = dr->recording_time;
 	}
 
 	if(dr->is_dir) {
@@ -765,7 +774,7 @@ static int do_directory_record(deark *c, lctx *d, i64 pos1, struct dir_record *d
 	u8 specialfnbyte;
 	de_ucstring *tmps = NULL;
 	int retval = 0;
-	int file_id_encoding;
+	de_ext_encoding file_id_encoding;
 
 	dr->len_dir_rec = (i64)de_getbyte_p(&pos);
 	de_dbg(c, "dir rec len: %u", (unsigned int)dr->len_dir_rec);
@@ -829,10 +838,21 @@ static int do_directory_record(deark *c, lctx *d, i64 pos1, struct dir_record *d
 
 	if(specialfnbyte==0x00 || specialfnbyte==0x01) {
 		// To better display the "thisdir" and "parentdir" directory entries
-		file_id_encoding = DE_ENCODING_PRINTABLEASCII;
+		file_id_encoding = DE_EXTENC_MAKE(DE_ENCODING_ASCII, DE_ENCSUBTYPE_PRINTABLE);
+	}
+	else if(d->vol->encoding!=DE_ENCODING_UNKNOWN) {
+		file_id_encoding = d->vol->encoding;
+	}
+	else if(d->uses_SUSP) {
+		// We're using the user_req_encoding for the Rock Ridge names,
+		// so don't use it here.
+		file_id_encoding = DE_ENCODING_ASCII;
+	}
+	else if(d->user_req_encoding!=DE_ENCODING_UNKNOWN) {
+		file_id_encoding = d->user_req_encoding;
 	}
 	else {
-		file_id_encoding = d->vol->encoding;
+		file_id_encoding = DE_ENCODING_ASCII;
 	}
 
 	dr->fname = ucstring_create(c);
@@ -928,7 +948,7 @@ static void do_directory(deark *c, lctx *d, i64 pos1, i64 len, int nesting_level
 		goto done;
 	}
 
-	if(nesting_level>32) {
+	if(nesting_level>MAX_NESTING_LEVEL) {
 		de_err(c, "Maximum directory nesting level exceeded");
 		goto done;
 	}
@@ -1069,7 +1089,7 @@ static void do_primary_or_suppl_volume_descr_internal(deark *c, lctx *d,
 	}
 	/////////
 
-	vol->encoding = DE_ENCODING_ASCII; // default
+	vol->encoding = DE_ENCODING_UNKNOWN;
 
 	if(!is_primary) {
 		vol_flags = de_getbyte(pos);
@@ -1100,6 +1120,13 @@ static void do_primary_or_suppl_volume_descr_internal(deark *c, lctx *d,
 	de_dbg(c, "volume sequence number: %u", (unsigned int)vol_seq_num);
 	vol->block_size = getu16bbo_p(c->infile, &pos);
 	de_dbg(c, "block size: %u bytes", (unsigned int)vol->block_size);
+	if(vol->block_size==0) {
+		if(!d->blocksize_warned) {
+			de_warn(c, "Block size not set. Assuming 2048.");
+			d->blocksize_warned = 1;
+		}
+		vol->block_size = 2048;
+	}
 	n = getu32bbo_p(c->infile, &pos);
 	de_dbg(c, "path table size: %"I64_FMT" bytes", n);
 
@@ -1326,7 +1353,9 @@ static void de_run_iso9660(deark *c, de_module_params *mparams)
 		d->vol_desc_sector_to_use = de_atoi(s);
 	}
 
-	d->rr_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_UTF8);
+	d->user_req_encoding = de_get_input_encoding(c, NULL, DE_ENCODING_UNKNOWN);
+	d->rr_encoding = (d->user_req_encoding==DE_ENCODING_UNKNOWN) ?
+		DE_ENCODING_UTF8 : d->user_req_encoding;
 
 	d->secsize = 2048;
 
@@ -1361,7 +1390,7 @@ static void de_run_iso9660(deark *c, de_module_params *mparams)
 	}
 
 	d->dirs_seen = de_inthashtable_create(c);
-	d->curpath = de_strarray_create(c);
+	d->curpath = de_strarray_create(c, MAX_NESTING_LEVEL+10);
 
 	if(d->vol->root_dir_extent_blk) {
 		do_directory(c, d, sector_dpos(d, d->vol->root_dir_extent_blk),

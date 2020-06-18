@@ -255,7 +255,8 @@ static void run_macbinary_internal(deark *c, lctx *d)
 		de_advfile_set_orig_filename(advf, d->filename_srd->sz,
 			d->filename_srd->sz_strlen);
 	}
-	advf->mainfork.fi->mod_time = d->mod_time;
+	advf->mainfork.fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = d->mod_time;
+	advf->mainfork.fi->timestamp[DE_TIMESTAMPIDX_CREATE] = d->create_time;
 
 	if(d->dflen>0) {
 		d->dfpos = pos;
@@ -313,10 +314,12 @@ static void de_run_macbinary(deark *c, de_module_params *mparams)
 	if(mparams) {
 		mparams->out_params.uint1 = (u32)d->dfpos;
 		mparams->out_params.uint2 = (u32)d->dflen;
+		mparams->out_params.uint3 = (u32)d->rfpos;
+		mparams->out_params.uint4 = (u32)d->rflen;
 
 		if(mparams->out_params.fi) {
 			// If caller created out_params.fi for us, save the mod time to it.
-			mparams->out_params.fi->mod_time = d->mod_time;
+			mparams->out_params.fi->timestamp[DE_TIMESTAMPIDX_MODIFY] = d->mod_time;
 
 			// If caller created .fi->name_other, copy the filename to it.
 			if(d->filename_srd && d->filename_srd->str->len>0 && mparams->out_params.fi->name_other) {
@@ -343,6 +346,7 @@ static int de_identify_macbinary(deark *c)
 	int is_v23 = 0; // v2 or v3
 	int good_file_len = 0;
 	int good_cc = 0;
+	int bad_crc = 0;
 	i64 n;
 	i64 dflen, rflen;
 	i64 min_expected_len;
@@ -455,12 +459,21 @@ static int de_identify_macbinary(deark *c)
 		de_crcobj_addbuf(crco, b, 124);
 		crc_calc = de_crcobj_getval(crco);
 		de_crcobj_destroy(crco);
-		if(crc_calc!=crc_reported && is_v23 && crc_reported!=0) goto done;
+		if(crc_calc!=crc_reported && is_v23 && crc_reported!=0) {
+			bad_crc = 1;
+		}
 	}
 
 	if(is_v23 && good_file_len && good_cc) {
-		// Passed the CRC-16 check, so confidence is high.
-		conf = 90;
+		if(bad_crc) {
+			conf = 19;
+		}
+		else {
+			conf = 90;
+		}
+	}
+	else if(bad_crc) {
+		goto done;
 	}
 	else if(is_v23) {
 		conf = 49;

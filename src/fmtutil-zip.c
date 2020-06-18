@@ -21,7 +21,6 @@ static void ozXX_free(void *userdata, void *ptr);
 #define UI6A_UINT32    u32
 #define UI6A_OFF_T     i64
 #define UI6A_ZEROMEM   de_zeromem
-#define UI6A_MEMCPY    de_memcpy
 #define UI6A_CALLOC(u, nmemb, size, ty) ozXX_calloc((u), (nmemb), (size))
 #define UI6A_FREE      ozXX_free
 #include "../foreign/unimplode6a.h"
@@ -144,9 +143,17 @@ done:
 
 static void zipexpl_huft_dump1(struct ozXX_udatatype *zu, struct ui6a_huft *t, unsigned int idx)
 {
-	de_dbg(zu->c, "[%u:%p] e=%u b=%u n=%u t=%p",
-		idx, (void*)t, (unsigned int)t->e, (unsigned int)t->b,
-		(unsigned int)t->n, (void*)t->t_arr);
+	// (Don't print pointers, except at -d3 debug level.)
+	if(zu->c->debug_level>=3) {
+		de_dbg(zu->c, "[%u:%p] e=%u b=%u n=%u t=%p",
+			idx, (void*)t, (unsigned int)t->e, (unsigned int)t->b,
+			(unsigned int)t->n, (void*)t->t_arr);
+	}
+	else {
+		de_dbg(zu->c, "[%u] e=%u b=%u n=%u",
+			idx, (unsigned int)t->e, (unsigned int)t->b,
+			(unsigned int)t->n);
+	}
 }
 
 static void zipexpl_huft_dump(struct ozXX_udatatype *zu, struct ui6a_htable *tbl)
@@ -155,7 +162,12 @@ static void zipexpl_huft_dump(struct ozXX_udatatype *zu, struct ui6a_htable *tbl
 	struct ui6a_huftarray *t = tbl->first_array;
 	struct ui6a_huftarray *p = t;
 
-	de_dbg(c, "huffman [%s] table %p", tbl->tblname, (void*)p);
+	if(c->debug_level>=3) {
+		de_dbg(c, "huffman [%s] table %p", tbl->tblname, (void*)p);
+	}
+	else {
+		de_dbg(c, "huffman [%s] table", tbl->tblname);
+	}
 
 	de_dbg_indent(c, 1);
 
@@ -167,7 +179,12 @@ static void zipexpl_huft_dump(struct ozXX_udatatype *zu, struct ui6a_htable *tbl
 			de_dbg(c, "table arr: NULL");
 			break;
 		}
-		de_dbg(c, "table arr: %p, h[]=%p", (void*)p, (void*)p->h);
+		if(c->debug_level>=3) {
+			de_dbg(c, "table arr: %p, h[]=%p", (void*)p, (void*)p->h);
+		}
+		else {
+			de_dbg(c, "table arr");
+		}
 
 		q = p->next_array;
 
@@ -202,6 +219,9 @@ static void my_zipexpl_cb_post_read_trees(ui6a_ctx *ui6a, struct ui6a_htables *t
 		zipexpl_huft_dump(zu, &tbls->d);
 		zipexpl_huft_dump(zu, &tbls->l);
 		zipexpl_huft_dump(zu, &tbls->b);
+	}
+	if(zu->c->debug_level>=2 || zu->dumptrees) {
+		de_dbg(zu->c, "size of trees segment: %"I64_FMT, (i64)ui6a->cmpr_nbytes_consumed);
 	}
 }
 

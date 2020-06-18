@@ -30,6 +30,7 @@ typedef struct localctx_struct {
 
 	u8 has_jfif_seg, has_jfif_thumb, has_jfxx_seg;
 	u8 has_exif_seg, has_exif_gps, has_spiff_seg, has_mpf_seg, has_afcp;
+	u8 exif_before_jfif;
 	u8 has_psd, has_iptc, has_xmp, has_xmp_ext, has_iccprofile, has_flashpix;
 	u8 is_baseline, is_progressive, is_lossless, is_arithmetic, is_hierarchical;
 	u8 is_jpeghdr, is_jpegxt, is_mpo, is_jps;
@@ -303,6 +304,9 @@ static void do_exif_segment(deark *c, lctx *d,
 	// Note that Exif has an additional padding byte after the APP ID NUL terminator.
 	de_dbg(c, "Exif data at %d, size=%d", (int)pos, (int)data_size);
 	d->has_exif_seg = 1;
+	if(!d->has_jfif_seg) {
+		d->exif_before_jfif = 1;
+	}
 	de_dbg_indent(c, 1);
 	de_fmtutil_handle_exif2(c, pos, data_size,
 		&exifflags, &exiforientation, &exifversion);
@@ -1469,9 +1473,10 @@ done:
 }
 
 static void handle_comment(deark *c, lctx *d, i64 pos, i64 comment_size,
-   de_encoding encoding)
+   de_encoding encoding_base)
 {
 	de_ucstring *s = NULL;
+	de_ext_encoding encoding_ext;
 	int write_to_file;
 
 	// If c->extract_level>=2, write the comment to a file;
@@ -1484,21 +1489,24 @@ static void handle_comment(deark *c, lctx *d, i64 pos, i64 comment_size,
 
 	write_to_file = (c->extract_level>=2);
 
-	if(write_to_file && encoding==DE_ENCODING_UNKNOWN) {
+	if(write_to_file && encoding_base==DE_ENCODING_UNKNOWN) {
 		// If we don't know the encoding, dump the raw bytes to a file.
 		dbuf_create_file_from_slice(c->infile, pos, comment_size, "comment.txt",
 			NULL, DE_CREATEFLAG_IS_AUX);
 		goto done;
 	}
 
-	if(encoding==DE_ENCODING_UNKNOWN) {
+	if(encoding_base==DE_ENCODING_UNKNOWN) {
 		// In this case, we're printing the comment in the debug info.
 		// If we don't know the encoding, pretend it's ASCII-like.
-		encoding=DE_ENCODING_PRINTABLEASCII;
+		encoding_ext = DE_EXTENC_MAKE(DE_ENCODING_ASCII, DE_ENCSUBTYPE_PRINTABLE);
+	}
+	else {
+		encoding_ext = encoding_base;
 	}
 
 	s = ucstring_create(c);
-	dbuf_read_to_ucstring(c->infile, pos, comment_size, s, 0, encoding);
+	dbuf_read_to_ucstring(c->infile, pos, comment_size, s, 0, encoding_ext);
 
 	if(write_to_file) {
 		dbuf *outf = NULL;
@@ -1800,21 +1808,18 @@ static void do_post_sof_stuff(deark *c, lctx *d)
 {
 	if(d->is_jpegls) return;
 
-	// There is really no reason to warn about these JFIF vs. Exif conflicts.
-	// It's just a pet peeve.
-
-	if(d->has_jfif_seg && d->has_exif_seg &&
+	if(d->has_jfif_seg && d->has_exif_seg && !d->exif_before_jfif &&
 		(d->jfif_ver_h==1 && (d->jfif_ver_l==1 || d->jfif_ver_l==2)))
 	{
 		if(d->exif_orientation>1) {
-			de_warn(c, "Image has an ambiguous orientation: JFIF says "
+			de_dbg(c, "Note: Image has an ambiguous orientation: JFIF says "
 				"%s; Exif says %s",
 				de_fmtutil_tiff_orientation_name(1),
 				de_fmtutil_tiff_orientation_name((i64)d->exif_orientation));
 		}
 
 		if(d->exif_cosited && d->is_subsampled && d->ncomp>1) {
-			de_warn(c, "Image has an ambiguous subsampling position: JFIF says "
+			de_dbg(c, "Note: Image has an ambiguous subsampling position: JFIF says "
 				"centered; Exif says cosited");
 		}
 

@@ -24,6 +24,12 @@ Deark -- Information about supported formats
 * ANI (Windows Animated Cursor) (part of module "riff")
   - Extract individual CUR and ICO files.
 
+* ANIM (Amiga IFF-ANIM) (module="anim")
+  - Supports most common formats.
+  - Extract the individual frames.
+  Options
+   -opt anim:includedups - Do not suppress duplicate frames.
+
 * Animatic Film (module="animatic")
   - Extract the individual frames.
   Options
@@ -159,6 +165,9 @@ Deark -- Information about supported formats
 * Falcon True Color (module="ftc")
 
 * farbfeld (module="farbfeld")
+
+* FLI/FLC (Autodesk Animator) (module="fli")
+  - Extract the (non-repeated) frames.
 
 * GEM VDI Bit Image (GEM Raster) (module="gemras")
   - Supports original bilevel format
@@ -571,6 +580,8 @@ Deark -- Information about supported formats
 
 === Compression, archive, installer, disk image modules ===
 
+* ADF (Amiga disk image) (module="amiga_adf") (experimental)
+
 * ARC archive (module="arc")
   - Limited support.
 
@@ -604,7 +615,7 @@ Deark -- Information about supported formats
   - Files can be parsed, but there is usually nothing that can be extracted
     from them.
 
-* CD/raw (module="cd_raw") (experimental)
+* CD/raw (module="cd_raw")
   - Extract .ISO and other filesystem data from some raw CD images, such as
     the .BIN file in CUE/BIN format.
 
@@ -612,17 +623,24 @@ Deark -- Information about supported formats
 
 * cpio (module="cpio")
 
+* CRUSH (.cru) (module="crush")
+  CRUSH is a DOS archive utility PocketWare.
+
 * D64 (Commodore 64 disk format) (module="d64") (experimental)
 
 * Doom WAD (module="wad")
   - The extracted files are usually in specialized formats.
+
+* FAT (module="fat") (experimental/incomplete)
+  - Limited support, mainly for floppy disk images.
 
 * Gzip (module="gzip")
 
 * HFS filesystem image (module="hfs") (experimental/incomplete)
   - Incomplete support, but should be enough for most CD-ROM images.
 
-* ISO 9660 CD-ROM image (module="iso9660") (experimental)
+* ISO 9660 CD-ROM image (module="iso9660")
+  Options
    -opt iso9660:tolower - Convert filenames to lowercase. Does not affect Rock
      Ridge or Joliet filenames.
    -opt iso9660:voldesc=<n> - Use the volume descriptor at sector <n>. A
@@ -645,7 +663,13 @@ Deark -- Information about supported formats
    -opt cfb:fmt=thumbsdb - Treat the file as a Thumbs.db file.
 
 * Microsoft Installation Compression (module="mscompress")
-  - "KWAJ" variant is not well supported
+
+* MSA (Magic Shadow Archiver) (module="msa") (experimental)
+  - Atari ST disk image format.
+  Options
+   -opt msa:toraw - Instead of decoding, extract to raw ".ST" format (this is
+     usually a FAT format).
+   -opt msa:touncmsa - Instead of decoding, convert to uncompressed MSA.
 
 * NRG (module="nrg") (experimental)
   Nero CD image format.
@@ -667,7 +691,13 @@ Deark -- Information about supported formats
   - Extracted ".palm" files are in Palm BitmapType format. Reprocess them to
     convert to PNG.
 
-* RPM (package manager) (module="rpm)
+* Pasti (.stx) (module="pasti") (experimental)
+  - Atari ST disk image format.
+  Options
+   -opt pasti:toraw - Instead of decoding, extract to raw ".ST" format (this is
+     usually a FAT format).
+
+* RPM (package manager) (module="rpm")
   - Extract compressed cpio file.
 
 * SIS (EPOC/Symbian archive) (module="sis")
@@ -679,13 +709,13 @@ Deark -- Information about supported formats
    -opt spark:appendtype - Append the file type to the filename
    -opt spark:recurse=0 - Extract subdirectories as Spark files
 
-* Squash (module="squash") (experimental)
+* Squash (module="squash")
   A variant of "compress", used on RISC OS.
 
 * StuffIt (.sit) (module="stuffit")
   - Limited support. Old format only.
 
-* tar (module="tar") (experimental/incomplete)
+* tar (module="tar")
   - Rare files may need "-m tar", as tar is difficult to autodetect.
 
 * WOZ (module="woz") (incomplete)

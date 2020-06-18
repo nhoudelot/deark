@@ -51,6 +51,11 @@ struct dir_entry_data {
 	de_ucstring *fname;
 };
 
+struct timestamp_data {
+	struct de_timestamp ts; // The best timestamp of this type found so far
+	int quality;
+};
+
 struct member_data {
 	unsigned int ver_made_by;
 	unsigned int ver_made_by_hi, ver_made_by_lo;
@@ -63,8 +68,7 @@ struct member_data {
 	int is_dir;
 	int is_symlink;
 	struct de_crcobj *crco; // copy of lctx::crco
-	struct de_timestamp mod_time; // The best timestamp found so far
-	int mod_time_quality;
+	struct timestamp_data tsdata[DE_TIMESTAMPIDX_COUNT];
 
 	struct dir_entry_data central_dir_entry_data;
 	struct dir_entry_data local_dir_entry_data;
@@ -242,7 +246,7 @@ done:
 // which can differ in their precision, and whether they use UTC.
 // This function is called to remember the "best" file modification time
 // encountered so far.
-static void apply_mod_time(deark *c, lctx *d, struct member_data *md,
+static void apply_timestamp(deark *c, lctx *d, struct member_data *md, int tstype,
 	const struct de_timestamp *ts, int quality)
 {
 	if(!ts->is_valid) return;
@@ -250,9 +254,9 @@ static void apply_mod_time(deark *c, lctx *d, struct member_data *md,
 	// In case of a tie, we prefer the later timestamp that we encountered.
 	// This makes local headers have priority over central headers, for
 	// example.
-	if(quality >= md->mod_time_quality) {
-		md->mod_time = *ts;
-		md->mod_time_quality = quality;
+	if(quality >= md->tsdata[tstype].quality) {
+		md->tsdata[tstype].ts = *ts;
+		md->tsdata[tstype].quality = quality;
 	}
 }
 
@@ -263,23 +267,23 @@ static void do_read_filename(deark *c, lctx *d,
 	de_encoding from_encoding;
 
 	ucstring_empty(dd->fname);
-	from_encoding = utf8_flag ? DE_ENCODING_UTF8 : DE_ENCODING_CP437_G;
+	from_encoding = utf8_flag ? DE_ENCODING_UTF8 : DE_ENCODING_CP437;
 	dbuf_read_to_ucstring(c->infile, pos, len, dd->fname, 0, from_encoding);
 	de_dbg(c, "filename: \"%s\"", ucstring_getpsz_d(dd->fname));
 }
 
-static void do_comment_display(deark *c, lctx *d, i64 pos, i64 len, de_encoding encoding,
+static void do_comment_display(deark *c, lctx *d, i64 pos, i64 len, de_ext_encoding ee,
 	const char *name)
 {
 	de_ucstring *s = NULL;
 
 	s = ucstring_create(c);
-	dbuf_read_to_ucstring(c->infile, pos, len, s, 0, encoding);
+	dbuf_read_to_ucstring(c->infile, pos, len, s, 0, ee);
 	de_dbg(c, "%s: \"%s\"", name, ucstring_getpsz_d(s));
 	ucstring_destroy(s);
 }
 
-static void do_comment_extract(deark *c, lctx *d, i64 pos, i64 len, de_encoding encoding,
+static void do_comment_extract(deark *c, lctx *d, i64 pos, i64 len, de_ext_encoding ee,
 	const char *ext)
 {
 	dbuf *f = NULL;
@@ -287,7 +291,7 @@ static void do_comment_extract(deark *c, lctx *d, i64 pos, i64 len, de_encoding 
 
 	f = dbuf_create_output_file(c, ext, NULL, DE_CREATEFLAG_IS_AUX);
 	s = ucstring_create(c);
-	dbuf_read_to_ucstring(c->infile, pos, len, s, 0, encoding);
+	dbuf_read_to_ucstring(c->infile, pos, len, s, 0, ee);
 	ucstring_write_as_utf8(c, s, f, 1);
 	ucstring_destroy(s);
 }
@@ -295,15 +299,16 @@ static void do_comment_extract(deark *c, lctx *d, i64 pos, i64 len, de_encoding 
 static void do_comment(deark *c, lctx *d, i64 pos, i64 len, int utf8_flag,
 	const char *name, const char *ext)
 {
-	de_encoding encoding;
+	de_ext_encoding ee;
 
 	if(len<1) return;
-	encoding = utf8_flag ? DE_ENCODING_UTF8 : DE_ENCODING_CP437_C;
+	ee = utf8_flag ? DE_ENCODING_UTF8 : DE_ENCODING_CP437;
+	ee = DE_EXTENC_MAKE(ee, DE_ENCSUBTYPE_HYBRID);
 	if(c->extract_level>=2) {
-		do_comment_extract(c, d, pos, len, encoding, ext);
+		do_comment_extract(c, d, pos, len, ee, ext);
 	}
 	else {
-		do_comment_display(c, d, pos, len, encoding, name);
+		do_comment_display(c, d, pos, len, ee, name);
 	}
 }
 
@@ -386,17 +391,19 @@ static void ef_extended_timestamp(deark *c, lctx *d, struct extra_item_info_stru
 	if(has_mtime) {
 		if(pos+4>endpos) return;
 		read_unix_timestamp(c, d, pos, &timestamp_tmp, "mtime");
-		apply_mod_time(c, d, eii->md, &timestamp_tmp, 50);
+		apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_MODIFY, &timestamp_tmp, 50);
 		pos+=4;
 	}
 	if(has_atime) {
 		if(pos+4>endpos) return;
 		read_unix_timestamp(c, d, pos, &timestamp_tmp, "atime");
+		apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_ACCESS, &timestamp_tmp, 50);
 		pos+=4;
 	}
 	if(has_ctime) {
 		if(pos+4>endpos) return;
 		read_unix_timestamp(c, d, pos, &timestamp_tmp, "creation time");
+		apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_CREATE, &timestamp_tmp, 50);
 		pos+=4;
 	}
 }
@@ -410,8 +417,9 @@ static void ef_infozip1(deark *c, lctx *d, struct extra_item_info_struct *eii)
 	if(eii->is_central && eii->dlen<8) return;
 	if(!eii->is_central && eii->dlen<12) return;
 	read_unix_timestamp(c, d, eii->dpos, &timestamp_tmp, "atime");
+	apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_ACCESS, &timestamp_tmp, 45);
 	read_unix_timestamp(c, d, eii->dpos+4, &timestamp_tmp, "mtime");
-	apply_mod_time(c, d, eii->md, &timestamp_tmp, 45);
+	apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_MODIFY, &timestamp_tmp, 45);
 	if(!eii->is_central) {
 		uidnum = de_getu16le(eii->dpos+8);
 		gidnum = de_getu16le(eii->dpos+10);
@@ -527,9 +535,11 @@ static void ef_ntfs(deark *c, lctx *d, struct extra_item_info_struct *eii)
 		de_dbg_indent(c, 1);
 		if(attr_tag==0x0001 && attr_size>=24) {
 			read_FILETIME(c, d, pos, &timestamp_tmp, "mtime");
-			apply_mod_time(c, d, eii->md, &timestamp_tmp, 90);
+			apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_MODIFY, &timestamp_tmp, 90);
 			read_FILETIME(c, d, pos+8, &timestamp_tmp, "atime");
+			apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_ACCESS, &timestamp_tmp, 90);
 			read_FILETIME(c, d, pos+16, &timestamp_tmp, "creation time");
+			apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_CREATE, &timestamp_tmp, 90);
 		}
 		de_dbg_indent(c, -1);
 
@@ -702,11 +712,17 @@ static void ef_infozipmac(deark *c, lctx *d, struct extra_item_info_struct *eii)
 	backup_time_offset = dbuf_geti32le(attr_data, dpos); dpos += 4;
 
 	handle_mac_time(c, d, create_time_raw, create_time_offset, &tmp_timestamp, "create time");
+	if(create_time_raw>0) {
+		apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_CREATE, &tmp_timestamp, 40);
+	}
 	handle_mac_time(c, d, mod_time_raw,    mod_time_offset,    &tmp_timestamp, "mod time   ");
 	if(mod_time_raw>0) {
-		apply_mod_time(c, d, eii->md, &tmp_timestamp, 40);
+		apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_MODIFY, &tmp_timestamp, 40);
 	}
 	handle_mac_time(c, d, backup_time_raw, backup_time_offset, &tmp_timestamp, "backup time");
+	if(backup_time_raw>0) {
+		apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_BACKUP, &tmp_timestamp, 40);
+	}
 
 	// Expecting 2 bytes for charset, and at least 2 more for the 2 NUL-terminated
 	// strings that follow.
@@ -750,7 +766,7 @@ static void ef_acorn(deark *c, lctx *d, struct extra_item_info_struct *eii)
 	de_fmtutil_riscos_read_load_exec(c, c->infile, &rfa, pos);
 	pos += 8;
 	if(rfa.mod_time.is_valid) {
-		apply_mod_time(c, d, eii->md, &rfa.mod_time, 70);
+		apply_timestamp(c, d, eii->md, DE_TIMESTAMPIDX_MODIFY, &rfa.mod_time, 70);
 	}
 
 	de_fmtutil_riscos_read_attribs_field(c, c->infile, &rfa, pos, 0);
@@ -886,6 +902,7 @@ static void do_extract_file(deark *c, lctx *d, struct member_data *md)
 	de_finfo *fi = NULL;
 	struct dir_entry_data *ldd = &md->local_dir_entry_data;
 	u32 crc_calculated;
+	int tsidx;
 	int ret;
 
 	de_dbg(c, "file data at %"I64_FMT", len=%"I64_FMT, md->file_data_pos,
@@ -923,8 +940,10 @@ static void do_extract_file(deark *c, lctx *d, struct member_data *md)
 		fi->original_filename_flag = 1;
 	}
 
-	if(md->mod_time.is_valid) {
-		fi->mod_time = md->mod_time;
+	for(tsidx=0; tsidx<DE_TIMESTAMPIDX_COUNT; tsidx++) {
+		if(md->tsdata[tsidx].ts.is_valid) {
+			fi->timestamp[tsidx] = md->tsdata[tsidx].ts;
+		}
 	}
 
 	if(md->is_dir) {
@@ -946,8 +965,10 @@ static void do_extract_file(deark *c, lctx *d, struct member_data *md)
 	md->crco = d->crco;
 	de_crcobj_reset(md->crco);
 
+	de_dbg_indent(c, 1);
 	ret = do_decompress_data(c, d, c->infile, md->file_data_pos, md->cmpr_size,
 		outf, md->uncmpr_size, ldd->cmpr_meth, ldd->cmi, ldd->bit_flags);
+	de_dbg_indent(c, -1);
 	if(!ret) goto done;
 
 	crc_calculated = de_crcobj_getval(md->crco);
@@ -1102,28 +1123,6 @@ static void describe_general_purpose_bit_flags(deark *c, struct dir_entry_data *
 	}
 }
 
-static void describe_msdos_attribs(deark *c, unsigned int attr, de_ucstring *s)
-{
-	unsigned int bf = attr;
-
-	if(bf & 0x01) {
-		ucstring_append_flags_item(s, "read-only");
-		bf -= 0x01;
-	}
-	if(bf & 0x10) {
-		ucstring_append_flags_item(s, "directory");
-		bf -= 0x10;
-	}
-	if(bf & 0x20) {
-		ucstring_append_flags_item(s, "archive");
-		bf -= 0x20;
-	}
-
-	if(bf!=0) { // Report any unrecognized flags
-		ucstring_append_flags_itemf(s, "0x%02x", bf);
-	}
-}
-
 // Read either a central directory entry (a.k.a. central directory file header),
 // or a local file header.
 static int do_file_header(deark *c, lctx *d, struct member_data *md,
@@ -1203,7 +1202,7 @@ static int do_file_header(deark *c, lctx *d, struct member_data *md,
 	dos_timestamp.tzcode = DE_TZCODE_LOCAL;
 	de_dbg_timestamp_to_string(c, &dos_timestamp, timestamp_buf, sizeof(timestamp_buf), 0);
 	de_dbg(c, "mod time: %s", timestamp_buf);
-	apply_mod_time(c, d, md, &dos_timestamp, 10);
+	apply_timestamp(c, d, md, DE_TIMESTAMPIDX_MODIFY, &dos_timestamp, 10);
 
 	dd->crc_reported = (u32)de_getu32le_p(&pos);
 	de_dbg(c, "crc (reported): 0x%08x", (unsigned int)dd->crc_reported);
@@ -1245,7 +1244,7 @@ static int do_file_header(deark *c, lctx *d, struct member_data *md,
 			// attributes.
 			unsigned int dos_attrs = (md->attr_e & 0xff);
 			ucstring_empty(descr);
-			describe_msdos_attribs(c, dos_attrs, descr);
+			de_describe_dos_attribs(c, dos_attrs, descr, 0);
 			de_dbg(c, "%sMS-DOS attribs: 0x%02x (%s)",
 				(md->ver_made_by_hi==0)?"":"(hypothetical) ",
 				dos_attrs, ucstring_getpsz(descr));

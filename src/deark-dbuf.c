@@ -199,7 +199,9 @@ u8 dbuf_getbyte(dbuf *f, i64 pos)
 {
 	switch(f->btype) {
 	case DBUF_TYPE_MEMBUF:
-		// Optimization for memory buffers
+		// Optimization for memory buffers -
+		// and it is necessary to handle read+write dbuf types specially,
+		// so that the 1-byte "cache2" feature isn't used.
 		if(pos>=0 && pos<f->len) {
 			return f->membuf_buf[pos];
 		}
@@ -779,7 +781,7 @@ void dbuf_copy_at(dbuf *inf, i64 input_offset, i64 input_len,
 struct de_stringreaderdata *dbuf_read_string(dbuf *f, i64 pos,
 	i64 max_bytes_to_scan,
 	i64 max_bytes_to_keep,
-	unsigned int flags, de_encoding encoding)
+	unsigned int flags, de_ext_encoding ee)
 {
 	deark *c = f->c;
 	struct de_stringreaderdata *srd;
@@ -842,7 +844,7 @@ struct de_stringreaderdata *dbuf_read_string(dbuf *f, i64 pos,
 	srd->sz = de_malloc(c, bytes_to_malloc);
 	dbuf_read(f, (u8*)srd->sz, pos, bytes_to_malloc-1); // The last byte remains NUL
 
-	ucstring_append_bytes(srd->str, (const u8*)srd->sz, bytes_to_malloc-1, 0, encoding);
+	ucstring_append_bytes(srd->str, (const u8*)srd->sz, bytes_to_malloc-1, 0, ee);
 
 	if(flags&DE_CONVFLAG_WANT_UTF8) {
 		srd->sz_utf8_strlen = (size_t)ucstring_count_utf8_bytes(srd->str);
@@ -876,7 +878,7 @@ void de_destroy_stringreaderdata(deark *c, struct de_stringreaderdata *srd)
 // Read (up to) len bytes from f, translate them to characters, and append
 // them to s.
 void dbuf_read_to_ucstring(dbuf *f, i64 pos, i64 len,
-	de_ucstring *s, unsigned int conv_flags, de_encoding encoding)
+	de_ucstring *s, unsigned int conv_flags, de_ext_encoding ee)
 {
 	u8 *buf = NULL;
 	deark *c = f->c;
@@ -890,15 +892,15 @@ void dbuf_read_to_ucstring(dbuf *f, i64 pos, i64 len,
 
 	buf = de_malloc(c, len);
 	dbuf_read(f, buf, pos, len);
-	ucstring_append_bytes(s, buf, len, 0, encoding);
+	ucstring_append_bytes(s, buf, len, 0, ee);
 	de_free(c, buf);
 }
 
 void dbuf_read_to_ucstring_n(dbuf *f, i64 pos, i64 len, i64 max_len,
-	de_ucstring *s, unsigned int conv_flags, de_encoding encoding)
+	de_ucstring *s, unsigned int conv_flags, de_ext_encoding ee)
 {
 	if(len>max_len) len=max_len;
-	dbuf_read_to_ucstring(f, pos, len, s, conv_flags, encoding);
+	dbuf_read_to_ucstring(f, pos, len, s, conv_flags, ee);
 }
 
 static int dbufmemcmp_cbfn(struct de_bufferedreadctx *brctx, const u8 *buf,
@@ -945,10 +947,14 @@ int dbuf_create_file_from_slice(dbuf *inf, i64 pos, i64 data_size,
 
 static void finfo_shallow_copy(deark *c, de_finfo *src, de_finfo *dst)
 {
+	UI k;
+
 	dst->is_directory = src->is_directory;
 	dst->mode_flags = src->mode_flags;
-	dst->mod_time = src->mod_time;
-	dst->image_mod_time = src->image_mod_time;
+	for(k=0; k<DE_TIMESTAMPIDX_COUNT; k++) {
+		dst->timestamp[k] = src->timestamp[k];
+	}
+	dst->internal_mod_time = src->internal_mod_time;
 	dst->density = src->density;
 	dst->has_hotspot = src->has_hotspot;
 	dst->hotspot_x = src->hotspot_x;
@@ -1143,16 +1149,16 @@ dbuf *dbuf_create_output_file(deark *c, const char *ext1, de_finfo *fi,
 
 		// Here's where we respect the -intz option, by using it to convert to
 		// UTC in some cases.
-		if(f->fi_copy->mod_time.is_valid && f->fi_copy->mod_time.tzcode==DE_TZCODE_LOCAL &&
+		if(f->fi_copy->timestamp[DE_TIMESTAMPIDX_MODIFY].is_valid && f->fi_copy->timestamp[DE_TIMESTAMPIDX_MODIFY].tzcode==DE_TZCODE_LOCAL &&
 			c->input_tz_offs_seconds!=0)
 		{
-			de_timestamp_cvt_to_utc(&f->fi_copy->mod_time, -c->input_tz_offs_seconds);
+			de_timestamp_cvt_to_utc(&f->fi_copy->timestamp[DE_TIMESTAMPIDX_MODIFY], -c->input_tz_offs_seconds);
 		}
 
-		if(f->fi_copy->image_mod_time.is_valid && f->fi_copy->image_mod_time.tzcode==DE_TZCODE_LOCAL &&
+		if(f->fi_copy->internal_mod_time.is_valid && f->fi_copy->internal_mod_time.tzcode==DE_TZCODE_LOCAL &&
 			c->input_tz_offs_seconds!=0)
 		{
-			de_timestamp_cvt_to_utc(&f->fi_copy->image_mod_time, -c->input_tz_offs_seconds);
+			de_timestamp_cvt_to_utc(&f->fi_copy->internal_mod_time, -c->input_tz_offs_seconds);
 		}
 	}
 
@@ -1704,11 +1710,7 @@ void dbuf_close(dbuf *f)
 		f->fp = NULL;
 
 		if(f->btype==DBUF_TYPE_OFILE && f->is_managed) {
-			de_update_file_perms(f);
-		}
-
-		if(f->btype==DBUF_TYPE_OFILE && f->is_managed && c->preserve_file_times) {
-			de_update_file_time(f);
+			de_update_file_attribs(f, c->preserve_file_times);
 		}
 		break;
 	case DBUF_TYPE_FIFO:

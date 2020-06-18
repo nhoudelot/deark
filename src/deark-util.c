@@ -7,6 +7,9 @@
 #define DE_NOT_IN_MODULE
 #include "deark-config.h"
 #include "deark-private.h"
+#include "deark-version.h"
+
+#define DE_MAX_SUBMODULE_NESTING_LEVEL 10
 
 char *de_get_version_string(char *buf, size_t bufsize)
 {
@@ -765,6 +768,12 @@ int de_run_module(deark *c, struct deark_module_info *mi, de_module_params *mpar
 
 	if(!mi) return 0;
 	if(!mi->run_fn) return 0;
+	// Note that c->module_nesting_level is 0 when we are not in a module,
+	// 1 when in the top-level module, 2 for a first-level submodule, etc.
+	if(c->module_nesting_level >= 1+DE_MAX_SUBMODULE_NESTING_LEVEL) {
+		de_err(c, "Max module nesting level exceeded");
+		return 0;
+	}
 
 	old_moddisp = c->module_disposition;
 	c->module_disposition = moddisp;
@@ -798,38 +807,42 @@ int de_run_module_by_id(deark *c, const char *id, de_module_params *mparams)
 	return de_run_module(c, module_to_use, mparams, DE_MODDISP_INTERNAL);
 }
 
-void de_run_module_by_id_on_slice(deark *c, const char *id, de_module_params *mparams,
+int de_run_module_by_id_on_slice(deark *c, const char *id, de_module_params *mparams,
 	dbuf *f, i64 pos, i64 len)
 {
 	dbuf *old_ifile;
+	int ret;
 
 	old_ifile = c->infile;
 
 	if(pos==0 && len==f->len) {
 		// Optimization: We don't need a subfile in this case
 		c->infile = f;
-		de_run_module_by_id(c, id, mparams);
+		ret = de_run_module_by_id(c, id, mparams);
 	}
 	else {
 		c->infile = dbuf_open_input_subfile(f, pos, len);
-		de_run_module_by_id(c, id, mparams);
+		ret = de_run_module_by_id(c, id, mparams);
 		dbuf_close(c->infile);
 	}
 
 	c->infile = old_ifile;
+	return ret;
 }
 
 // Same as de_run_module_by_id_on_slice(), but takes just ->codes
 // as a parameter, instead of a full de_module_params struct.
-void de_run_module_by_id_on_slice2(deark *c, const char *id, const char *codes,
+int de_run_module_by_id_on_slice2(deark *c, const char *id, const char *codes,
 	dbuf *f, i64 pos, i64 len)
 {
 	de_module_params *mparams = NULL;
+	int ret;
 
 	mparams = de_malloc(c, sizeof(de_module_params));
 	mparams->in_params.codes = codes;
-	de_run_module_by_id_on_slice(c, id, mparams, f, pos, len);
+	ret = de_run_module_by_id_on_slice(c, id, mparams, f, pos, len);
 	de_free(c, mparams);
+	return ret;
 }
 
 const char *de_get_ext_option(deark *c, const char *name)
@@ -1161,7 +1174,7 @@ void de_finfo_set_name_from_ucstring(deark *c, de_finfo *fi, de_ucstring *s,
 }
 
 void de_finfo_set_name_from_sz(deark *c, de_finfo *fi, const char *name1,
-	unsigned int flags, de_encoding encoding)
+	unsigned int flags, de_ext_encoding ee)
 {
 	de_ucstring *fname;
 
@@ -1170,7 +1183,7 @@ void de_finfo_set_name_from_sz(deark *c, de_finfo *fi, const char *name1,
 		return;
 	}
 	fname = ucstring_create(c);
-	ucstring_append_sz(fname, name1, encoding);
+	ucstring_append_sz(fname, name1, ee);
 	de_finfo_set_name_internal(c, fi, fname, flags);
 }
 
@@ -1250,6 +1263,46 @@ void de_dos_datetime_to_timestamp(struct de_timestamp *ts,
 	se = 2*(dtime&0x001f);
 	de_make_timestamp(ts, yr, mo, da, hr, mi, se);
 	ts->precision = DE_TSPREC_2SEC;
+}
+
+// flags:
+//  0x1 = support VFAT long filename attribs
+void de_describe_dos_attribs(deark *c, UI attr, de_ucstring *s, UI flags)
+{
+	unsigned int bf = attr;
+
+	if((flags & 0x1) && (bf & 0x3f)==0x0f) {
+		ucstring_append_flags_item(s, "long filename");
+		bf -= 0x0f;
+	}
+	if(bf & 0x01) {
+		ucstring_append_flags_item(s, "read-only");
+		bf -= 0x01;
+	}
+	if(bf & 0x02) {
+		ucstring_append_flags_item(s, "hidden");
+		bf -= 0x02;
+	}
+	if(bf & 0x04) {
+		ucstring_append_flags_item(s, "system");
+		bf -= 0x04;
+	}
+	if(bf & 0x08) {
+		ucstring_append_flags_item(s, "volume label");
+		bf -= 0x08;
+	}
+	if(bf & 0x10) {
+		ucstring_append_flags_item(s, "directory");
+		bf -= 0x10;
+	}
+	if(bf & 0x20) {
+		ucstring_append_flags_item(s, "archive");
+		bf -= 0x20;
+	}
+
+	if(bf!=0) { // Report any unrecognized flags
+		ucstring_append_flags_itemf(s, "0x%02x", bf);
+	}
 }
 
 // Sets the DE_TZCODE_UTC flag.
